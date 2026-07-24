@@ -18,8 +18,16 @@ concurrency:
 
 jobs:
   build-windows:
-    name: Build (x86_64-pc-windows-msvc)
+    name: Build (${{ matrix.target }})
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            archive-arch: x64
+          - target: aarch64-pc-windows-msvc
+            archive-arch: arm64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,13 +36,13 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.target }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: 'v1'
-          key: 'windows-latest-x86_64-pc-windows-msvc'
+          key: 'windows-latest-${{ matrix.target }}'
           workspaces: src-tauri -> target
 
       - name: Install Protoc
@@ -56,7 +64,7 @@ jobs:
         run: |
           SM_SHA=$(git -C libs/stream-monaco rev-parse HEAD)
           MS_SHA=$(git -C libs/markstream-vue rev-parse HEAD)
-          echo "cache-key=${{ runner.os }}-x86_64-pc-windows-msvc-linked-deps-${SM_SHA:0:12}-${MS_SHA:0:12}" >> $GITHUB_OUTPUT
+          echo "cache-key=${{ runner.os }}-${{ matrix.target }}-linked-deps-${SM_SHA:0:12}-${MS_SHA:0:12}" >> $GITHUB_OUTPUT
 
       - name: Cache linked dependencies
         id: cache-linked-deps
@@ -86,6 +94,9 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare Tauri bundler tools
+        uses: ./.github/actions/prepare-tauri-bundler-tools
+
       - name: Build with Tauri
         uses: tauri-apps/tauri-action@v0
         env:
@@ -99,13 +110,14 @@ jobs:
           releaseDraft: true
           prerelease: true
           tauriScript: pnpm tauri
-          args: --target x86_64-pc-windows-msvc
+          args: --target ${{ matrix.target }}
+          includeUpdaterJson: false
 
       - name: Package Windows portable (zip)
         shell: pwsh
         run: |
-          $exe = "src-tauri/target/x86_64-pc-windows-msvc/release/AQBot.exe"
-          $zipName = "AQBot_${{ github.ref_name }}_windows-x64-portable.zip"
+          $exe = "src-tauri/target/${{ matrix.target }}/release/AQBot.exe"
+          $zipName = "AQBot_${{ github.ref_name }}_windows-${{ matrix.archive-arch }}-portable.zip"
           Compress-Archive -Path $exe -DestinationPath $zipName
 
       - name: Upload Windows portable to release
@@ -114,4 +126,4 @@ jobs:
           tag_name: ${{ github.ref_name }}
           draft: true
           token: ${{ secrets.GITHUB_TOKEN }}
-          files: AQBot_${{ github.ref_name }}_windows-x64-portable.zip
+          files: AQBot_${{ github.ref_name }}_windows-${{ matrix.archive-arch }}-portable.zip

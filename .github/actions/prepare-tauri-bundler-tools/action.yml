@@ -1,0 +1,105 @@
+name: Prepare Tauri bundler tools
+description: Download Tauri packaging tools before the long application build and cache them.
+
+runs:
+  using: composite
+  steps:
+    - name: Cache Tauri bundler tools
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/tauri
+          ~/AppData/Local/tauri
+        key: tauri-bundler-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+    - name: Prepare Linux AppImage tools
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        set -euo pipefail
+        TOOLS_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/tauri"
+        mkdir -p "$TOOLS_DIR"
+
+        download_tool() {
+          local url="$1"
+          local destination="$2"
+          if [[ -s "$destination" ]]; then
+            echo "Using cached $(basename "$destination")"
+            return
+          fi
+
+          local temporary="${destination}.download"
+          curl --fail --location --silent --show-error "$url" --output "$temporary"
+          chmod 0770 "$temporary"
+          mv "$temporary" "$destination"
+        }
+
+        download_tool \
+          "https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64" \
+          "$TOOLS_DIR/AppRun-x86_64"
+        download_tool \
+          "https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy/linuxdeploy-x86_64.AppImage" \
+          "$TOOLS_DIR/linuxdeploy-x86_64.AppImage"
+
+    - name: Prepare Windows WiX tools
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $toolsRoot = Join-Path $env:LOCALAPPDATA "tauri"
+        $wixPath = Join-Path $toolsRoot "WixTools314"
+        $requiredFiles = @(
+          "candle.exe",
+          "candle.exe.config",
+          "darice.cub",
+          "light.exe",
+          "light.exe.config",
+          "wconsole.dll",
+          "winterop.dll",
+          "wix.dll",
+          "WixUIExtension.dll",
+          "WixUtilExtension.dll"
+        )
+        $missingFiles = @(
+          $requiredFiles | Where-Object {
+            -not (Test-Path (Join-Path $wixPath $_) -PathType Leaf)
+          }
+        )
+        if ($missingFiles.Count -eq 0) {
+          Write-Host "Using cached WiX 3.14 tools"
+          exit 0
+        }
+
+        New-Item -ItemType Directory -Force -Path $toolsRoot | Out-Null
+        $archive = Join-Path $env:RUNNER_TEMP "wix314-binaries.zip"
+        $staging = Join-Path $env:RUNNER_TEMP "WixTools314"
+        & curl.exe --fail --location --silent --show-error `
+          "https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip" `
+          --output $archive
+        if ($LASTEXITCODE -ne 0) {
+          throw "Failed to download WiX 3.14 tools"
+        }
+
+        $expectedHash = "6ac824e1642d6f7277d0ed7ea09411a508f6116ba6fae0aa5f2c7daa2ff43d31"
+        $actualHash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+        if ($actualHash -ne $expectedHash) {
+          throw "WiX archive checksum mismatch: $actualHash"
+        }
+
+        if (Test-Path $staging) {
+          Remove-Item -Recurse -Force $staging
+        }
+        Expand-Archive -LiteralPath $archive -DestinationPath $staging
+        if (Test-Path $wixPath) {
+          Remove-Item -Recurse -Force $wixPath
+        }
+        Move-Item -LiteralPath $staging -Destination $wixPath
+
+        $missingFiles = @(
+          $requiredFiles | Where-Object {
+            -not (Test-Path (Join-Path $wixPath $_) -PathType Leaf)
+          }
+        )
+        if ($missingFiles.Count -gt 0) {
+          throw "WiX installation is incomplete: $($missingFiles -join ', ')"
+        }
