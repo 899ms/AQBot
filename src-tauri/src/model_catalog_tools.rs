@@ -129,5 +129,5 @@ fn validate_commit(commit: &str) -> Result<(), String> {
 }
 
 fn usage() -> &'static str {
-    "Usage: cargo run --bin update-litellm-catalog -- --commit <40-char-sha> [--input <official-json>] [--output <snapshot-json>]"
+    "Usage: cargo run --example update-litellm-catalog -- --commit <40-char-sha> [--input <official-json>] [--output <snapshot-json>]"
 }
