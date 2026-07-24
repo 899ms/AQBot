@@ -200,7 +200,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-rc') }}
           tauriScript: pnpm tauri
           args: --target ${{ matrix.target }}
-          includeUpdaterJson: true
+          includeUpdaterJson: false
 
       - name: Package Windows portable (zip)
         if: contains(matrix.target, 'windows')
@@ -352,6 +352,13 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate updater manifest
+        run: node scripts/generate-updater-manifest.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Publish draft release
         uses: softprops/action-gh-release@v2
         with:
