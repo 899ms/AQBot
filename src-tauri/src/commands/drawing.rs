@@ -2,9 +2,7 @@ use crate::AppState;
 use aqbot_core::file_store::FileStore;
 use aqbot_core::repo::drawing::{DrawingGeneration, DrawingImage, NewDrawingGeneration};
 use aqbot_core::repo::stored_file::StoredFile;
-#[cfg(test)]
-use aqbot_core::types::ProviderType;
-use aqbot_core::types::{Model, ModelType, ProviderConfig, ProviderProxyConfig};
+use aqbot_core::types::{Model, ModelType, ProviderConfig, ProviderProxyConfig, ProviderType};
 use aqbot_providers::image_adapters::{
     ImageAdapter, ImageAdapterConfig, ImageAdapterRegistry, ImageAdapterRequest,
     ImageModelDescriptor, ImageOperation, ImagePollResult, ImageSubmission, PendingImageSubmission,
@@ -1004,6 +1002,9 @@ async fn load_image_target_base(
     if !provider.enabled {
         return Err("Provider is disabled".to_string());
     }
+    if provider.provider_type == ProviderType::Bedrock {
+        return Err("AWS Bedrock image generation is not supported".to_string());
+    }
     let model = aqbot_core::repo::provider::get_model(&state.sea_db, &real_provider_id, model_id)
         .await
         .map_err(|_| "The selected image model does not belong to this provider".to_string())?;
@@ -1028,6 +1029,7 @@ async fn load_image_target_base(
             &provider.provider_type,
         )),
         api_path: provider.api_path.clone(),
+        aws_region: provider.aws_region.clone(),
         proxy_config: proxy,
         custom_headers: provider
             .custom_headers
@@ -2101,6 +2103,7 @@ mod tests {
             provider_type: ProviderType::Custom,
             api_host: "https://api.x.ai".into(),
             api_path: None,
+            aws_region: None,
             enabled: true,
             models: vec![Model {
                 provider_id: "custom-xai".into(),
@@ -2277,6 +2280,7 @@ mod tests {
             provider_type: ProviderType::Custom,
             api_host: "https://example.com".into(),
             api_path: None,
+            aws_region: None,
             enabled: true,
             models: Vec::new(),
             keys: Vec::new(),

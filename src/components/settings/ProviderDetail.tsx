@@ -45,6 +45,7 @@ import type {
   ModelMetadataState,
   ModelParamOverrides,
   ProviderType,
+  BedrockCredentialInput,
 } from '@/types';
 import { ModelParamSliders } from '@/components/common/ModelParamSliders';
 import { CopyButton } from '@/components/common/CopyButton';
@@ -179,6 +180,7 @@ const DEFAULT_PATHS: Record<ProviderType, string> = {
   jina: '/v1/rerank',
   cohere: '/v2/rerank',
   voyage: '/v1/rerank',
+  bedrock: '',
   custom: '/v1/chat/completions',
 };
 
@@ -194,6 +196,7 @@ const DEFAULT_HOSTS: Record<ProviderType, string> = {
   jina: 'https://api.jina.ai',
   cohere: 'https://api.cohere.com',
   voyage: 'https://api.voyageai.com',
+  bedrock: '',
   custom: '',
 };
 
@@ -209,7 +212,28 @@ const DEFAULT_VERSIONS: Record<ProviderType, string> = {
   jina: '/v1',
   cohere: '/v2',
   voyage: '/v1',
+  bedrock: '',
   custom: '/v1',
+};
+
+const AWS_REGION_OPTIONS = [
+  'us-east-1',
+  'us-east-2',
+  'us-west-2',
+  'eu-central-1',
+  'eu-west-1',
+  'eu-west-2',
+  'eu-west-3',
+  'ap-northeast-1',
+  'ap-northeast-2',
+  'ap-southeast-1',
+  'ap-southeast-2',
+].map((value) => ({ value }));
+
+const EMPTY_BEDROCK_CREDENTIALS: BedrockCredentialInput = {
+  access_key_id: '',
+  secret_access_key: '',
+  session_token: '',
 };
 
 const REASONING_PROFILE_OPTIONS = [
@@ -337,12 +361,15 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
   const provider = useProviderStore((s) =>
     s.providers.find((p) => p.id === providerId),
   );
+  const isBedrock = provider?.provider_type === 'bedrock';
   const toggleProvider = useProviderStore((s) => s.toggleProvider);
   const updateProvider = useProviderStore((s) => s.updateProvider);
   const deleteProvider = useProviderStore((s) => s.deleteProvider);
   const setSelectedProviderId = useUIStore((s) => s.setSelectedProviderId);
   const addProviderKey = useProviderStore((s) => s.addProviderKey);
   const updateProviderKey = useProviderStore((s) => s.updateProviderKey);
+  const addBedrockCredentials = useProviderStore((s) => s.addBedrockCredentials);
+  const updateBedrockCredentials = useProviderStore((s) => s.updateBedrockCredentials);
   const deleteProviderKey = useProviderStore((s) => s.deleteProviderKey);
   const toggleProviderKey = useProviderStore((s) => s.toggleProviderKey);
   const validateProviderKey = useProviderStore((s) => s.validateProviderKey);
@@ -359,6 +386,9 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
   const [keyModalMode, setKeyModalMode] = useState<KeyModalMode>('add');
   const [activeKeyId, setActiveKeyId] = useState<string | null>(null);
   const [keyValue, setKeyValue] = useState('');
+  const [bedrockCredentials, setBedrockCredentials] = useState<BedrockCredentialInput>(
+    EMPTY_BEDROCK_CREDENTIALS,
+  );
   const [keyModalLoading, setKeyModalLoading] = useState(false);
   const [keyModalSubmitting, setKeyModalSubmitting] = useState(false);
   const [revealedKeys, setRevealedKeys] = useState<Record<string, string>>({});
@@ -405,6 +435,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
   const [iconOverrides, setIconOverrides] = useState<Record<string, string>>({});
   const [apiHostLocal, setApiHostLocal] = useState(provider?.api_host ?? '');
   const [apiPathLocal, setApiPathLocal] = useState(provider?.api_path ?? '');
+  const [awsRegionLocal, setAwsRegionLocal] = useState(provider?.aws_region ?? '');
   const [customHeadersLocal, setCustomHeadersLocal] = useState(() => {
     try {
       const obj = JSON.parse(provider?.custom_headers ?? '{}') as Record<string, string>;
@@ -413,6 +444,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
   });
   const apiHostTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const apiPathTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const awsRegionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [testingModels, setTestingModels] = useState<Set<string>>(new Set());
   const [testResults, setTestResults] = useState<Map<string, { latencyMs?: number; error?: string }>>(new Map());
   const [singleTestModalOpen, setSingleTestModalOpen] = useState(false);
@@ -428,6 +460,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
   const [providerEditModalOpen, setProviderEditModalOpen] = useState(false);
   const [editProviderName, setEditProviderName] = useState('');
   const [editProviderType, setEditProviderType] = useState<ProviderType>('openai');
+  const [editAwsRegion, setEditAwsRegion] = useState('');
 
   // Batch editing state
   const [batchMode, setBatchMode] = useState(false);
@@ -514,6 +547,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
   useEffect(() => {
     setApiHostLocal(provider?.api_host ?? '');
     setApiPathLocal(provider?.api_path ?? '');
+    setAwsRegionLocal(provider?.aws_region ?? '');
     setRevealedKeys({});
     setRevealingKeys(new Set());
     try {
@@ -598,6 +632,12 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
       setAddModelInferring(false);
       return;
     }
+    if (provider?.provider_type === 'bedrock') {
+      setAddModelType('Chat');
+      setAddModelPreview(null);
+      setAddModelInferring(false);
+      return;
+    }
     let cancelled = false;
     const timer = setTimeout(async () => {
       setAddModelInferring(true);
@@ -638,6 +678,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
     addModelName,
     addModelType,
     inferModelMetadata,
+    provider?.provider_type,
     providerId,
   ]);
 
@@ -646,6 +687,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
     setKeyModalMode('add');
     setActiveKeyId(null);
     setKeyValue('');
+    setBedrockCredentials(EMPTY_BEDROCK_CREDENTIALS);
     setKeyModalLoading(false);
     setKeyModalSubmitting(false);
   }, []);
@@ -654,6 +696,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
     setKeyModalMode('add');
     setActiveKeyId(null);
     setKeyValue('');
+    setBedrockCredentials(EMPTY_BEDROCK_CREDENTIALS);
     setKeyModalLoading(false);
     setKeyModalOpen(true);
   }, []);
@@ -689,17 +732,47 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
     setKeyModalLoading(true);
     setKeyModalOpen(true);
     try {
-      const raw = await invoke<string>('get_decrypted_provider_key', { keyId });
-      setKeyValue(raw);
+      if (isBedrock) {
+        const credentials = await invoke<BedrockCredentialInput>(
+          'get_decrypted_bedrock_credentials',
+          { keyId },
+        );
+        setBedrockCredentials(credentials);
+      } else {
+        const raw = await invoke<string>('get_decrypted_provider_key', { keyId });
+        setKeyValue(raw);
+      }
     } catch (e) {
       resetKeyModal();
       message.error(t('error.loadFailed') + ': ' + String(e));
     } finally {
       setKeyModalLoading(false);
     }
-  }, [message, resetKeyModal, t]);
+  }, [isBedrock, message, resetKeyModal, t]);
 
   const handleSubmitKey = useCallback(async () => {
+    if (isBedrock) {
+      const credentials = {
+        access_key_id: bedrockCredentials.access_key_id.trim(),
+        secret_access_key: bedrockCredentials.secret_access_key.trim(),
+        session_token: bedrockCredentials.session_token?.trim() || null,
+      };
+      if (!credentials.access_key_id || !credentials.secret_access_key || keyModalLoading) return;
+      setKeyModalSubmitting(true);
+      try {
+        if (keyModalMode === 'add') {
+          await addBedrockCredentials(providerId, credentials);
+        } else if (keyModalMode === 'edit' && activeKeyId) {
+          await updateBedrockCredentials(activeKeyId, credentials);
+        }
+        resetKeyModal();
+      } catch {
+        message.error(t('error.saveFailed'));
+      } finally {
+        setKeyModalSubmitting(false);
+      }
+      return;
+    }
     const nextValue = keyValue.trim();
     if (!nextValue || keyModalLoading) return;
     setKeyModalSubmitting(true);
@@ -716,7 +789,22 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
     } finally {
       setKeyModalSubmitting(false);
     }
-  }, [activeKeyId, addProviderKey, keyModalLoading, keyModalMode, keyValue, message, providerId, resetKeyModal, t, updateProviderKey]);
+  }, [
+    activeKeyId,
+    addBedrockCredentials,
+    addProviderKey,
+    bedrockCredentials,
+    isBedrock,
+    keyModalLoading,
+    keyModalMode,
+    keyValue,
+    message,
+    providerId,
+    resetKeyModal,
+    t,
+    updateBedrockCredentials,
+    updateProviderKey,
+  ]);
 
   const handleValidateKey = useCallback(
     async (keyId: string) => {
@@ -1140,6 +1228,18 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
     [providerId, updateProvider],
   );
 
+  const handleAwsRegionChange = useCallback(
+    (value: string) => {
+      setAwsRegionLocal(value);
+      if (awsRegionTimerRef.current) clearTimeout(awsRegionTimerRef.current);
+      if (!value.trim()) return;
+      awsRegionTimerRef.current = setTimeout(() => {
+        updateProvider(providerId, { aws_region: value.trim() });
+      }, 500);
+    },
+    [providerId, updateProvider],
+  );
+
   // === Batch editing handlers ===
   const handleEnterBatchMode = useCallback(() => {
     setBatchMode(true);
@@ -1430,6 +1530,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                   onClick={() => {
                     setEditProviderName(provider.name);
                     setEditProviderType(provider.provider_type);
+                    setEditAwsRegion(provider.aws_region ?? '');
                     setProviderEditModalOpen(true);
                   }}
                 />
@@ -1465,7 +1566,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
 
       {/* API Keys */}
       <Card
-        title={t('settings.apiKeys')}
+        title={t(isBedrock ? 'settings.awsCredentials' : 'settings.apiKeys')}
         size="small"
         extra={
           <Button
@@ -1473,7 +1574,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
             icon={<Plus size={14} />}
             onClick={handleOpenAddKey}
           >
-            {t('settings.addKey')}
+            {t(isBedrock ? 'settings.addAwsCredentials' : 'settings.addKey')}
           </Button>
         }
       >
@@ -1495,19 +1596,23 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                   />
                   <Key size={14} />
                   <Text code style={{ wordBreak: 'break-all' }}>
-                    {revealedKeys[key.id] ?? `${key.key_prefix}••••••••`}
+                    {isBedrock
+                      ? key.key_prefix
+                      : revealedKeys[key.id] ?? `${key.key_prefix}••••••••`}
                   </Text>
                 </Space>
                 <Space size="small">
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={revealedKeys[key.id] ? <EyeOff size={14} /> : <Eye size={14} />}
-                    aria-label={t(revealedKeys[key.id] ? 'common.hide' : 'settings.viewKey')}
-                    title={t(revealedKeys[key.id] ? 'common.hide' : 'settings.viewKey')}
-                    loading={revealingKeys.has(key.id)}
-                    onClick={() => handleToggleRevealKey(key.id)}
-                  />
+                  {!isBedrock && (
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={revealedKeys[key.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                      aria-label={t(revealedKeys[key.id] ? 'common.hide' : 'settings.viewKey')}
+                      title={t(revealedKeys[key.id] ? 'common.hide' : 'settings.viewKey')}
+                      loading={revealingKeys.has(key.id)}
+                      onClick={() => handleToggleRevealKey(key.id)}
+                    />
+                  )}
                   <Button
                     type="text"
                     size="small"
@@ -1516,18 +1621,20 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                     title={t('settings.editKey')}
                     onClick={() => handleOpenEditKey(key.id)}
                   />
-                  <CopyButton
-                    text={async () => {
-                      const raw = await invoke<string>('get_decrypted_provider_key', { keyId: key.id });
-                      return raw;
-                    }}
-                    size={14}
-                    successMessage={t('common.copySuccess')}
-                    onError={(e) => {
-                      console.error('copy key failed:', e);
-                      message.error(t('error.unknown'));
-                    }}
-                  />
+                  {!isBedrock && (
+                    <CopyButton
+                      text={async () => {
+                        const raw = await invoke<string>('get_decrypted_provider_key', { keyId: key.id });
+                        return raw;
+                      }}
+                      size={14}
+                      successMessage={t('common.copySuccess')}
+                      onError={(e) => {
+                        console.error('copy key failed:', e);
+                        message.error(t('error.unknown'));
+                      }}
+                    />
+                  )}
                   <Button
                     type="text"
                     size="small"
@@ -1552,7 +1659,29 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
         )}
       </Card>
 
-      {/* API Host + Path */}
+      {/* Region or API Host + Path */}
+      {isBedrock ? (
+        <Card title={t('settings.awsRegion')} size="small">
+          <Form layout="vertical">
+            <Form.Item
+              label={t('settings.awsRegion')}
+              required
+              help={t('settings.awsRegionHelp')}
+              style={{ marginBottom: 0 }}
+            >
+              <AutoComplete
+                value={awsRegionLocal}
+                options={AWS_REGION_OPTIONS}
+                onChange={handleAwsRegionChange}
+                placeholder="us-east-1"
+                filterOption={(input, option) =>
+                  String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+              />
+            </Form.Item>
+          </Form>
+        </Card>
+      ) : (
       <Card title={t('settings.apiHost')} size="small">
         <Form layout="horizontal" colon={false} labelCol={{ flex: '110px' }} wrapperCol={{ flex: 1 }}>
           <Form.Item
@@ -1612,6 +1741,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
           </Form.Item>
         </Form>
       </Card>
+      )}
 
       {/* Models List */}
       {modelListFullscreen && (
@@ -1967,7 +2097,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
       </Card>
 
       {/* Custom Headers */}
-      <Collapse
+      {!isBedrock && <Collapse
         items={[
           {
             key: 'custom-headers',
@@ -1994,7 +2124,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
             ),
           },
         ]}
-      />
+      />}
 
       {/* Provider Proxy */}
       <Collapse
@@ -2020,7 +2150,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                       { label: t('settings.proxyNone'), value: 'none' },
                       { label: t('settings.proxySystem'), value: 'system' },
                       { label: 'HTTP', value: 'http' },
-                      { label: 'SOCKS5', value: 'socks5' },
+                      { label: 'SOCKS5', value: 'socks5', disabled: isBedrock },
                     ]}
                   />
                 </Form.Item>
@@ -2069,7 +2199,15 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
 
       {/* Add Key Modal */}
       <Modal
-        title={t(keyModalMode === 'add' ? 'settings.addKey' : 'settings.editKey')}
+        title={t(
+          isBedrock
+            ? keyModalMode === 'add'
+              ? 'settings.addAwsCredentials'
+              : 'settings.editAwsCredentials'
+            : keyModalMode === 'add'
+              ? 'settings.addKey'
+              : 'settings.editKey',
+        )}
         open={keyModalOpen}
         mask={{ enabled: true, blur: true }}
         onOk={handleSubmitKey}
@@ -2084,11 +2222,53 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
             <Spin size="small" />
           </div>
         ) : (
-          <Input
-            value={keyValue}
-            onChange={(e) => setKeyValue(e.target.value)}
-            placeholder="sk-..."
-          />
+          isBedrock ? (
+            <Form layout="vertical">
+              <Form.Item label={t('settings.awsAccessKeyId')} required>
+                <Input
+                  value={bedrockCredentials.access_key_id}
+                  onChange={(event) =>
+                    setBedrockCredentials((current) => ({
+                      ...current,
+                      access_key_id: event.target.value,
+                    }))
+                  }
+                  placeholder="AKIA..."
+                  autoComplete="off"
+                />
+              </Form.Item>
+              <Form.Item label={t('settings.awsSecretAccessKey')} required>
+                <Input.Password
+                  value={bedrockCredentials.secret_access_key}
+                  onChange={(event) =>
+                    setBedrockCredentials((current) => ({
+                      ...current,
+                      secret_access_key: event.target.value,
+                    }))
+                  }
+                  autoComplete="new-password"
+                />
+              </Form.Item>
+              <Form.Item label={t('settings.awsSessionToken')} style={{ marginBottom: 0 }}>
+                <Input.Password
+                  value={bedrockCredentials.session_token ?? ''}
+                  onChange={(event) =>
+                    setBedrockCredentials((current) => ({
+                      ...current,
+                      session_token: event.target.value,
+                    }))
+                  }
+                  autoComplete="off"
+                />
+              </Form.Item>
+            </Form>
+          ) : (
+            <Input
+              value={keyValue}
+              onChange={(e) => setKeyValue(e.target.value)}
+              placeholder="sk-..."
+            />
+          )
         )}
       </Modal>
 
@@ -2114,7 +2294,11 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
         destroyOnHidden
       >
         <Form layout="vertical">
-          <Form.Item label={t('settings.modelId')} required>
+          <Form.Item
+            label={t('settings.modelId')}
+            required
+            help={isBedrock ? t('settings.bedrockManualModelHelp') : undefined}
+          >
             <Input
               value={addModelId}
               onChange={(e) => {
@@ -2158,7 +2342,10 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                 addModelTypeDirty.current = true;
                 setAddModelType(value as ModelType);
               }}
-              options={(Object.keys(MODEL_TYPE_CONFIG) as ModelType[]).map((type_) => ({
+              options={(isBedrock
+                ? (['Chat'] as ModelType[])
+                : (Object.keys(MODEL_TYPE_CONFIG) as ModelType[])
+              ).map((type_) => ({
                 value: type_,
                 label: t(`settings.modelType.${type_}`, MODEL_TYPE_LABEL_KEYS[type_]),
               }))}
@@ -3004,9 +3191,20 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
         onOk={() => {
           const trimmed = editProviderName.trim();
           if (!trimmed) return;
+          if (editProviderType === 'bedrock' && !editAwsRegion.trim()) {
+            message.error(t('settings.awsRegionRequired'));
+            return;
+          }
           const updates: Record<string, unknown> = {};
           if (trimmed !== provider.name) updates.name = trimmed;
           if (editProviderType !== provider.provider_type) updates.provider_type = editProviderType;
+          if (editProviderType === 'bedrock') {
+            updates.aws_region = editAwsRegion.trim();
+            updates.api_host = '';
+          } else if (provider.provider_type === 'bedrock') {
+            updates.aws_region = null;
+            updates.api_host = DEFAULT_HOSTS[editProviderType];
+          }
           if (Object.keys(updates).length > 0) {
             updateProvider(providerId, updates);
           }
@@ -3041,12 +3239,31 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                 { label: 'Jina', value: 'jina' },
                 { label: 'Cohere', value: 'cohere' },
                 { label: 'Voyage', value: 'voyage' },
+                { label: 'AWS Bedrock', value: 'bedrock' },
                 { label: t('settings.custom'), value: 'custom' },
-              ]}
+              ].map((option) => ({
+                ...option,
+                disabled: option.value === 'bedrock'
+                  ? provider.provider_type !== 'bedrock'
+                  : provider.provider_type === 'bedrock',
+              }))}
               popupMatchSelectWidth={false}
               style={{ width: '100%' }}
             />
           </Form.Item>
+          {editProviderType === 'bedrock' && (
+            <Form.Item label={t('settings.awsRegion')} required style={{ marginBottom: 0 }}>
+              <AutoComplete
+                value={editAwsRegion}
+                options={AWS_REGION_OPTIONS}
+                onChange={setEditAwsRegion}
+                placeholder="us-east-1"
+                filterOption={(input, option) =>
+                  String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+              />
+            </Form.Item>
+          )}
         </Form>
       </Modal>
     </div>

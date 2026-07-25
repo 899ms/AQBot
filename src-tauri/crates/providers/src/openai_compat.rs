@@ -988,6 +988,7 @@ mod tests {
             provider_id: "provider-1".to_string(),
             base_url: Some(base_url),
             api_path: Some("/v1/chat/completions".to_string()),
+            aws_region: None,
             proxy_config: None,
             custom_headers: None,
         };

@@ -1,5 +1,6 @@
 import {
   Button,
+  AutoComplete,
   Input,
   Modal,
   Form,
@@ -49,7 +50,22 @@ const PROVIDER_TYPE_OPTIONS: { label: string; value: ProviderType }[] = [
   { label: 'Jina', value: 'jina' },
   { label: 'Cohere', value: 'cohere' },
   { label: 'Voyage', value: 'voyage' },
+  { label: 'AWS Bedrock', value: 'bedrock' },
 ];
+
+const AWS_REGION_OPTIONS = [
+  'us-east-1',
+  'us-east-2',
+  'us-west-2',
+  'eu-central-1',
+  'eu-west-1',
+  'eu-west-2',
+  'eu-west-3',
+  'ap-northeast-1',
+  'ap-northeast-2',
+  'ap-southeast-1',
+  'ap-southeast-2',
+].map((value) => ({ value }));
 
 const DEFAULT_HOSTS: Record<ProviderType, string> = {
   openai: 'https://api.openai.com',
@@ -63,6 +79,7 @@ const DEFAULT_HOSTS: Record<ProviderType, string> = {
   jina: 'https://api.jina.ai',
   cohere: 'https://api.cohere.com',
   voyage: 'https://api.voyageai.com',
+  bedrock: '',
   custom: '',
 };
 
@@ -246,6 +263,7 @@ export function ProviderList() {
   const [importCandidates, setImportCandidates] = useState<ProviderImportCandidate[]>([]);
   const [selectedImportIds, setSelectedImportIds] = useState<React.Key[]>([]);
   const [form] = Form.useForm();
+  const selectedProviderType = Form.useWatch<ProviderType>('provider_type', form);
 
   const filteredProviders = useMemo(
     () =>
@@ -335,10 +353,13 @@ export function ProviderList() {
   const handleAddProvider = async () => {
     try {
       const values = await form.validateFields();
+      const providerType = values.provider_type as ProviderType;
+      const isBedrock = providerType === 'bedrock';
       const provider = await createProvider({
         name: values.name,
-        provider_type: values.provider_type,
-        api_host: values.api_host || DEFAULT_HOSTS[values.provider_type as ProviderType],
+        provider_type: providerType,
+        api_host: isBedrock ? '' : values.api_host || DEFAULT_HOSTS[providerType],
+        aws_region: isBedrock ? values.aws_region.trim() : null,
         enabled: true,
       });
       setSelectedProviderId(provider.id);
@@ -398,6 +419,7 @@ export function ProviderList() {
 
   const handleTypeChange = (type: ProviderType) => {
     form.setFieldValue('api_host', DEFAULT_HOSTS[type]);
+    if (type !== 'bedrock') form.setFieldValue('aws_region', undefined);
   };
 
   const handleDragEnd = (sectionProviders: ProviderConfig[]) => (event: DragEndEvent) => {
@@ -561,9 +583,27 @@ export function ProviderList() {
           >
             <Select options={PROVIDER_TYPE_OPTIONS} onChange={handleTypeChange} />
           </Form.Item>
-          <Form.Item name="api_host" label={t('settings.apiHost')}>
-            <Input placeholder="https://api.openai.com" />
-          </Form.Item>
+          {selectedProviderType === 'bedrock' ? (
+            <Form.Item
+              name="aws_region"
+              label={t('settings.awsRegion')}
+              rules={[
+                { required: true, whitespace: true, message: t('settings.awsRegionRequired') },
+              ]}
+            >
+              <AutoComplete
+                options={AWS_REGION_OPTIONS}
+                placeholder="us-east-1"
+                filterOption={(input, option) =>
+                  String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())
+                }
+              />
+            </Form.Item>
+          ) : (
+            <Form.Item name="api_host" label={t('settings.apiHost')}>
+              <Input placeholder="https://api.openai.com" />
+            </Form.Item>
+          )}
         </Form>
       </Modal>
 

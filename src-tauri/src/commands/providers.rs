@@ -18,6 +18,7 @@ fn provider_registry_key(provider_type: &ProviderType) -> &'static str {
         ProviderType::Jina => "jina",
         ProviderType::Cohere => "cohere",
         ProviderType::Voyage => "voyage",
+        ProviderType::Bedrock => "bedrock",
         ProviderType::Custom => "custom",
     }
 }
@@ -226,6 +227,12 @@ pub async fn add_provider_key(
     let real_id = aqbot_core::repo::provider::resolve_provider_id(&state.sea_db, &provider_id)
         .await
         .map_err(|e| e.to_string())?;
+    let provider = aqbot_core::repo::provider::get_provider(&state.sea_db, &real_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    if provider.provider_type == ProviderType::Bedrock {
+        return Err("Use AWS credentials for Bedrock providers".into());
+    }
     let encrypted =
         aqbot_core::crypto::encrypt_key(&raw_key, &state.master_key).map_err(|e| e.to_string())?;
     let prefix = if raw_key.len() >= 8 {
@@ -244,6 +251,15 @@ pub async fn update_provider_key(
     key_id: String,
     raw_key: String,
 ) -> Result<ProviderKey, String> {
+    let key = aqbot_core::repo::provider::get_provider_key(&state.sea_db, &key_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let provider = aqbot_core::repo::provider::get_provider(&state.sea_db, &key.provider_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    if provider.provider_type == ProviderType::Bedrock {
+        return Err("Use AWS credentials for Bedrock providers".into());
+    }
     let encrypted =
         aqbot_core::crypto::encrypt_key(&raw_key, &state.master_key).map_err(|e| e.to_string())?;
     let prefix = if raw_key.len() >= 8 {
@@ -251,6 +267,60 @@ pub async fn update_provider_key(
     } else {
         raw_key.clone()
     };
+    aqbot_core::repo::provider::update_provider_key(&state.sea_db, &key_id, &encrypted, &prefix)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn add_bedrock_credentials(
+    state: State<'_, AppState>,
+    provider_id: String,
+    credentials: BedrockCredentialInput,
+) -> Result<ProviderKey, String> {
+    let real_id = aqbot_core::repo::provider::resolve_provider_id(&state.sea_db, &provider_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let provider = aqbot_core::repo::provider::get_provider(&state.sea_db, &real_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    if provider.provider_type != ProviderType::Bedrock {
+        return Err("AWS credentials can only be added to Bedrock providers".into());
+    }
+    let credentials =
+        aqbot_core::bedrock_credentials::normalize(credentials).map_err(|e| e.to_string())?;
+    let serialized =
+        aqbot_core::bedrock_credentials::serialize(&credentials).map_err(|e| e.to_string())?;
+    let encrypted = aqbot_core::crypto::encrypt_key(&serialized, &state.master_key)
+        .map_err(|e| e.to_string())?;
+    let prefix = aqbot_core::bedrock_credentials::key_prefix(&credentials.access_key_id);
+    aqbot_core::repo::provider::add_provider_key(&state.sea_db, &real_id, &encrypted, &prefix)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn update_bedrock_credentials(
+    state: State<'_, AppState>,
+    key_id: String,
+    credentials: BedrockCredentialInput,
+) -> Result<ProviderKey, String> {
+    let key = aqbot_core::repo::provider::get_provider_key(&state.sea_db, &key_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let provider = aqbot_core::repo::provider::get_provider(&state.sea_db, &key.provider_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    if provider.provider_type != ProviderType::Bedrock {
+        return Err("AWS credentials can only update Bedrock providers".into());
+    }
+    let credentials =
+        aqbot_core::bedrock_credentials::normalize(credentials).map_err(|e| e.to_string())?;
+    let serialized =
+        aqbot_core::bedrock_credentials::serialize(&credentials).map_err(|e| e.to_string())?;
+    let encrypted = aqbot_core::crypto::encrypt_key(&serialized, &state.master_key)
+        .map_err(|e| e.to_string())?;
+    let prefix = aqbot_core::bedrock_credentials::key_prefix(&credentials.access_key_id);
     aqbot_core::repo::provider::update_provider_key(&state.sea_db, &key_id, &encrypted, &prefix)
         .await
         .map_err(|e| e.to_string())
@@ -282,8 +352,33 @@ pub async fn get_decrypted_provider_key(
     let key_row = aqbot_core::repo::provider::get_provider_key(&state.sea_db, &key_id)
         .await
         .map_err(|e| e.to_string())?;
+    let provider = aqbot_core::repo::provider::get_provider(&state.sea_db, &key_row.provider_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    if provider.provider_type == ProviderType::Bedrock {
+        return Err("Use the AWS credential editor for Bedrock providers".into());
+    }
     aqbot_core::crypto::decrypt_key(&key_row.key_encrypted, &state.master_key)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_decrypted_bedrock_credentials(
+    state: State<'_, AppState>,
+    key_id: String,
+) -> Result<BedrockCredentialInput, String> {
+    let key = aqbot_core::repo::provider::get_provider_key(&state.sea_db, &key_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    let provider = aqbot_core::repo::provider::get_provider(&state.sea_db, &key.provider_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    if provider.provider_type != ProviderType::Bedrock {
+        return Err("AWS credentials are only available for Bedrock providers".into());
+    }
+    let decrypted = aqbot_core::crypto::decrypt_key(&key.key_encrypted, &state.master_key)
+        .map_err(|e| e.to_string())?;
+    aqbot_core::bedrock_credentials::parse(&decrypted).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -319,6 +414,7 @@ pub async fn validate_provider_key(
             &provider.provider_type,
         )),
         api_path: provider.api_path.clone(),
+        aws_region: provider.aws_region.clone(),
         proxy_config: resolved_proxy,
         custom_headers: provider
             .custom_headers
@@ -423,6 +519,7 @@ pub async fn fetch_remote_models(
             &provider.provider_type,
         )),
         api_path: provider.api_path.clone(),
+        aws_region: provider.aws_region.clone(),
         proxy_config: resolved_proxy,
         custom_headers: provider
             .custom_headers
@@ -854,6 +951,7 @@ pub async fn test_model(
             &provider.provider_type,
         )),
         api_path: provider.api_path.clone(),
+        aws_region: provider.aws_region.clone(),
         proxy_config: resolved_proxy,
         custom_headers: provider
             .custom_headers

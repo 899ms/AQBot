@@ -53,6 +53,7 @@ const providersFixture: ProviderConfig[] = [{
   provider_type: 'openai',
   api_host: 'https://api.openai.com',
   api_path: null,
+  aws_region: null,
   enabled: true,
   models: [{
     provider_id: 'provider-1',

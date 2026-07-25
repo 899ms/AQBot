@@ -10,6 +10,7 @@ pub struct Model {
     pub provider_type: String,
     pub api_host: String,
     pub api_path: Option<String>,
+    pub aws_region: Option<String>,
     pub enabled: i32,
     pub proxy_config: Option<String>,
     pub custom_headers: Option<String>,

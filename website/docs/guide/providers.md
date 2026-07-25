@@ -15,6 +15,7 @@ AQBot includes first-class support for the following providers. Any service that
 | **Alibaba Cloud** | Qwen series |
 | **Zhipu AI** | GLM series |
 | **xAI** | Grok series |
+| **AWS Bedrock** | Claude, Amazon Nova, Meta Llama, and other Bedrock chat models |
 | **Any OpenAI-compatible API** | Ollama, vLLM, LiteLLM, third-party relays, etc. |
 
 ---
@@ -37,6 +38,31 @@ AQBot includes first-class support for the following providers. Any service that
 ::: tip
 For third-party relay services, keep the type set to **OpenAI** (or the matching upstream type) and change the **Base URL** to the relay's endpoint.
 :::
+
+---
+
+## AWS Bedrock
+
+1. Go to **Settings → Providers**, add a provider, and choose **AWS Bedrock**.
+2. Enter the AWS Region used by Bedrock, for example `us-east-1`. AQBot uses the official AWS endpoint for that Region; custom endpoint URLs are not supported.
+3. Add **AWS Credentials** with an Access Key ID, Secret Access Key, and an optional Session Token for temporary credentials.
+4. Click **Sync Models** to list active foundation models in the selected Region that support text output and streaming.
+
+The IAM principal needs at least:
+
+```text
+bedrock:ListFoundationModels
+bedrock:InvokeModel
+bedrock:InvokeModelWithResponseStream
+```
+
+Model access must also be enabled for the account and Region in the AWS console. Credential validation calls `ListFoundationModels`, so an `AccessDenied` response can mean the credential is valid but lacks that permission.
+
+The model discovery API does not list every callable identifier. To use a cross-Region or application inference profile, provisioned throughput, or another model ARN, click **Add Model**, keep the type as **Chat**, and enter the inference profile ID or ARN manually.
+
+AQBot uses the Bedrock `Converse` and `ConverseStream` APIs for text, Base64 image input, multi-turn chat, tools, and token usage. The first release does not use the AWS default credential chain and does not support Bedrock embeddings, reranking, image generation, remote image URLs, `extra_body`, or extended-thinking signature persistence.
+
+See the AWS documentation for [Converse](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html) and [model discovery](https://docs.aws.amazon.com/bedrock/latest/userguide/models-get-info.html).
 
 ---
 

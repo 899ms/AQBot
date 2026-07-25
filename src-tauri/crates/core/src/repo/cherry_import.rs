@@ -743,6 +743,7 @@ where
                 provider_type: Set(provider_type_storage(&provider_type).to_string()),
                 api_host: Set(api_host),
                 api_path: Set(api_path),
+                aws_region: Set(None),
                 enabled: Set(if provider.enabled.unwrap_or(true) {
                     1
                 } else {
@@ -1179,6 +1180,7 @@ fn provider_type_storage(provider_type: &ProviderType) -> &'static str {
         ProviderType::Jina => "jina",
         ProviderType::Cohere => "cohere",
         ProviderType::Voyage => "voyage",
+        ProviderType::Bedrock => "bedrock",
         ProviderType::Custom => "custom",
     }
 }

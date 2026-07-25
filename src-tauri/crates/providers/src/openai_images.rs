@@ -478,6 +478,7 @@ mod tests {
             provider_id: "provider".to_string(),
             base_url: Some("https://api.openai.com/v1".to_string()),
             api_path: Some("/v1/chat/completions".to_string()),
+            aws_region: None,
             proxy_config: None,
             custom_headers: None,
         }
@@ -669,6 +670,7 @@ mod tests {
             provider_id: "provider".to_string(),
             base_url: Some(format!("http://{}", addr)),
             api_path: None,
+            aws_region: None,
             proxy_config: None,
             custom_headers: None,
         };
@@ -730,6 +732,7 @@ mod tests {
             provider_id: "provider".to_string(),
             base_url: Some(format!("http://{}", api_addr)),
             api_path: None,
+            aws_region: None,
             proxy_config: None,
             custom_headers: None,
         };
@@ -774,6 +777,7 @@ mod tests {
             provider_id: "provider".to_string(),
             base_url: Some(format!("http://{}", api_addr)),
             api_path: None,
+            aws_region: None,
             proxy_config: None,
             custom_headers: None,
         };

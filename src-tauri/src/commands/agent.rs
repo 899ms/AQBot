@@ -571,6 +571,7 @@ fn provider_type_to_registry_key(pt: &ProviderType) -> &'static str {
         ProviderType::Jina => "jina",
         ProviderType::Cohere => "cohere",
         ProviderType::Voyage => "voyage",
+        ProviderType::Bedrock => "bedrock",
         ProviderType::Custom => "custom",
     }
 }
@@ -596,6 +597,7 @@ fn create_adapter_arc(pt: &ProviderType) -> Result<Arc<dyn ProviderAdapter>, Str
         ProviderType::OpenAIResponses => Ok(Arc::new(
             aqbot_providers::openai_responses::OpenAIResponsesAdapter::new(),
         )),
+        ProviderType::Bedrock => Ok(Arc::new(aqbot_providers::bedrock::BedrockAdapter::new())),
         ProviderType::Jina | ProviderType::Cohere | ProviderType::Voyage => {
             Err("Rerank-only providers cannot be used as agent chat providers".to_string())
         }
@@ -848,6 +850,7 @@ pub async fn agent_query(
             &prov.provider_type,
         )),
         api_path: prov.api_path.clone(),
+        aws_region: prov.aws_region.clone(),
         proxy_config: resolved_proxy,
         custom_headers: prov
             .custom_headers

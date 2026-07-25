@@ -57,6 +57,7 @@ fn provider_type_to_registry_key(pt: &ProviderType) -> &'static str {
         ProviderType::Jina => "jina",
         ProviderType::Cohere => "cohere",
         ProviderType::Voyage => "voyage",
+        ProviderType::Bedrock => "bedrock",
         ProviderType::Custom => "custom",
     }
 }
@@ -2720,6 +2721,7 @@ pub async fn generate_ai_title(
                 &provider.provider_type,
             )),
             api_path: provider.api_path.clone(),
+            aws_region: provider.aws_region.clone(),
             proxy_config: proxy,
             custom_headers: provider
                 .custom_headers
@@ -2906,6 +2908,7 @@ pub async fn regenerate_conversation_title(
             &provider.provider_type,
         )),
         api_path: provider.api_path.clone(),
+        aws_region: provider.aws_region.clone(),
         proxy_config: resolved_proxy,
         custom_headers: provider
             .custom_headers
@@ -3070,6 +3073,7 @@ pub async fn generate_search_query(
             &provider.provider_type,
         )),
         api_path: provider.api_path.clone(),
+        aws_region: provider.aws_region.clone(),
         proxy_config: ProviderProxyConfig::resolve(&provider.proxy_config, &settings),
         custom_headers: provider
             .custom_headers
@@ -4360,6 +4364,7 @@ pub async fn send_message(
             &provider.provider_type,
         )),
         api_path: provider.api_path.clone(),
+        aws_region: provider.aws_region.clone(),
         proxy_config: resolved_proxy,
         custom_headers: provider
             .custom_headers
@@ -4671,6 +4676,7 @@ pub async fn regenerate_message(
             &provider.provider_type,
         )),
         api_path: provider.api_path.clone(),
+        aws_region: provider.aws_region.clone(),
         proxy_config: resolved_proxy,
         custom_headers: provider
             .custom_headers
@@ -4991,6 +4997,7 @@ pub async fn regenerate_with_model(
             &provider.provider_type,
         )),
         api_path: provider.api_path.clone(),
+        aws_region: provider.aws_region.clone(),
         proxy_config: resolved_proxy,
         custom_headers: provider
             .custom_headers
@@ -5331,6 +5338,7 @@ async fn do_compress(
             &comp_provider.provider_type,
         )),
         api_path: comp_provider.api_path.clone(),
+        aws_region: comp_provider.aws_region.clone(),
         proxy_config: comp_proxy,
         custom_headers: comp_provider
             .custom_headers

@@ -1,3 +1,4 @@
+pub mod bedrock_credentials;
 pub mod builtin_tools;
 pub mod crypto;
 pub mod db;

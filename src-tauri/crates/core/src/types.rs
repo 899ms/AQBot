@@ -21,6 +21,7 @@ pub struct ProviderConfig {
     pub provider_type: ProviderType,
     pub api_host: String,
     pub api_path: Option<String>,
+    pub aws_region: Option<String>,
     pub enabled: bool,
     pub models: Vec<Model>,
     pub keys: Vec<ProviderKey>,
@@ -48,6 +49,7 @@ pub enum ProviderType {
     Jina,
     Cohere,
     Voyage,
+    Bedrock,
     Custom,
 }
 
@@ -69,6 +71,13 @@ pub struct ProviderProxyConfig {
     pub proxy_type: Option<String>,
     pub proxy_address: Option<String>,
     pub proxy_port: Option<u16>,
+}
+
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BedrockCredentialInput {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+    pub session_token: Option<String>,
 }
 
 impl ProviderProxyConfig {
@@ -107,6 +116,8 @@ pub struct CreateProviderInput {
     pub provider_type: ProviderType,
     pub api_host: String,
     pub api_path: Option<String>,
+    #[serde(default)]
+    pub aws_region: Option<String>,
     pub enabled: bool,
     #[serde(default)]
     pub builtin_id: Option<String>,
@@ -118,6 +129,8 @@ pub struct UpdateProviderInput {
     pub provider_type: Option<ProviderType>,
     pub api_host: Option<String>,
     pub api_path: Option<Option<String>>,
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub aws_region: Option<Option<String>>,
     pub enabled: Option<bool>,
     pub proxy_config: Option<ProviderProxyConfig>,
     pub custom_headers: Option<Option<String>>,

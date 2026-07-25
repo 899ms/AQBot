@@ -39,6 +39,7 @@ mod m20260701_000001_add_chat_perf_indexes;
 mod m20260702_000001_add_inline_media_failures;
 mod m20260723_000001_add_image_adapter_support;
 mod m20260724_000001_add_model_metadata;
+mod m20260725_000001_add_provider_aws_region;
 
 pub struct Migrator;
 
@@ -85,6 +86,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260702_000001_add_inline_media_failures::Migration),
             Box::new(m20260723_000001_add_image_adapter_support::Migration),
             Box::new(m20260724_000001_add_model_metadata::Migration),
+            Box::new(m20260725_000001_add_provider_aws_region::Migration),
         ]
     }
 }
@@ -499,6 +501,51 @@ mod tests {
                 ),
                 ("provider-xai".to_string(), "xai".to_string()),
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn add_provider_aws_region_preserves_existing_rows() {
+        let db = sqlite_test_db().await;
+        let manager = SchemaManager::new(&db);
+
+        m20240101_000001_init::Migration
+            .up(&manager)
+            .await
+            .expect("run init migration");
+        db.execute_unprepared(
+            r#"INSERT INTO providers
+               (id, name, provider_type, api_host, enabled, sort_order, created_at, updated_at)
+               VALUES ('provider-openai', 'OpenAI', 'openai', 'https://api.openai.com', 1, 0, 1, 1)"#,
+        )
+        .await
+        .expect("insert legacy provider");
+
+        m20260725_000001_add_provider_aws_region::Migration
+            .up(&manager)
+            .await
+            .expect("add aws_region column");
+
+        assert!(manager
+            .has_column("providers", "aws_region")
+            .await
+            .expect("check aws_region column"));
+        let row = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT name, aws_region FROM providers WHERE id = 'provider-openai'".to_string(),
+            ))
+            .await
+            .expect("query legacy provider")
+            .expect("legacy provider row");
+        assert_eq!(
+            row.try_get::<String>("", "name").expect("provider name"),
+            "OpenAI"
+        );
+        assert_eq!(
+            row.try_get::<Option<String>>("", "aws_region")
+                .expect("aws_region"),
+            None
         );
     }
 

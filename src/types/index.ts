@@ -11,6 +11,7 @@ export type ProviderType =
   | 'jina'
   | 'cohere'
   | 'voyage'
+  | 'bedrock'
   | 'custom';
 
 export interface ProviderConfig {
@@ -19,6 +20,7 @@ export interface ProviderConfig {
   provider_type: ProviderType;
   api_host: string;
   api_path: string | null;
+  aws_region: string | null;
   enabled: boolean;
   models: Model[];
   keys: ProviderKey[];
@@ -49,11 +51,18 @@ export interface ProviderProxyConfig {
   proxy_port: number | null;
 }
 
+export interface BedrockCredentialInput {
+  access_key_id: string;
+  secret_access_key: string;
+  session_token?: string | null;
+}
+
 export interface CreateProviderInput {
   name: string;
   provider_type: ProviderType;
   api_host: string;
   api_path?: string | null;
+  aws_region?: string | null;
   enabled: boolean;
 }
 
@@ -62,6 +71,7 @@ export interface UpdateProviderInput {
   provider_type?: ProviderType;
   api_host?: string;
   api_path?: string | null;
+  aws_region?: string | null;
   enabled?: boolean;
   proxy_config?: ProviderProxyConfig;
   custom_headers?: string | null;

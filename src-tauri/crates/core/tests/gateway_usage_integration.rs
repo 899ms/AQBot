@@ -21,6 +21,7 @@ async fn seed_gateway_usage() -> (
             provider_type: ProviderType::OpenAI,
             api_host: "https://api.deepseek.com".into(),
             api_path: None,
+            aws_region: None,
             enabled: true,
         },
     )

@@ -15,6 +15,7 @@ AQBot 内置以下服务商类型，并支持任何兼容 OpenAI API 格式的�
 | **阿里云通义千问** | Qwen-Max、Qwen-Plus、Qwen-Turbo | 兼容 OpenAI 格式 |
 | **智谱 GLM** | GLM-4、GLM-4-Flash | 国产大模型 |
 | **xAI** | Grok-3、Grok-3-mini | xAI 出品 |
+| **AWS Bedrock** | Claude、Amazon Nova、Meta Llama 等 | AWS 托管的统一对话接口 |
 | **OpenAI 兼容** | 任意模型 | 适配所有兼容 OpenAI 格式的第三方服务 |
 
 ## 添加服务商
@@ -28,6 +29,29 @@ AQBot 内置以下服务商类型，并支持任何兼容 OpenAI API 格式的�
    - **类型** — 选择对应的服务商类型（如 OpenAI、Anthropic 等）
    - **图标** — 可选，为服务商选择一个显示图标
 4. 点击确认创建
+
+## AWS Bedrock
+
+1. 进入 **设置 → 服务商**，新增服务商并选择 **AWS Bedrock**。
+2. 填写 Bedrock 所在的 AWS Region，例如 `us-east-1`。AQBot 只使用该 Region 的 AWS 官方端点，不支持自定义 Endpoint URL。
+3. 在 **AWS 凭据**中填写 Access Key ID、Secret Access Key；临时凭据还需要填写可选的 Session Token。
+4. 点击 **同步模型**，获取当前 Region 内生命周期有效、支持文本输出和流式响应的基础模型。
+
+IAM 身份至少需要以下权限：
+
+```text
+bedrock:ListFoundationModels
+bedrock:InvokeModel
+bedrock:InvokeModelWithResponseStream
+```
+
+还需要在 AWS 控制台中为账号和 Region 开通对应模型的访问权限。凭据验证会调用 `ListFoundationModels`；因此 `AccessDenied` 也可能表示凭据本身有效，但缺少模型列表权限。
+
+AWS 的模型发现接口不会返回所有可调用标识。使用跨 Region / application inference profile、Provisioned Throughput 或其他模型 ARN 时，请点击 **添加模型**，保持模型类型为 **对话**，手工填写 inference profile ID 或 ARN。
+
+AQBot 通过 Bedrock `Converse` / `ConverseStream` 支持文本、Base64 图片、多轮对话、工具调用和 Token 用量。首版不读取 AWS 默认凭据链，也不支持 Bedrock Embedding、Rerank、图像生成、远程图片 URL、`extra_body` 或扩展思考签名持久化。
+
+参考 AWS 官方文档：[Converse](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html)、[模型发现](https://docs.aws.amazon.com/bedrock/latest/userguide/models-get-info.html)。
 
 ### 配置 API
 

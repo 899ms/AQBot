@@ -55,6 +55,63 @@ describe('providerStore', () => {
     expect(useProviderStore.getState().providers).toEqual(materializedProviders);
   });
 
+  it('sends structured Bedrock credentials and stores the masked key record', async () => {
+    const { useProviderStore } = await import('../providerStore');
+    const key = {
+      id: 'bedrock-key-1',
+      provider_id: 'bedrock-1',
+      key_prefix: 'AKIA1234…',
+    };
+    invokeMock.mockResolvedValue(key);
+    useProviderStore.setState({
+      providers: [{ id: 'bedrock-1', keys: [] }] as never,
+      error: null,
+    });
+    const credentials = {
+      access_key_id: 'AKIA123456789',
+      secret_access_key: 'secret',
+      session_token: 'session',
+    };
+
+    await useProviderStore.getState().addBedrockCredentials('bedrock-1', credentials);
+
+    expect(invokeMock).toHaveBeenCalledWith('add_bedrock_credentials', {
+      providerId: 'bedrock-1',
+      credentials,
+    });
+    expect(useProviderStore.getState().providers[0].keys).toEqual([key]);
+  });
+
+  it('updates Bedrock credentials with the structured IPC command', async () => {
+    const { useProviderStore } = await import('../providerStore');
+    const updated = {
+      id: 'bedrock-key-1',
+      provider_id: 'bedrock-1',
+      key_prefix: 'ASIA5678…',
+    };
+    invokeMock.mockResolvedValue(updated);
+    useProviderStore.setState({
+      providers: [{
+        id: 'bedrock-1',
+        keys: [{ id: 'bedrock-key-1', key_prefix: 'AKIA1234…' }],
+      }] as never,
+      error: null,
+    });
+    const credentials = {
+      access_key_id: 'ASIA567890123',
+      secret_access_key: 'new-secret',
+      session_token: null,
+    };
+
+    await useProviderStore.getState().updateBedrockCredentials('bedrock-key-1', credentials);
+
+    expect(invokeMock).toHaveBeenCalledWith('update_bedrock_credentials', {
+      keyId: 'bedrock-key-1',
+      credentials,
+    });
+    expect(useProviderStore.getState().providers[0].keys).toEqual([updated]);
+  });
+
   it('refetches providers after saving models for a virtual builtin provider', async () => {
     const { useProviderStore } = await import('../providerStore');
     const models = [

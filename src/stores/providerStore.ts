@@ -19,6 +19,7 @@ import type {
   DeepLinkProviderImportResult,
   ProviderImportBatchResult,
   ProviderImportCandidate,
+  BedrockCredentialInput,
 } from '@/types';
 
 const PROVIDERS_RESOURCE_KEY = 'providers';
@@ -61,6 +62,14 @@ interface ProviderState {
   reorderProviders: (providerIds: string[]) => Promise<void>;
   addProviderKey: (providerId: string, rawKey: string) => Promise<void>;
   updateProviderKey: (keyId: string, rawKey: string) => Promise<void>;
+  addBedrockCredentials: (
+    providerId: string,
+    credentials: BedrockCredentialInput,
+  ) => Promise<void>;
+  updateBedrockCredentials: (
+    keyId: string,
+    credentials: BedrockCredentialInput,
+  ) => Promise<void>;
   deleteProviderKey: (keyId: string) => Promise<void>;
   toggleProviderKey: (keyId: string, enabled: boolean) => Promise<void>;
   validateProviderKey: (keyId: string) => Promise<boolean>;
@@ -354,6 +363,47 @@ export const useProviderStore = create<ProviderState>((set, get) => ({
     } catch (e) {
       set({ error: String(e) });
       throw e;
+    }
+  },
+
+  addBedrockCredentials: async (providerId, credentials) => {
+    try {
+      const key = await invoke<ProviderKey>('add_bedrock_credentials', {
+        providerId,
+        credentials,
+      });
+      set((state) => ({
+        providers: state.providers.map((provider) =>
+          provider.id === providerId
+            ? { ...provider, keys: [...provider.keys, key] }
+            : provider,
+        ),
+        providersMeta: mutateProvidersMeta(state.providersMeta),
+        error: null,
+      }));
+    } catch (error) {
+      set({ error: String(error) });
+      throw error;
+    }
+  },
+
+  updateBedrockCredentials: async (keyId, credentials) => {
+    try {
+      const key = await invoke<ProviderKey>('update_bedrock_credentials', {
+        keyId,
+        credentials,
+      });
+      set((state) => ({
+        providers: state.providers.map((provider) => ({
+          ...provider,
+          keys: provider.keys.map((current) => (current.id === keyId ? key : current)),
+        })),
+        providersMeta: mutateProvidersMeta(state.providersMeta),
+        error: null,
+      }));
+    } catch (error) {
+      set({ error: String(error) });
+      throw error;
     }
   },
 

@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod anthropic;
+pub mod bedrock;
 pub mod cohere;
 pub mod custom_openai;
 pub mod deepseek;
@@ -69,6 +70,7 @@ pub struct ProviderRequestContext {
     pub provider_id: String,
     pub base_url: Option<String>,
     pub api_path: Option<String>,
+    pub aws_region: Option<String>,
     pub proxy_config: Option<ProviderProxyConfig>,
     pub custom_headers: Option<std::collections::HashMap<String, String>>,
 }
@@ -79,6 +81,7 @@ pub fn default_version_for_type(provider_type: &ProviderType) -> &'static str {
         ProviderType::Gemini => "/v1beta",
         ProviderType::Cohere => "/v2",
         ProviderType::GLM => "/v4",
+        ProviderType::Bedrock => "",
         _ => "/v1",
     }
 }

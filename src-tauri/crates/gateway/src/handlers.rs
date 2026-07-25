@@ -163,6 +163,7 @@ pub async fn chat_completions(
             &provider.provider_type,
         )),
         api_path: provider.api_path.clone(),
+        aws_region: provider.aws_region.clone(),
         proxy_config: resolved_proxy,
         custom_headers: provider
             .custom_headers
@@ -667,6 +668,7 @@ pub(crate) fn provider_type_to_str(pt: &ProviderType) -> &'static str {
         ProviderType::Jina => "jina",
         ProviderType::Cohere => "cohere",
         ProviderType::Voyage => "voyage",
+        ProviderType::Bedrock => "bedrock",
         ProviderType::Custom => "custom",
     }
 }
@@ -778,6 +780,7 @@ mod tests {
                     provider_type: ProviderType::DeepSeek,
                     api_host: api_host.into(),
                     api_path: None,
+                    aws_region: None,
                     enabled: true,
                     builtin_id: None,
                 },
@@ -951,6 +954,7 @@ mod tests {
             provider_type: ProviderType::Custom,
             api_host: String::new(),
             api_path: None,
+            aws_region: None,
             enabled: true,
             models: model_ids
                 .iter()

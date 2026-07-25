@@ -175,6 +175,7 @@ fn provider(
         provider_type,
         api_host: api_host.into(),
         api_path: None,
+        aws_region: None,
         enabled: true,
         models: vec![],
         keys: vec![],

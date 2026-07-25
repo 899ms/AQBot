@@ -613,6 +613,7 @@ async fn resolve_native_context(
                 &provider.provider_type,
             )),
             api_path: provider.api_path.clone(),
+            aws_region: provider.aws_region.clone(),
             proxy_config: resolved_proxy,
             custom_headers: provider
                 .custom_headers
@@ -1231,6 +1232,7 @@ mod tests {
                 provider_type,
                 api_host: api_host.into(),
                 api_path: None,
+                aws_region: None,
                 enabled: true,
                 builtin_id: None,
             },
@@ -1296,6 +1298,7 @@ mod tests {
                 provider_type,
                 api_host: api_host.into(),
                 api_path: None,
+                aws_region: None,
                 enabled: true,
                 builtin_id: None,
             },

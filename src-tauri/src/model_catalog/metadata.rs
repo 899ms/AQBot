@@ -207,7 +207,7 @@ fn canonical_provider_type(provider_type: &ProviderType) -> Option<&'static str>
         ProviderType::Jina => Some("jina"),
         ProviderType::Cohere => Some("cohere"),
         ProviderType::Voyage => Some("voyage"),
-        ProviderType::SiliconFlow | ProviderType::Custom => None,
+        ProviderType::SiliconFlow | ProviderType::Bedrock | ProviderType::Custom => None,
     }
 }
 

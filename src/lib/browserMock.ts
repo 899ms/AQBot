@@ -510,6 +510,8 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
         name: input.name,
         provider_type: input.provider_type,
         api_host: input.api_host,
+        api_path: input.api_path ?? null,
+        aws_region: input.aws_region ?? null,
         enabled: input.enabled ?? true,
         models: [],
         keys: [],
@@ -582,6 +584,70 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
         setStore('providers', providers);
       }
       return key as T;
+    }
+    case 'update_provider_key': {
+      const { keyId, rawKey } = args as any;
+      const providers = getStore<any[]>('providers', []);
+      for (const provider of providers) {
+        const key = provider.keys.find((current: any) => current.id === keyId);
+        if (key) {
+          key.key_encrypted = rawKey;
+          key.key_prefix = rawKey.substring(0, 8) + '...';
+          setStore('providers', providers);
+          return key as T;
+        }
+      }
+      throw new Error('Provider key not found');
+    }
+    case 'get_decrypted_provider_key': {
+      const { keyId } = args as any;
+      for (const provider of getStore<any[]>('providers', [])) {
+        const key = provider.keys.find((current: any) => current.id === keyId);
+        if (key) return key.key_encrypted as T;
+      }
+      throw new Error('Provider key not found');
+    }
+    case 'add_bedrock_credentials': {
+      const { providerId, credentials } = args as any;
+      const key = {
+        id: genId(),
+        provider_id: providerId,
+        key_encrypted: JSON.stringify(credentials),
+        key_prefix: credentials.access_key_id.substring(0, 8) + '…',
+        enabled: true,
+        last_validated_at: null,
+        last_error: null,
+        rotation_index: 0,
+        created_at: nowTs(),
+      };
+      const providers = getStore<any[]>('providers', []);
+      const provider = providers.find((current: any) => current.id === providerId);
+      if (!provider) throw new Error('Provider not found');
+      provider.keys.push(key);
+      setStore('providers', providers);
+      return key as T;
+    }
+    case 'update_bedrock_credentials': {
+      const { keyId, credentials } = args as any;
+      const providers = getStore<any[]>('providers', []);
+      for (const provider of providers) {
+        const key = provider.keys.find((current: any) => current.id === keyId);
+        if (key) {
+          key.key_encrypted = JSON.stringify(credentials);
+          key.key_prefix = credentials.access_key_id.substring(0, 8) + '…';
+          setStore('providers', providers);
+          return key as T;
+        }
+      }
+      throw new Error('Provider key not found');
+    }
+    case 'get_decrypted_bedrock_credentials': {
+      const { keyId } = args as any;
+      for (const provider of getStore<any[]>('providers', [])) {
+        const key = provider.keys.find((current: any) => current.id === keyId);
+        if (key) return JSON.parse(key.key_encrypted) as T;
+      }
+      throw new Error('Provider key not found');
     }
     case 'delete_provider_key': {
       const { keyId } = args as any;

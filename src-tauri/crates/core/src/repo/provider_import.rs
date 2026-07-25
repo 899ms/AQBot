@@ -164,6 +164,7 @@ async fn import_candidate(
                     provider_type: candidate.provider_type.clone(),
                     api_host: candidate.api_host.clone(),
                     api_path: candidate.api_path.clone(),
+                    aws_region: None,
                     enabled: true,
                     builtin_id: None,
                 },
@@ -832,6 +833,7 @@ fn provider_type_str(provider_type: &ProviderType) -> &'static str {
         ProviderType::Jina => "jina",
         ProviderType::Cohere => "cohere",
         ProviderType::Voyage => "voyage",
+        ProviderType::Bedrock => "bedrock",
         ProviderType::Custom => "custom",
     }
 }
@@ -1014,6 +1016,7 @@ mod tests {
                 provider_type: ProviderType::Custom,
                 api_host: "https://api.existing.example.com".into(),
                 api_path: Some("/v1/chat/completions".into()),
+                aws_region: None,
                 enabled: true,
                 builtin_id: None,
             },
@@ -1028,6 +1031,7 @@ mod tests {
                 provider_type: ProviderType::Custom,
                 api_host: "https://api.duplicate.example.com".into(),
                 api_path: Some("/v1/chat/completions".into()),
+                aws_region: None,
                 enabled: true,
                 builtin_id: None,
             },

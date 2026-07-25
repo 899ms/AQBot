@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::anthropic::AnthropicAdapter;
+use crate::bedrock::BedrockAdapter;
 use crate::cohere::CohereAdapter;
 use crate::custom_openai::CustomOpenAIAdapter;
 use crate::deepseek::DeepSeekAdapter;
@@ -44,6 +45,7 @@ impl ProviderRegistry {
         registry.register("glm", Box::new(GLMAdapter::new()));
         registry.register("siliconflow", Box::new(SiliconFlowAdapter::new()));
         registry.register("anthropic", Box::new(AnthropicAdapter::new()));
+        registry.register("bedrock", Box::new(BedrockAdapter::new()));
         registry.register("gemini", Box::new(GeminiAdapter::new()));
         registry.register("jina", Box::new(JinaAdapter::new()));
         registry.register("cohere", Box::new(CohereAdapter::new()));

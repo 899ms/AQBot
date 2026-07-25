@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   toggleProvider: vi.fn(),
   updateProvider: vi.fn(),
   updateProviderKey: vi.fn(),
+  addBedrockCredentials: vi.fn(),
+  updateBedrockCredentials: vi.fn(),
   deleteProvider: vi.fn(),
   addProviderKey: vi.fn(),
   deleteProviderKey: vi.fn(),
@@ -37,6 +39,7 @@ function createProviderFixture(): ProviderConfig {
     provider_type: 'openai',
     api_host: 'https://api.openai.com',
     api_path: '/v1/chat/completions',
+    aws_region: null,
     enabled: true,
     custom_headers: null,
     icon: null,
@@ -154,6 +157,8 @@ vi.mock('@/stores', () => ({
       toggleProvider: mocks.toggleProvider,
       updateProvider: mocks.updateProvider,
       updateProviderKey: mocks.updateProviderKey,
+      addBedrockCredentials: mocks.addBedrockCredentials,
+      updateBedrockCredentials: mocks.updateBedrockCredentials,
       deleteProvider: mocks.deleteProvider,
       addProviderKey: mocks.addProviderKey,
       deleteProviderKey: mocks.deleteProviderKey,
@@ -416,6 +421,77 @@ describe('ProviderDetail', () => {
     await waitFor(() => {
       expect(mocks.addProviderKey).toHaveBeenCalledWith('provider-1', 'sk-added-secret');
     });
+  });
+
+  it('shows Region instead of API host and submits temporary Bedrock credentials', async () => {
+    provider = {
+      ...createProviderFixture(),
+      name: 'AWS Bedrock',
+      provider_type: 'bedrock',
+      api_host: '',
+      api_path: null,
+      aws_region: 'us-west-2',
+      keys: [],
+    };
+    render(
+      <App>
+        <ProviderDetail providerId="provider-1" />
+      </App>,
+    );
+
+    expect(screen.getAllByText('settings.awsRegion').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Base URL')).not.toBeInTheDocument();
+    expect(screen.queryByText('settings.customHeaders')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'settings.addAwsCredentials' }));
+    const dialog = await screen.findByRole('dialog');
+    const inputs = dialog.querySelectorAll('input');
+    expect(inputs).toHaveLength(3);
+    await userEvent.type(inputs[0], 'AKIA123456789');
+    await userEvent.type(inputs[1], 'secret-value');
+    await userEvent.type(inputs[2], 'session-value');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'common.confirm' }));
+
+    await waitFor(() => {
+      expect(mocks.addBedrockCredentials).toHaveBeenCalledWith('provider-1', {
+        access_key_id: 'AKIA123456789',
+        secret_access_key: 'secret-value',
+        session_token: 'session-value',
+      });
+    });
+  });
+
+  it('loads Bedrock credentials with the dedicated IPC command when editing', async () => {
+    provider = {
+      ...createProviderFixture(),
+      provider_type: 'bedrock',
+      api_host: '',
+      api_path: null,
+      aws_region: 'us-east-1',
+      keys: [createProviderKeyFixture({ key_prefix: 'AKIA1234…' })],
+    };
+    mocks.invoke.mockResolvedValue({
+      access_key_id: 'AKIA123456789',
+      secret_access_key: 'secret-value',
+      session_token: null,
+    });
+    render(
+      <App>
+        <ProviderDetail providerId="provider-1" />
+      </App>,
+    );
+
+    expect(screen.getByText('AKIA1234…')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'settings.viewKey' })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'settings.editKey' }));
+
+    await waitFor(() => {
+      expect(mocks.invoke).toHaveBeenCalledWith('get_decrypted_bedrock_credentials', {
+        keyId: 'key-1',
+      });
+    });
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getAllByRole('textbox')[0]).toHaveValue('AKIA123456789');
   });
 
   it('uses plain text input when editing a key and saves the updated value', async () => {

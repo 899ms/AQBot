@@ -110,6 +110,7 @@ async fn test_provider_crud() {
         provider_type: ProviderType::OpenAI,
         api_host: "https://api.openai.com".into(),
         api_path: None,
+        aws_region: None,
         enabled: true,
     };
     let prov = provider::create_provider(db, input).await.unwrap();
@@ -126,6 +127,7 @@ async fn test_provider_crud() {
         name: Some("OpenAI v2".into()),
         api_host: None,
         api_path: None,
+        aws_region: None,
         enabled: None,
         proxy_config: None,
         sort_order: None,
@@ -160,6 +162,7 @@ async fn test_provider_key_operations() {
             provider_type: ProviderType::Custom,
             api_host: "https://example.com".into(),
             api_path: None,
+            aws_region: None,
             enabled: true,
         },
     )
@@ -211,6 +214,7 @@ async fn test_provider_model_operations() {
             provider_type: ProviderType::Anthropic,
             api_host: "https://api.anthropic.com".into(),
             api_path: None,
+            aws_region: None,
             enabled: true,
         },
     )

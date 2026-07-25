@@ -91,6 +91,7 @@ fn provider_type_to_registry_key(pt: &ProviderType) -> &'static str {
         ProviderType::Jina => "jina",
         ProviderType::Cohere => "cohere",
         ProviderType::Voyage => "voyage",
+        ProviderType::Bedrock => "bedrock",
         ProviderType::Custom => "custom",
     }
 }
@@ -119,6 +120,7 @@ pub async fn build_embed_context(
             &provider.provider_type,
         )),
         api_path: None,
+        aws_region: provider.aws_region.clone(),
         proxy_config: resolved_proxy,
         custom_headers: provider
             .custom_headers

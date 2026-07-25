@@ -12,6 +12,7 @@ function makeProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     provider_type: 'openai',
     api_host: 'https://api.example.com',
     api_path: '/v1/chat/completions',
+    aws_region: null,
     enabled: true,
     models: [],
     keys: [],

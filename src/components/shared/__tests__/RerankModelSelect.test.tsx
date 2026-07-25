@@ -16,6 +16,7 @@ function makeProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
     provider_type: 'jina',
     api_host: 'https://api.jina.ai',
     api_path: null,
+    aws_region: null,
     enabled: true,
     models: [],
     keys: [],

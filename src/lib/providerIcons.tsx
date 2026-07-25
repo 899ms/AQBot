@@ -15,6 +15,7 @@ const TYPE_TO_PROVIDER: Record<string, string> = {
   jina: 'jina',
   cohere: 'cohere',
   voyage: 'voyage',
+  bedrock: 'bedrock',
   custom: 'openai',
 };
 

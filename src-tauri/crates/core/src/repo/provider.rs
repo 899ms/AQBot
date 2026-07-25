@@ -21,6 +21,7 @@ fn parse_provider_type(s: &str) -> ProviderType {
         "jina" => ProviderType::Jina,
         "cohere" => ProviderType::Cohere,
         "voyage" => ProviderType::Voyage,
+        "bedrock" => ProviderType::Bedrock,
         _ => ProviderType::Custom,
     }
 }
@@ -38,6 +39,7 @@ fn provider_type_str(pt: &ProviderType) -> &'static str {
         ProviderType::Jina => "jina",
         ProviderType::Cohere => "cohere",
         ProviderType::Voyage => "voyage",
+        ProviderType::Bedrock => "bedrock",
         ProviderType::Custom => "custom",
     }
 }
@@ -100,6 +102,7 @@ fn provider_from_entity(
         provider_type: parse_provider_type(&row.provider_type),
         api_host: row.api_host,
         api_path: row.api_path,
+        aws_region: row.aws_region,
         enabled: row.enabled != 0,
         models,
         keys,
@@ -149,6 +152,7 @@ pub async fn create_provider(
 ) -> Result<ProviderConfig> {
     let id = gen_id();
     let now = now_ts();
+    let aws_region = normalized_aws_region(&input.provider_type, input.aws_region)?;
 
     providers::ActiveModel {
         id: Set(id.clone()),
@@ -156,6 +160,7 @@ pub async fn create_provider(
         provider_type: Set(provider_type_str(&input.provider_type).to_string()),
         api_host: Set(input.api_host),
         api_path: Set(input.api_path),
+        aws_region: Set(aws_region),
         enabled: Set(if input.enabled { 1 } else { 0 }),
         proxy_config: Set(None),
         custom_headers: Set(None),
@@ -178,11 +183,23 @@ pub async fn update_provider(
 ) -> Result<ProviderConfig> {
     let existing = get_provider(db, id).await?;
     let now = now_ts();
+    let provider_type = input
+        .provider_type
+        .unwrap_or_else(|| existing.provider_type.clone());
+    if (existing.provider_type == ProviderType::Bedrock) != (provider_type == ProviderType::Bedrock)
+    {
+        return Err(AQBotError::Validation(
+            "AWS Bedrock providers cannot be converted to or from API-key providers".into(),
+        ));
+    }
 
     let name = input.name.unwrap_or(existing.name);
     let api_host = input.api_host.unwrap_or(existing.api_host);
     let enabled = input.enabled.unwrap_or(existing.enabled);
-    let provider_type = input.provider_type.unwrap_or(existing.provider_type);
+    let aws_region = normalized_aws_region(
+        &provider_type,
+        input.aws_region.unwrap_or(existing.aws_region),
+    )?;
     let proxy_json = match input.proxy_config {
         Some(ref pc) => Some(serde_json::to_string(pc).unwrap()),
         None => existing
@@ -199,6 +216,7 @@ pub async fn update_provider(
     am.name = Set(name);
     am.api_host = Set(api_host);
     am.provider_type = Set(provider_type_str(&provider_type).to_string());
+    am.aws_region = Set(aws_region);
     am.enabled = Set(if enabled { 1 } else { 0 });
     am.proxy_config = Set(proxy_json);
     if let Some(api_path) = input.api_path {
@@ -217,6 +235,21 @@ pub async fn update_provider(
     am.update(db).await?;
 
     get_provider(db, id).await
+}
+
+fn normalized_aws_region(
+    provider_type: &ProviderType,
+    aws_region: Option<String>,
+) -> Result<Option<String>> {
+    if provider_type != &ProviderType::Bedrock {
+        return Ok(None);
+    }
+
+    let region = aws_region
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AQBotError::Validation("AWS region is required for Bedrock".into()))?;
+    Ok(Some(region))
 }
 
 fn parse_deep_link_provider_type(value: &str) -> Result<ProviderType> {
@@ -333,6 +366,7 @@ pub async fn import_provider_from_deep_link(
                         provider_type,
                         api_host: baseurl,
                         api_path: None,
+                        aws_region: None,
                         enabled: true,
                         builtin_id: None,
                     },
@@ -881,6 +915,7 @@ pub async fn list_providers_merged(db: &DatabaseConnection) -> Result<Vec<Provid
                 provider_type: bp.provider_type.clone(),
                 api_host: String::from(bp.api_host),
                 api_path: None,
+                aws_region: None,
                 enabled: false,
                 models: default_models,
                 keys: vec![],
@@ -938,6 +973,7 @@ pub async fn ensure_builtin_provider(db: &DatabaseConnection, builtin_id: &str) 
             provider_type: bp.provider_type.clone(),
             api_host: String::from(bp.api_host),
             api_path: None,
+            aws_region: None,
             enabled: false,
             builtin_id: Some(String::from(builtin_id)),
         },
@@ -984,6 +1020,7 @@ mod tests {
                 provider_type: ProviderType::Custom,
                 api_host: "https://example.com".into(),
                 api_path: None,
+                aws_region: None,
                 enabled: true,
                 builtin_id: None,
             },
@@ -1024,6 +1061,7 @@ mod tests {
                 provider_type: ProviderType::OpenAI,
                 api_host: "https://api.minimaxi.com".into(),
                 api_path: None,
+                aws_region: None,
                 enabled: true,
                 builtin_id: Some("minimax".into()),
             },
@@ -1089,6 +1127,7 @@ mod tests {
                 provider_type: ProviderType::Custom,
                 api_host: "https://api.x.ai".into(),
                 api_path: Some("/v1/images/generations".into()),
+                aws_region: None,
                 enabled: true,
                 builtin_id: None,
             },

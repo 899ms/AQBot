@@ -163,6 +163,7 @@ mod tests {
             provider_id: "provider-1".into(),
             base_url: Some("https://example.com/v1".into()),
             api_path: None,
+            aws_region: None,
             proxy_config: None,
             custom_headers: None,
         }

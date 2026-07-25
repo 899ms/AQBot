@@ -23,6 +23,7 @@ function makeProvider(overrides: Partial<ProviderConfig>): ProviderConfig {
     provider_type: 'openai',
     api_host: 'https://api.openai.com',
     api_path: null,
+    aws_region: null,
     enabled: true,
     models: [],
     keys: [],
@@ -64,6 +65,40 @@ vi.mock('react-i18next', () => ({
         : (typeof fallback === 'string' ? fallback : key),
   }),
 }));
+
+vi.mock('antd', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('antd')>();
+  return {
+    ...actual,
+    Select: ({
+      options = [],
+      value,
+      onChange,
+      id,
+      disabled,
+    }: {
+      options?: Array<{ label: string; value: string }>;
+      value?: string;
+      onChange?: (value: string) => void;
+      id?: string;
+      disabled?: boolean;
+    }) => (
+      <select
+        id={id}
+        disabled={disabled}
+        value={value ?? ''}
+        onChange={(event) => onChange?.(event.target.value)}
+      >
+        <option value="" />
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    ),
+  };
+});
 
 vi.mock('@/lib/providerIcons', () => ({
   SmartProviderIcon: () => <span data-testid="provider-icon" />,
@@ -145,6 +180,46 @@ describe('ProviderList', () => {
     expect(screen.getByText('OpenAI')).toBeInTheDocument();
     expect(screen.getByText('Custom OpenAI')).toBeInTheDocument();
     expect(screen.getAllByTestId('provider-icon')).toHaveLength(2);
+  });
+
+  it('requires Region and hides API Host when adding AWS Bedrock', async () => {
+    const user = userEvent.setup();
+    mocks.createProvider.mockResolvedValue(
+      makeProvider({
+        id: 'bedrock-1',
+        name: 'AWS Bedrock',
+        provider_type: 'bedrock',
+        api_host: '',
+        aws_region: 'us-west-2',
+      }),
+    );
+    render(
+      <App>
+        <ProviderList />
+      </App>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'settings.addProvider' }));
+    const dialog = await screen.findByRole('dialog');
+    const providerTypeSelect = within(dialog).getByRole('combobox');
+    await user.selectOptions(providerTypeSelect, 'bedrock');
+
+    expect(within(dialog).getByText('settings.awsRegion')).toBeInTheDocument();
+    expect(within(dialog).queryByText('settings.apiHost')).not.toBeInTheDocument();
+
+    await user.type(within(dialog).getByRole('textbox'), 'AWS Bedrock');
+    await user.type(within(dialog).getAllByRole('combobox')[1], 'us-west-2');
+    await user.click(within(dialog).getByRole('button', { name: 'common.confirm' }));
+
+    await waitFor(() => {
+      expect(mocks.createProvider).toHaveBeenCalledWith({
+        name: 'AWS Bedrock',
+        provider_type: 'bedrock',
+        api_host: '',
+        aws_region: 'us-west-2',
+        enabled: true,
+      });
+    });
   });
 
   it('shows an import icon after the add provider button and scans from the dropdown', async () => {
