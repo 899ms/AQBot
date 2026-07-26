@@ -402,6 +402,18 @@ html[data-theme="dark"] .drawing-image-action-button.ant-btn-variant-filled:hove
   background: var(--ant-color-bg-text-hover, rgba(0, 0, 0, 0.06));
 }
 
+/* Model sync picker/metadata rows: whole row is clickable to toggle selection */
+.model-sync-row {
+  cursor: pointer;
+  transition: background 0.15s ease-in-out;
+}
+.model-sync-row:hover {
+  background: var(--ant-color-fill-tertiary, rgba(0, 0, 0, 0.04));
+}
+.model-sync-group:hover {
+  background: var(--ant-color-fill-tertiary, rgba(0, 0, 0, 0.04)) !important;
+}
+
 /* Ant Design style overrides */
 .ant-layout {
   height: 100%;

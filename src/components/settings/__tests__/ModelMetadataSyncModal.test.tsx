@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import i18n from '@/i18n';
 import type { Model, ModelMetadataState } from '@/types';
@@ -78,6 +79,50 @@ describe('buildMetadataSyncRows', () => {
       changed: true,
       inferred: [],
     });
+  });
+
+  it('select-all in the header only targets changed fields', async () => {
+    await i18n.changeLanguage('zh-CN');
+    const current = model();
+    const inferred: Model = {
+      ...current,
+      param_overrides: {
+        ...current.param_overrides,
+        no_system_role: false,
+      },
+      metadata_state: metadataState(),
+    };
+
+    render(
+      <ModelMetadataSyncModal
+        open
+        loading={false}
+        currentModel={current}
+        inferredModel={inferred}
+        onCancel={() => {}}
+        onApply={() => {}}
+      />,
+    );
+
+    const changedCheckbox = screen.getByRole('checkbox', {
+      name: i18n.t('settings.metadataSyncField.no_system_role'),
+    });
+    const unchangedCheckbox = screen.getByRole('checkbox', {
+      name: i18n.t('settings.metadataSyncField.capabilities'),
+    });
+    const selectAll = screen.getByRole('checkbox', { name: i18n.t('common.selectAll') });
+
+    // changed field is preselected by default
+    expect(changedCheckbox).toBeChecked();
+    expect(unchangedCheckbox).not.toBeChecked();
+
+    await userEvent.click(selectAll);
+    expect(changedCheckbox).not.toBeChecked();
+
+    await userEvent.click(selectAll);
+    expect(changedCheckbox).toBeChecked();
+    // select-all must not sweep in unchanged fields (would un-pin user metadata)
+    expect(unchangedCheckbox).not.toBeChecked();
   });
 
   it('localizes empty capability values instead of exposing the translation key', async () => {

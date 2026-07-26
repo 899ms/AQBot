@@ -1061,6 +1061,56 @@ describe('ProviderDetail', () => {
     });
   });
 
+  it('selects every model at once with the batch-mode select-all checkbox', async () => {
+    provider.models.push(
+      {
+        ...provider.models[0],
+        model_id: 'claude-model',
+        name: 'Claude Model',
+        group_name: 'claude',
+        enabled: false,
+      },
+      {
+        ...provider.models[0],
+        model_id: 'gemini-model',
+        name: 'Gemini Model',
+        group_name: 'gemini',
+        enabled: false,
+      },
+    );
+
+    const { container } = render(
+      <App>
+        <ProviderDetail providerId="provider-1" />
+      </App>,
+    );
+
+    const batchModeButton = container
+      .querySelector('.lucide-list-checks')
+      ?.closest('button');
+    expect(batchModeButton).not.toBeNull();
+    await userEvent.click(batchModeButton as HTMLButtonElement);
+
+    const selectAll = screen.getByRole('checkbox', { name: 'common.selectAll' });
+    expect(selectAll).not.toBeChecked();
+    await userEvent.click(selectAll);
+    expect(selectAll).toBeChecked();
+
+    const enableButton = container.querySelector('.lucide-power')?.closest('button');
+    expect(enableButton).not.toBeNull();
+    await userEvent.click(enableButton as HTMLButtonElement);
+
+    await waitFor(() => {
+      expect(mocks.saveModels).toHaveBeenCalledWith(
+        'provider-1',
+        provider.models.map((model) => ({ ...model, enabled: true })),
+      );
+    });
+
+    await userEvent.click(selectAll);
+    expect(selectAll).not.toBeChecked();
+  });
+
   it('keeps model sync usable when the online catalog is unavailable', async () => {
     provider.models[0] = {
       ...provider.models[0],

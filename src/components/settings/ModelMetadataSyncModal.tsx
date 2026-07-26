@@ -1,4 +1,4 @@
-import { Alert, Checkbox, Modal, Spin, Typography } from 'antd';
+import { Alert, Checkbox, Modal, Spin, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
@@ -133,6 +133,15 @@ export function ModelMetadataSyncModal({
   );
   const [selected, setSelected] = useState<Set<ModelMetadataField>>(new Set());
 
+  // Header select-all only targets changed fields: bulk-applying unchanged
+  // fields would silently flip user-pinned metadata to automatic ownership
+  const selectableFields = useMemo(
+    () => (unsupportedReason
+      ? []
+      : rows.filter((row) => row.changed).map((row) => row.field)),
+    [rows, unsupportedReason],
+  );
+
   useEffect(() => {
     if (!open) return;
     setSelected(new Set(rows.filter((row) => row.changed).map((row) => row.field)));
@@ -190,6 +199,16 @@ export function ModelMetadataSyncModal({
         </div>
       ) : (
         <div style={{ marginTop: 16 }}>
+          {!unsupportedReason
+            && rows.some((row) => row.available)
+            && rows.every((row) => !row.changed) && (
+            <Alert
+              type="success"
+              showIcon
+              message={t('settings.metadataUpToDate')}
+              style={{ marginBottom: 12 }}
+            />
+          )}
           <div
             style={{
               display: 'grid',
@@ -198,9 +217,21 @@ export function ModelMetadataSyncModal({
               padding: '0 8px 8px',
               color: 'var(--ant-color-text-secondary)',
               fontSize: 12,
+              alignItems: 'center',
             }}
           >
-            <span />
+            <Checkbox
+              aria-label={t('common.selectAll')}
+              checked={selectableFields.length > 0 && selectableFields.every((field) => selected.has(field))}
+              indeterminate={
+                selectableFields.some((field) => selected.has(field))
+                && !selectableFields.every((field) => selected.has(field))
+              }
+              disabled={selectableFields.length === 0}
+              onChange={(event) => {
+                setSelected(event.target.checked ? new Set(selectableFields) : new Set());
+              }}
+            />
             <span>{t('settings.metadataField')}</span>
             <span>{t('settings.metadataCurrentValue')}</span>
             <span />
@@ -211,6 +242,7 @@ export function ModelMetadataSyncModal({
             return (
               <div
                 key={row.field}
+                className={disabled ? undefined : 'model-sync-row'}
                 style={{
                   display: 'grid',
                   gridTemplateColumns: '32px minmax(120px, 1fr) minmax(120px, 1fr) 24px minmax(120px, 1fr)',
@@ -220,28 +252,52 @@ export function ModelMetadataSyncModal({
                   borderTop: '1px solid var(--ant-color-border-secondary)',
                   opacity: disabled ? 0.5 : 1,
                 }}
+                onClick={() => {
+                  if (disabled) return;
+                  setSelected((current) => {
+                    const next = new Set(current);
+                    if (next.has(row.field)) next.delete(row.field);
+                    else next.add(row.field);
+                    return next;
+                  });
+                }}
               >
-                <Checkbox
-                  aria-label={t(`settings.metadataSyncField.${row.field}`)}
-                  checked={selected.has(row.field)}
-                  disabled={disabled}
-                  onChange={(event) => {
-                    setSelected((current) => {
-                      const next = new Set(current);
-                      if (event.target.checked) next.add(row.field);
-                      else next.delete(row.field);
-                      return next;
-                    });
-                  }}
-                />
+                <div onClick={(event) => event.stopPropagation()}>
+                  <Checkbox
+                    aria-label={t(`settings.metadataSyncField.${row.field}`)}
+                    checked={selected.has(row.field)}
+                    disabled={disabled}
+                    onChange={(event) => {
+                      setSelected((current) => {
+                        const next = new Set(current);
+                        if (event.target.checked) next.add(row.field);
+                        else next.delete(row.field);
+                        return next;
+                      });
+                    }}
+                  />
+                </div>
                 <Text strong>{t(`settings.metadataSyncField.${row.field}`)}</Text>
                 <Text>{formatValue(row.field, row.current)}</Text>
                 <Text type="secondary">→</Text>
-                <Text type={row.available ? undefined : 'secondary'}>
-                  {row.available
-                    ? formatValue(row.field, row.inferred)
-                    : t('settings.metadataNoCatalogData')}
-                </Text>
+                <div className="flex items-center gap-1 flex-wrap">
+                  <Text
+                    type={row.available ? undefined : 'secondary'}
+                    style={row.changed ? { color: 'var(--ant-color-success)', fontWeight: 600 } : undefined}
+                  >
+                    {row.available
+                      ? formatValue(row.field, row.inferred)
+                      : t('settings.metadataNoCatalogData')}
+                  </Text>
+                  {row.available && row.source && (
+                    <Tag
+                      bordered={false}
+                      style={{ fontSize: 11, lineHeight: '18px', padding: '0 6px', margin: 0 }}
+                    >
+                      {t(`settings.metadataSourceLabel.${row.source}`, row.source)}
+                    </Tag>
+                  )}
+                </div>
               </div>
             );
           })}

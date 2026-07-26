@@ -40,7 +40,6 @@ import type {
   ModelCapability,
   ModelCatalogStatus,
   ModelSyncCandidate,
-  ModelSyncStatus,
   ModelType,
   ModelMetadataState,
   ModelParamOverrides,
@@ -49,12 +48,13 @@ import type {
 } from '@/types';
 import { ModelParamSliders } from '@/components/common/ModelParamSliders';
 import { CopyButton } from '@/components/common/CopyButton';
-import { ModelCatalogStatusBar } from './ModelCatalogStatusBar';
 import { ImageProtocolEditor } from './ImageProtocolEditor';
 import {
   ModelMetadataSyncModal,
   type ModelMetadataField,
 } from './ModelMetadataSyncModal';
+import { ModelSyncPickerModal, type ModelSyncEntry } from './ModelSyncPickerModal';
+import { deriveModelGroupName, formatTokenCount, getModelGroupName } from '@/lib/modelSync';
 
 const { Text, Title } = Typography;
 
@@ -96,13 +96,6 @@ const MODEL_TYPE_CONFIG: Record<ModelType, { color: string; icon: React.ReactNod
   Embedding: { color: 'cyan', icon: <Database size={12} /> },
   Image: { color: 'green', icon: <ImagePlus size={12} /> },
   Rerank: { color: 'purple', icon: <ListFilter size={12} /> },
-};
-
-const MODEL_SYNC_STATUS_CONFIG: Record<ModelSyncStatus, { color: string; labelKey: string }> = {
-  synced: { color: 'blue', labelKey: 'settings.modelAlreadyAdded' },
-  'local-only': { color: 'gold', labelKey: 'settings.remoteMissing' },
-  'remote-only': { color: 'green', labelKey: 'settings.remoteAvailable' },
-  unsupported: { color: 'red', labelKey: 'settings.modelUnsupported' },
 };
 
 function metadataStateWithAutomaticFields(
@@ -303,38 +296,6 @@ function parseExtraBodyInput(text: string): { value?: Record<string, unknown>; e
 
 type KeyModalMode = 'add' | 'edit';
 
-interface ModelSyncEntry extends ModelSyncCandidate {
-  model: Model;
-}
-
-function deriveModelGroupName(modelId: string): string {
-  const parts = modelId
-    .trim()
-    .split('-')
-    .filter((part) => part.length > 0);
-
-  if (parts.length >= 2) return parts.slice(0, 2).join('-');
-  if (parts.length === 1) return parts[0];
-  return modelId.trim();
-}
-
-function getModelGroupName(model: Pick<Model, 'model_id' | 'group_name'>): string {
-  const explicitGroup = model.group_name?.trim();
-  return explicitGroup || deriveModelGroupName(model.model_id);
-}
-
-function formatTokenCount(tokens: number): string {
-  if (tokens >= 1000000) {
-    const m = tokens / 1000000;
-    return m % 1 === 0 ? `${m}M` : `${m.toFixed(1)}M`;
-  }
-  if (tokens >= 1000) {
-    const k = tokens / 1000;
-    return k % 1 === 0 ? `${k}K` : `${k.toFixed(1)}K`;
-  }
-  return `${tokens}`;
-}
-
 function getDefaultCapabilitiesForType(modelType: ModelType): ModelCapability[] {
   switch (modelType) {
     case 'Voice':
@@ -454,9 +415,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerModels, setPickerModels] = useState<ModelSyncEntry[]>([]);
   const [pickerCatalog, setPickerCatalog] = useState<ModelCatalogStatus | null>(null);
-  const [pickerSelected, setPickerSelected] = useState<Set<string>>(new Set());
-  const [pickerSearch, setPickerSearch] = useState('');
-  const [pickerCollapsed, setPickerCollapsed] = useState<Set<string>>(new Set());
   const [providerEditModalOpen, setProviderEditModalOpen] = useState(false);
   const [editProviderName, setEditProviderName] = useState('');
   const [editProviderType, setEditProviderType] = useState<ProviderType>('openai');
@@ -489,59 +447,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
   const [batchForceMaxTokensEnabled, setBatchForceMaxTokensEnabled] = useState(false);
   const [batchThinkingParamStyle, setBatchThinkingParamStyle] = useState<string>('reasoning_effort');
   const [batchThinkingParamStyleEnabled, setBatchThinkingParamStyleEnabled] = useState(false);
-
-  const pickerGroups = useMemo(() => {
-    const filtered = pickerModels.filter(({ model }) =>
-      !pickerSearch || [model.name, model.model_id].some((v) => v.toLowerCase().includes(pickerSearch.toLowerCase())),
-    );
-    const groups: Record<string, ModelSyncEntry[]> = {};
-    for (const entry of filtered) {
-      const key = getModelGroupName(entry.model);
-      if (!groups[key]) groups[key] = [];
-      groups[key].push(entry);
-    }
-    return { filtered, entries: Object.entries(groups) };
-  }, [pickerModels, pickerSearch]);
-
-  // Flatten picker groups into virtual rows
-  type PickerRow =
-    | { type: 'group'; group: string; models: ModelSyncEntry[] }
-    | { type: 'model'; item: ModelSyncEntry }
-    | { type: 'spacer'; beforeGroup: string };
-  const flatPickerRows = useMemo<PickerRow[]>(() => {
-    const rows: PickerRow[] = [];
-    const entries = pickerGroups.entries;
-    for (let i = 0; i < entries.length; i++) {
-      const [group, models] = entries[i];
-      if (i > 0) rows.push({ type: 'spacer', beforeGroup: group });
-      rows.push({ type: 'group', group, models });
-      if (!pickerCollapsed.has(group)) {
-        for (const item of models) {
-          rows.push({ type: 'model', item });
-        }
-      }
-    }
-    return rows;
-  }, [pickerGroups.entries, pickerCollapsed]);
-
-  const pickerListParentRef = useRef<HTMLDivElement>(null);
-  const pickerVirtualizer = useVirtualizer({
-    count: flatPickerRows.length,
-    getScrollElement: () => pickerListParentRef.current,
-    estimateSize: (index) => {
-      const row = flatPickerRows[index];
-      if (row.type === 'spacer') return 8;
-      if (row.type === 'group') return 40;
-      return 40;
-    },
-    getItemKey: (index) => {
-      const row = flatPickerRows[index];
-      if (row.type === 'spacer') return `spacer-${row.beforeGroup}`;
-      if (row.type === 'group') return `group-${row.group}`;
-      return `model-${row.item.model.model_id}`;
-    },
-    overscan: 15,
-  });
 
   // Sync local state when provider changes (e.g. switching providers)
   useEffect(() => {
@@ -841,13 +746,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
         );
       setPickerModels(syncEntries);
       setPickerCatalog(result.catalog);
-      setPickerSelected(new Set(
-        syncEntries
-          .filter((entry) => entry.status !== 'unsupported' && entry.status !== 'remote-only')
-          .map((entry) => entry.model.model_id),
-      ));
-      setPickerSearch('');
-      setPickerCollapsed(new Set());
       setPickerOpen(true);
     } catch (e) {
       const errMsg = String(e);
@@ -861,35 +759,15 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
     }
   }, [providerId, fetchRemoteModels, message, t]);
 
-  const handlePickerConfirm = useCallback(async () => {
-    const selectedModels = pickerModels
-      .filter(({ model, status }) =>
-        status !== 'unsupported' && pickerSelected.has(model.model_id),
-      )
-      .map((entry) => entry.model);
-    const selectedIds = new Set(selectedModels.map((model) => model.model_id));
-    const unsupportedIds = new Set(
-      pickerModels
-        .filter(({ status }) => status === 'unsupported')
-        .map(({ model }) => model.model_id),
-    );
-    for (const localModel of provider?.models ?? []) {
-      if (unsupportedIds.has(localModel.model_id) && !selectedIds.has(localModel.model_id)) {
-        selectedModels.push(localModel);
-      }
-    }
-    if (selectedModels.length === 0) {
-      setPickerOpen(false);
-      return;
-    }
+  const handlePickerApply = useCallback(async (models: Model[]) => {
     try {
-      await applyModelSync(providerId, selectedModels);
+      await applyModelSync(providerId, models);
       message.success(t('settings.modelSyncApplied'));
     } catch {
       message.error(t('error.saveFailed'));
     }
     setPickerOpen(false);
-  }, [pickerModels, pickerSelected, provider?.models, providerId, applyModelSync, message, t]);
+  }, [providerId, applyModelSync, message, t]);
 
   const handleTestSingleModel = useCallback(async () => {
     if (!singleTestModelId) return;
@@ -1272,6 +1150,17 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
       return next;
     });
   }, []);
+
+  const handleBatchToggleAll = useCallback((checked: boolean) => {
+    setBatchSelected((prev) => {
+      const next = new Set(prev);
+      for (const m of filteredModels) {
+        if (checked) next.add(m.model_id);
+        else next.delete(m.model_id);
+      }
+      return next;
+    });
+  }, [filteredModels]);
 
   const handleBatchEnable = useCallback(async () => {
     if (batchSelected.size === 0) return;
@@ -1755,9 +1644,23 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
         title={
           batchMode ? (
             <Space>
-              <Text type="secondary" style={{ fontSize: 13 }}>
-                {t('settings.batchSelected', { count: batchSelected.size })}
-              </Text>
+              <Checkbox
+                aria-label={t('common.selectAll')}
+                checked={
+                  filteredModels.length > 0
+                  && filteredModels.every((m) => batchSelected.has(m.model_id))
+                }
+                indeterminate={
+                  filteredModels.some((m) => batchSelected.has(m.model_id))
+                  && !filteredModels.every((m) => batchSelected.has(m.model_id))
+                }
+                disabled={filteredModels.length === 0}
+                onChange={(e) => handleBatchToggleAll(e.target.checked)}
+              >
+                <Text type="secondary" style={{ fontSize: 13 }}>
+                  {t('common.selectAll')} ({batchSelected.size}/{filteredModels.length})
+                </Text>
+              </Checkbox>
             </Space>
           ) : (
             <Space>
@@ -2975,213 +2878,14 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
       </Modal>
 
       {/* Model picker modal */}
-      <Modal
-        title={t('settings.syncModels')}
+      <ModelSyncPickerModal
         open={pickerOpen}
+        entries={pickerModels}
+        catalog={pickerCatalog}
+        localModels={provider.models}
         onCancel={() => setPickerOpen(false)}
-        onOk={handlePickerConfirm}
-        okText={t('settings.applyModelSync')}
-        cancelText={t('common.cancel')}
-        okButtonProps={{ disabled: pickerSelected.size === 0 }}
-        width={560}
-        styles={{ body: { padding: 0 } }}
-        afterOpenChange={(open) => { if (open) pickerVirtualizer.measure(); }}
-      >
-        {(() => {
-          const { filtered } = pickerGroups;
-          const selectableFiltered = filtered.filter(({ status }) => status !== 'unsupported');
-          const allFilteredChecked = selectableFiltered.length > 0 && selectableFiltered.every(({ model }) => pickerSelected.has(model.model_id));
-          const someFilteredChecked = selectableFiltered.some(({ model }) => pickerSelected.has(model.model_id));
-          return (
-            <>
-              <div style={{ position: 'sticky', top: 0, zIndex: 1, background: 'inherit', padding: '8px 24px', borderBottom: `1px solid ${token.colorBorderSecondary}`, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Checkbox
-                  checked={allFilteredChecked}
-                  indeterminate={someFilteredChecked && !allFilteredChecked}
-                  onChange={(e) => {
-                    setPickerSelected((prev) => {
-                      const next = new Set(prev);
-                      for (const { model } of selectableFiltered) {
-                        if (e.target.checked) next.add(model.model_id);
-                        else next.delete(model.model_id);
-                      }
-                      return next;
-                    });
-                  }}
-                  style={{ whiteSpace: 'nowrap' }}
-                >
-                  {t('common.selectAll')} ({pickerSelected.size}/{pickerModels.length})
-                </Checkbox>
-                <Input
-                  placeholder={t('settings.searchModels')}
-                  prefix={<Search size={14} />}
-                  value={pickerSearch}
-                  onChange={(e) => setPickerSearch(e.target.value)}
-                  allowClear
-                  size="small"
-                  style={{ flex: 1 }}
-                />
-                <Tooltip title={pickerCollapsed.size === 0 ? t('settings.collapseAll') : t('settings.expandAll')}>
-                  <Button
-                    size="small"
-                    type="text"
-                    icon={pickerCollapsed.size === 0 ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-                    onClick={() => {
-                      if (pickerCollapsed.size === 0) {
-                        setPickerCollapsed(new Set(pickerGroups.entries.map(([g]) => g)));
-                      } else {
-                        setPickerCollapsed(new Set());
-                      }
-                    }}
-                  />
-                </Tooltip>
-              </div>
-              {pickerCatalog && <ModelCatalogStatusBar status={pickerCatalog} />}
-              <div
-                ref={pickerListParentRef}
-                className="model-picker-list"
-                data-os-scrollbar
-                style={{ maxHeight: 420, overflow: 'auto', padding: '8px 16px 12px' }}
-              >
-                <div style={{ height: pickerVirtualizer.getTotalSize(), position: 'relative' }}>
-                  {pickerVirtualizer.getVirtualItems().map((virtualRow) => {
-                    const row = flatPickerRows[virtualRow.index];
-                    if (row.type === 'spacer') {
-                      return (
-                        <div
-                          key={virtualRow.key}
-                          data-index={virtualRow.index}
-                          ref={pickerVirtualizer.measureElement}
-                          style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: 8, transform: `translateY(${virtualRow.start}px)` }}
-                        />
-                      );
-                    }
-                    if (row.type === 'group') {
-                      const { group, models } = row;
-                      const selectableModels = models.filter(({ status }) => status !== 'unsupported');
-                      const allChecked = selectableModels.length > 0 && selectableModels.every(({ model }) => pickerSelected.has(model.model_id));
-                      const someChecked = selectableModels.some(({ model }) => pickerSelected.has(model.model_id));
-                      const collapsed = pickerCollapsed.has(group);
-                      return (
-                        <div
-                          key={`g-${group}`}
-                          data-index={virtualRow.index}
-                          ref={pickerVirtualizer.measureElement}
-                          style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualRow.start}px)` }}
-                        >
-                          <div
-                            className="flex items-center gap-2 px-2 py-1.5 rounded-md"
-                            style={{ cursor: 'pointer', userSelect: 'none', background: 'var(--ant-color-fill-quaternary, rgba(0,0,0,0.02))' }}
-                            onClick={() => setPickerCollapsed((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(group)) next.delete(group); else next.add(group);
-                              return next;
-                            })}
-                          >
-                            {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                            <div onClick={(e) => e.stopPropagation()}>
-                              <Checkbox
-                                checked={allChecked}
-                                indeterminate={someChecked && !allChecked}
-                                onChange={(e) => {
-                                  setPickerSelected((prev) => {
-                                    const next = new Set(prev);
-                                    for (const { model } of selectableModels) {
-                                      if (e.target.checked) next.add(model.model_id);
-                                      else next.delete(model.model_id);
-                                    }
-                                    return next;
-                                  });
-                                }}
-                              />
-                            </div>
-                            <ModelIcon model={models[0]?.model.model_id ?? group} size={20} type="avatar" />
-                            <Text style={{ fontWeight: 600 }}>{group}</Text>
-                            <Tag style={{ fontSize: 11, lineHeight: '18px', padding: '0 6px', margin: 0 }}>{models.length}</Tag>
-                          </div>
-                        </div>
-                      );
-                    }
-                    // model row
-                    const { item } = row;
-                    const { model: m } = item;
-                    return (
-                      <div
-                        key={`m-${m.model_id}`}
-                        data-index={virtualRow.index}
-                        ref={pickerVirtualizer.measureElement}
-                        style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualRow.start}px)` }}
-                      >
-                        <div
-                          className="flex items-center gap-2 px-2 py-1.5 rounded-md"
-                          style={{ paddingLeft: 36 }}
-                        >
-                          <Checkbox
-                            checked={pickerSelected.has(m.model_id)}
-                            disabled={item.status === 'unsupported'}
-                            aria-label={m.model_id}
-                            onChange={(e) => {
-                              setPickerSelected((prev) => {
-                                const next = new Set(prev);
-                                if (e.target.checked) next.add(m.model_id);
-                                else next.delete(m.model_id);
-                                return next;
-                              });
-                            }}
-                          />
-                          <ModelIcon model={m.model_id} size={20} type="avatar" />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1 flex-wrap">
-                              <span>{m.name || m.model_id}</span>
-                              {m.name && m.name !== m.model_id && (
-                                <Text type="secondary" style={{ fontSize: 11 }}>({m.model_id})</Text>
-                              )}
-                              <Tag color={MODEL_SYNC_STATUS_CONFIG[item.status].color} style={{ marginInlineStart: 4 }}>
-                                {t(MODEL_SYNC_STATUS_CONFIG[item.status].labelKey)}
-                              </Tag>
-                              {m.context_window != null && (
-                                <Tooltip title={t('settings.contextWindow')}>
-                                  <Tag
-                                    bordered={false}
-                                    aria-label={t('settings.contextWindow')}
-                                    style={{ marginInlineStart: 4 }}
-                                  >
-                                    {formatTokenCount(m.context_window)}
-                                  </Tag>
-                                </Tooltip>
-                              )}
-                              {m.max_output_tokens != null && (
-                                <Tooltip title={t('settings.modelMaxOutputTokens')}>
-                                  <Tag
-                                    bordered={false}
-                                    aria-label={t('settings.modelMaxOutputTokens')}
-                                  >
-                                    {formatTokenCount(m.max_output_tokens)}
-                                  </Tag>
-                                </Tooltip>
-                              )}
-                            </div>
-                            {item.changes.length > 0 && (
-                              <Text type="secondary" style={{ fontSize: 11 }}>
-                                {item.changes.map((change) => change.field).join(', ')}
-                              </Text>
-                            )}
-                            {item.unsupported_reason && (
-                              <Text type="danger" style={{ fontSize: 11 }}>
-                                {item.unsupported_reason}
-                              </Text>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </>
-          );
-        })()}
-      </Modal>
+        onApply={handlePickerApply}
+      />
 
       {/* Provider Edit Modal */}
       <Modal
