@@ -14,6 +14,7 @@ import {
   McpServerSettings,
   BackupCenter,
   StorageSpaceManager,
+  SelectionToolbarSettings,
 } from '@/components/settings';
 import { DefaultModelSettings } from '@/components/settings/DefaultModelSettings';
 import { ConversationSettings } from '@/components/settings/ConversationSettings';
@@ -33,6 +34,7 @@ const SECTION_COMPONENTS: Record<SettingsSection, React.ComponentType> = {
   searchProviders: SearchProviderSettings,
   mcpServers: McpServerSettings,
   backup: BackupCenter,
+  selectionToolbar: SelectionToolbarSettings,
 };
 
 export function SettingsPage() {

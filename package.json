@@ -14,6 +14,8 @@
     "test": "vitest",
     "test:run": "vitest run",
     "test:perf": "node scripts/run-perf-tests.mjs",
+    "macos:signing:bootstrap": "node scripts/macos/code-signing.mjs bootstrap",
+    "macos:signing:verify": "node scripts/macos/code-signing.mjs verify",
     "bump": "node scripts/bump-version.mjs"
   },
   "dependencies": {

@@ -917,6 +917,253 @@ pub enum ModelCatalogSourcePreference {
     Online,
 }
 
+pub const SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS: usize = 5;
+pub const SELECTION_TOOLBAR_CUSTOM_ICONS: &[&str] = &[
+    "wand-sparkles",
+    "languages",
+    "spell-check",
+    "list-collapse",
+    "brain",
+    "book-open",
+    "code",
+    "message-square",
+    "pen-line",
+    "search",
+    "sparkles",
+    "terminal",
+];
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionToolbarBuiltinAiKey {
+    Translate,
+    Polish,
+    Summarize,
+}
+
+impl SelectionToolbarBuiltinAiKey {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Translate => "translate",
+            Self::Polish => "polish",
+            Self::Summarize => "summarize",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionToolbarBuiltinActionKey {
+    Copy,
+}
+
+impl SelectionToolbarBuiltinActionKey {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Copy => "copy",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SelectionToolbarAiConfig {
+    pub prompt: String,
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub top_p: Option<f32>,
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+}
+
+impl SelectionToolbarAiConfig {
+    fn validate(&self) -> Result<(), String> {
+        if self.prompt.trim().is_empty() || !self.prompt.contains("{selection}") {
+            return Err("Selection toolbar prompts must contain {selection}".into());
+        }
+        if self.provider_id.is_some() != self.model_id.is_some() {
+            return Err(
+                "Selection toolbar provider_id and model_id must be configured together".into(),
+            );
+        }
+        if self
+            .provider_id
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty())
+            || self
+                .model_id
+                .as_ref()
+                .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err("Selection toolbar provider_id and model_id must not be empty".into());
+        }
+        if let Some(temperature) = self.temperature {
+            if !(0.0..=2.0).contains(&temperature) {
+                return Err("Selection toolbar temperature must be between 0 and 2".into());
+            }
+        }
+        if let Some(top_p) = self.top_p {
+            if !(0.0..=1.0).contains(&top_p) {
+                return Err("Selection toolbar top_p must be between 0 and 1".into());
+            }
+        }
+        if self.max_tokens == Some(0) {
+            return Err("Selection toolbar max_tokens must be positive".into());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SelectionToolbarTool {
+    BuiltinAi {
+        builtin_key: SelectionToolbarBuiltinAiKey,
+        enabled: bool,
+        ai: SelectionToolbarAiConfig,
+    },
+    BuiltinAction {
+        builtin_key: SelectionToolbarBuiltinActionKey,
+        enabled: bool,
+    },
+    CustomAi {
+        id: String,
+        name: String,
+        icon: String,
+        enabled: bool,
+        ai: SelectionToolbarAiConfig,
+    },
+}
+
+impl SelectionToolbarTool {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::BuiltinAi { builtin_key, .. } => builtin_key.as_str(),
+            Self::BuiltinAction { builtin_key, .. } => builtin_key.as_str(),
+            Self::CustomAi { id, .. } => id,
+        }
+    }
+
+    pub fn enabled(&self) -> bool {
+        match self {
+            Self::BuiltinAi { enabled, .. }
+            | Self::BuiltinAction { enabled, .. }
+            | Self::CustomAi { enabled, .. } => *enabled,
+        }
+    }
+
+    pub fn ai(&self) -> Option<&SelectionToolbarAiConfig> {
+        match self {
+            Self::BuiltinAi { ai, .. } | Self::CustomAi { ai, .. } => Some(ai),
+            Self::BuiltinAction { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SelectionToolbarSettings {
+    pub enabled: bool,
+    pub theme_follow: bool,
+    pub tools: Vec<SelectionToolbarTool>,
+}
+
+impl SelectionToolbarSettings {
+    pub fn validate(&self) -> Result<(), String> {
+        use std::collections::HashSet;
+
+        let mut ids = HashSet::new();
+        let mut builtin_ai = HashSet::new();
+        let mut copy_count = 0;
+        for tool in &self.tools {
+            if !ids.insert(tool.id().to_string()) {
+                return Err(format!(
+                    "Duplicate selection toolbar tool id: {}",
+                    tool.id()
+                ));
+            }
+            match tool {
+                SelectionToolbarTool::BuiltinAi {
+                    builtin_key, ai, ..
+                } => {
+                    builtin_ai.insert(*builtin_key);
+                    ai.validate()?;
+                }
+                SelectionToolbarTool::BuiltinAction { .. } => copy_count += 1,
+                SelectionToolbarTool::CustomAi {
+                    id, name, icon, ai, ..
+                } => {
+                    if uuid::Uuid::parse_str(id).is_err() || name.trim().is_empty() {
+                        return Err(
+                            "Custom selection toolbar tools require a UUID id and name".into()
+                        );
+                    }
+                    if !SELECTION_TOOLBAR_CUSTOM_ICONS.contains(&icon.as_str()) {
+                        return Err(format!("Unsupported selection toolbar icon: {icon}"));
+                    }
+                    ai.validate()?;
+                }
+            }
+        }
+
+        if builtin_ai.len() != 3 || copy_count != 1 {
+            return Err(
+                "Selection toolbar settings must contain translate, polish, summarize and copy exactly once"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Default for SelectionToolbarSettings {
+    fn default() -> Self {
+        let ai = |prompt: &str| SelectionToolbarAiConfig {
+            prompt: prompt.into(),
+            provider_id: None,
+            model_id: None,
+            temperature: None,
+            top_p: None,
+            max_tokens: None,
+        };
+        Self {
+            enabled: false,
+            theme_follow: false,
+            tools: vec![
+                SelectionToolbarTool::BuiltinAi {
+                    builtin_key: SelectionToolbarBuiltinAiKey::Translate,
+                    enabled: true,
+                    ai: ai(
+                        "Translate the following text into the current application language. Return only the translation:\n\n{selection}",
+                    ),
+                },
+                SelectionToolbarTool::BuiltinAi {
+                    builtin_key: SelectionToolbarBuiltinAiKey::Polish,
+                    enabled: true,
+                    ai: ai(
+                        "Polish the following text while preserving its meaning. Return only the polished text:\n\n{selection}",
+                    ),
+                },
+                SelectionToolbarTool::BuiltinAi {
+                    builtin_key: SelectionToolbarBuiltinAiKey::Summarize,
+                    enabled: true,
+                    ai: ai(
+                        "Summarize the following text concisely in the current application language:\n\n{selection}",
+                    ),
+                },
+                SelectionToolbarTool::BuiltinAction {
+                    builtin_key: SelectionToolbarBuiltinActionKey::Copy,
+                    enabled: true,
+                },
+            ],
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -1076,6 +1323,8 @@ pub struct AppSettings {
     pub agent_workspace_datetime_format: Option<String>,
     /// Agent bash/sh executable path. None uses PATH auto-detection.
     pub agent_bash_path: Option<String>,
+    /// Cross-application text-selection toolbar.
+    pub selection_toolbar: SelectionToolbarSettings,
 }
 
 impl Default for AppSettings {
@@ -1210,19 +1459,144 @@ impl Default for AppSettings {
             agent_workspace_name_strategy: "uuid".to_string(),
             agent_workspace_datetime_format: Some("YYYY-MM-DD-HH-mm-ss".to_string()),
             agent_bash_path: None,
+            selection_toolbar: SelectionToolbarSettings::default(),
         }
     }
 }
 
 #[cfg(test)]
 mod app_settings_tests {
-    use super::{AppSettings, ModelCatalogSourcePreference};
+    use super::{
+        AppSettings, ModelCatalogSourcePreference, SelectionToolbarAiConfig,
+        SelectionToolbarBuiltinAiKey, SelectionToolbarSettings, SelectionToolbarTool,
+    };
     use serde_json::json;
 
     #[test]
     fn release_webview_on_tray_defaults_to_disabled() {
         let settings = AppSettings::default();
         assert!(!settings.release_webview_on_tray);
+    }
+
+    #[test]
+    fn selection_toolbar_defaults_are_backward_compatible_and_valid() {
+        let settings: AppSettings =
+            serde_json::from_value(json!({})).expect("legacy settings should deserialize");
+
+        assert!(!settings.selection_toolbar.enabled);
+        assert!(!settings.selection_toolbar.theme_follow);
+        assert_eq!(settings.selection_toolbar.tools.len(), 4);
+        settings
+            .selection_toolbar
+            .validate()
+            .expect("default selection toolbar settings should be valid");
+    }
+
+    #[test]
+    fn selection_toolbar_rejects_invalid_ai_configuration() {
+        let invalid_provider_pair = SelectionToolbarSettings {
+            tools: vec![SelectionToolbarTool::BuiltinAi {
+                builtin_key: SelectionToolbarBuiltinAiKey::Translate,
+                enabled: true,
+                ai: SelectionToolbarAiConfig {
+                    prompt: "Translate {selection}".into(),
+                    provider_id: Some("provider".into()),
+                    model_id: None,
+                    temperature: None,
+                    top_p: None,
+                    max_tokens: None,
+                },
+            }],
+            ..SelectionToolbarSettings::default()
+        };
+        assert!(invalid_provider_pair.validate().is_err());
+
+        let missing_placeholder: SelectionToolbarSettings = serde_json::from_value(json!({
+            "enabled": true,
+            "theme_follow": true,
+            "tools": [
+                {
+                    "kind": "builtin_ai",
+                    "builtin_key": "translate",
+                    "enabled": true,
+                    "ai": {
+                        "prompt": "Translate this text",
+                        "provider_id": null,
+                        "model_id": null,
+                        "temperature": 0.7,
+                        "top_p": 1.0,
+                        "max_tokens": 1024
+                    }
+                },
+                {
+                    "kind": "builtin_ai",
+                    "builtin_key": "polish",
+                    "enabled": true,
+                    "ai": {
+                        "prompt": "Polish {selection}",
+                        "provider_id": null,
+                        "model_id": null
+                    }
+                },
+                {
+                    "kind": "builtin_ai",
+                    "builtin_key": "summarize",
+                    "enabled": true,
+                    "ai": {
+                        "prompt": "Summarize {selection}",
+                        "provider_id": null,
+                        "model_id": null
+                    }
+                },
+                {
+                    "kind": "builtin_action",
+                    "builtin_key": "copy",
+                    "enabled": true
+                }
+            ]
+        }))
+        .expect("settings shape should deserialize");
+        assert!(missing_placeholder.validate().is_err());
+
+        let mut invalid_custom_id = SelectionToolbarSettings::default();
+        invalid_custom_id
+            .tools
+            .push(SelectionToolbarTool::CustomAi {
+                id: "not-a-uuid".into(),
+                name: "Explain".into(),
+                icon: "sparkles".into(),
+                enabled: true,
+                ai: SelectionToolbarAiConfig {
+                    prompt: "Explain {selection}".into(),
+                    provider_id: None,
+                    model_id: None,
+                    temperature: None,
+                    top_p: None,
+                    max_tokens: None,
+                },
+            });
+        assert!(invalid_custom_id.validate().is_err());
+
+        let mut empty_model_id = SelectionToolbarSettings::default();
+        let SelectionToolbarTool::BuiltinAi { ai, .. } = &mut empty_model_id.tools[0] else {
+            panic!("first default tool must be builtin AI");
+        };
+        ai.provider_id = Some("provider".into());
+        ai.model_id = Some("  ".into());
+        assert!(empty_model_id.validate().is_err());
+    }
+
+    #[test]
+    fn selection_toolbar_requires_each_builtin_tool_exactly_once() {
+        let mut missing_copy = SelectionToolbarSettings::default();
+        missing_copy.tools.retain(|tool| tool.id() != "copy");
+        assert!(missing_copy.validate().is_err());
+
+        let mut duplicate_translate = SelectionToolbarSettings::default();
+        duplicate_translate
+            .tools
+            .push(duplicate_translate.tools[0].clone());
+        assert!(duplicate_translate.validate().is_err());
     }
 
     #[test]

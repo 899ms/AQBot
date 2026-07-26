@@ -7,6 +7,7 @@ import {
   renderStartupError,
   writeStartupDiagnostic,
 } from '@/lib/startupDiagnostics';
+import { frontendKindForWindow } from '@/lib/windowKind';
 
 // Native context menu prevention is handled by GlobalCopyMenu component.
 // It prevents the native menu while providing a custom Copy menu when text is selected.
@@ -17,6 +18,16 @@ async function bootstrap() {
   const rootElement = document.getElementById('root');
   if (!rootElement) {
     throw new Error('AQBot root element #root was not found');
+  }
+
+  const windowLabel = '__TAURI_INTERNALS__' in window
+    ? (await import('@tauri-apps/api/webviewWindow')).getCurrentWebviewWindow().label
+    : 'main';
+  if (frontendKindForWindow(windowLabel) === 'selection-toolbar') {
+    const { SelectionToolbarRoot } = await import('./selection-toolbar/SelectionToolbarApp');
+    ReactDOM.createRoot(rootElement).render(<SelectionToolbarRoot />);
+    void writeStartupDiagnostic('info', 'AQBot selection toolbar frontend rendered');
+    return;
   }
 
   const { default: AppRoot } = await import('./App');

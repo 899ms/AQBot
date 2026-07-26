@@ -497,6 +497,48 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
       setStore('settings', merged);
       return merged as T;
     }
+    case 'get_previous_crash_report':
+      return null as T;
+    case 'acknowledge_previous_crash_report':
+      return undefined as T;
+    case 'selection_toolbar_get_runtime_status':
+    case 'selection_toolbar_retry_monitoring':
+      return {
+        state: 'unavailable',
+        platform: 'unsupported',
+        permission: 'unknown',
+        last_error: {
+          code: 'browser_preview',
+          message: 'Selection monitoring is unavailable in browser preview mode.',
+        },
+        global_dismissal_supported: false,
+      } as T;
+    case 'selection_toolbar_get_snapshot':
+      return {
+        runtime: {
+          state: 'unavailable',
+          platform: 'unsupported',
+          permission: 'unknown',
+          last_error: {
+            code: 'browser_preview',
+            message: 'Selection monitoring is unavailable in browser preview mode.',
+          },
+          global_dismissal_supported: false,
+        },
+        session: null,
+        run: null,
+      } as T;
+    case 'selection_toolbar_frontend_ready':
+    case 'selection_toolbar_set_surface':
+    case 'selection_toolbar_stop_generation':
+    case 'selection_toolbar_copy_selection':
+    case 'selection_toolbar_copy_result':
+    case 'selection_toolbar_close':
+      return undefined as T;
+    case 'selection_toolbar_open_permission_settings':
+    case 'selection_toolbar_request_permission':
+    case 'selection_toolbar_execute_tool':
+      throw new Error('Selection toolbar is unavailable in browser preview mode.');
 
     // ── Providers ─────────────────────────────────────────────────────
     case 'list_providers':

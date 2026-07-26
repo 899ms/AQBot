@@ -105,32 +105,18 @@
 
 ### macOS 提示"已损坏"或"无法验证开发者"
 
-由于应用未经 Apple 签名，macOS 可能会弹出以下提示之一：
+AQBot 使用项目自签名的代码签名证书，不是 Apple Developer ID 证书，因此从浏览器下载后 macOS 仍可能弹出以下提示之一：
 
 - "AQBot" 已损坏，无法打开
 - 无法打开 "AQBot"，因为无法验证开发者
 
-**解决步骤：**
+这不需要关闭整个系统的 Gatekeeper。请只放行当前 AQBot 应用：
 
-**1. 允许"任何来源"的应用运行**
+1. 在 Finder 中按住 Control 点击 `AQBot.app`，选择「打开」，然后再次点击「打开」。
+2. 如果仍被拦截，前往「系统设置 → 隐私与安全性」，在安全性区域找到 AQBot 并点击「仍要打开」。
+3. 再次启动 AQBot。
 
-```bash
-sudo spctl --master-disable
-```
-
-执行后前往「系统设置 → 隐私与安全性 → 安全性」，确认已勾选「任何来源」。
-
-**2. 移除应用的安全隔离属性**
-
-```bash
-sudo xattr -dr com.apple.quarantine /Applications/AQBot.app
-```
-
-> 如果不确定路径，可将应用图标拖拽到 `sudo xattr -dr com.apple.quarantine ` 后面。
-
-**3. macOS Ventura 及以上版本的额外步骤**
-
-完成上述步骤后，首次打开时仍可能被拦截。前往 **「系统设置 → 隐私与安全性」** ，在安全性区域点击 **「仍要打开」** 即可，后续无需重复操作。
+Gatekeeper 放行与辅助功能授权是两项独立设置。使用划词工具栏时，还需根据 AQBot 内的提示，在「系统设置 → 隐私与安全性 → 辅助功能」中启用 AQBot。
 
 ## 社区支持
 - [LinuxDO](https://linux.do)

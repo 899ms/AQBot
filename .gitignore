@@ -36,6 +36,8 @@ playwright-report/
 
 # Secrets
 *.key
+*.p8
+*.p12
 
 # Planning files
 task_plan.md

@@ -73,7 +73,7 @@ describe('ChatView assistant display policy', () => {
   });
 
   it('uses a finite live markdown window instead of placeholder batching', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/components/chat/ChatView.tsx'), 'utf8');
+    const source = readFileSync(resolve(process.cwd(), 'src/components/chat/chatMarkdownShared.tsx'), 'utf8');
     const propsBlock = source.match(/const CHAT_RENDER_BATCH_PROPS = \{[\s\S]*?\} as const;/)?.[0] ?? '';
 
     expect(propsBlock).toContain('deferNodesUntilVisible: false');

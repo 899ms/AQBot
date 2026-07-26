@@ -2,7 +2,7 @@ import React, { useMemo, useCallback, useRef, useState, useEffect, useSyncExtern
 import { CloseCircleFilled, SyncOutlined } from '@ant-design/icons';
 import { Typography, Button, Dropdown, Input, App, Avatar, Alert, Popconfirm, Popover, theme, Tag, Image, Tooltip, Modal, Spin } from 'antd';
 import type { InputRef } from 'antd';
-import { Pencil, Share2, FileImage, FileCode, FileText, FileType, Bot, Brain, Lightbulb, Code, Languages, Copy, Check, RotateCcw, User, Trash2, ChevronLeft, ChevronRight, ChevronDown, Scissors, Paperclip, AlertCircle, X, ArrowDown, ArrowUp, ArrowLeftRight, Zap, Sparkles, TextCursorInput, GitBranch, ChartNoAxesColumn, MessageSquare, ArrowUpRight, ArrowDownRight, Coins, Clock, Timer, Download, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Pencil, Share2, FileImage, FileCode, FileText, FileType, Bot, Lightbulb, Code, Languages, Copy, Check, RotateCcw, User, Trash2, ChevronLeft, ChevronRight, ChevronDown, Scissors, Paperclip, AlertCircle, X, ArrowDown, ArrowUp, ArrowLeftRight, Zap, Sparkles, TextCursorInput, GitBranch, ChartNoAxesColumn, MessageSquare, ArrowUpRight, ArrowDownRight, Coins, Clock, Timer, Download, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { ModelIcon } from '@lobehub/icons';
 import { getConvIcon } from '@/lib/convIcon';
 import { getRoleIntro } from '@/lib/roleIntro';
@@ -10,17 +10,12 @@ import { normalizeAutoConversationTitle } from '@/lib/conversationTitle';
 import Bubble from '@ant-design/x/es/bubble';
 import Prompts from '@ant-design/x/es/prompts';
 import Actions from '@ant-design/x/es/actions';
-import Think from '@ant-design/x/es/think';
 import type { BubbleItemType, BubbleListRef, RoleType } from '@ant-design/x/es/bubble/interface';
 import type { PromptsItemType } from '@ant-design/x/es/prompts';
-import NodeRenderer, { setCustomComponents, withMarkstreamComponentDisplay, type NodeComponentProps, type CodeBlockActionContext, type CodeBlockPreviewPayload, type MermaidBlockActionContext, type InfographicBlockActionContext } from 'markstream-react';
+import NodeRenderer, { setCustomComponents, withMarkstreamComponentDisplay, type NodeComponentProps, type CodeBlockPreviewPayload } from 'markstream-react';
 import { useTranslation } from 'react-i18next';
-import { CodeBlockHeaderActions } from './CodeBlockHeaderActions';
 import { CodeBlockPreviewModal } from './CodeBlockPreviewModal';
-import { MermaidBlockHeaderActions } from './MermaidBlockHeaderActions';
-import { InfographicBlockHeaderActions } from './InfographicBlockHeaderActions';
 import { DiagramModeToggle } from './DiagramModeToggle';
-import { MermaidZoomControls } from './MermaidZoomControls';
 import {
   getLiveStreamContent,
   subscribeLiveStreamContent,
@@ -42,6 +37,18 @@ import {
   stripAqbotTags,
   type ChatMarkdownNode,
 } from '@/lib/chatMarkdown';
+import {
+  CHAT_INFOGRAPHIC_PROPS,
+  CHAT_MERMAID_PROPS,
+  CHAT_RENDER_BATCH_PROPS,
+  ThinkNode,
+  getChatCodeBlockProps,
+  getChatCodeThemes,
+  getCustomAttr,
+  setCodeBlockPreviewHandler,
+  setMermaidOpenModalHandler,
+  type CustomNodeAttrs,
+} from './chatMarkdownShared';
 import {
   createChatContentFingerprint,
   getCachedChatMarkdown,
@@ -87,7 +94,6 @@ import {
 } from './chatScroll';
 import { formatTokenCount, formatSpeed, formatDuration } from '../gateway/tokenFormat';
 import {
-  THINKING_LOADING_MARKER,
   closeStreamingThinkBlock,
   getStreamingLoadingState,
   getStreamingStatusPresentation,
@@ -120,7 +126,6 @@ import { formatChatTime } from './chatTime';
 import { ChatMessageRenderBoundary } from './ChatMessageRenderBoundary';
 import {
   collectRetainedChatCacheKeys,
-  getOrParseThinkingNodes,
   retainMapKeys,
   retainSetValues,
 } from './chatRetainedCaches';
@@ -132,8 +137,6 @@ import type { Message, Attachment, ConversationStats, ConversationSummary } from
 
 // ── markstream-react custom thinking component ──────────────────────────
 
-const DEFAULT_LIGHT_CODE_BLOCK_THEME = 'github-light';
-const DEFAULT_DARK_CODE_BLOCK_THEME = 'poimandres';
 const HEAVY_MARKDOWN_CHAR_LIMIT = 20_000;
 const DANGEROUS_D2_STYLE_PATTERNS = [
   /javascript:/i,
@@ -143,16 +146,6 @@ const DANGEROUS_D2_STYLE_PATTERNS = [
 ] as const;
 const SAFE_D2_URL_PATTERN = /^(?:https?:|mailto:|tel:|#|\/|data:image\/(?:png|gif|jpe?g|webp);)/i;
 const CHAT_D2_DARK_THEME_ID = 200;
-const CHAT_RENDER_BATCH_PROPS = {
-  viewportPriority: true,
-  deferNodesUntilVisible: false,
-  initialRenderBatchSize: 24,
-  renderBatchSize: 48,
-  renderBatchDelay: 24,
-  renderBatchBudgetMs: 4,
-  maxLiveNodes: 480,
-  liveNodeBuffer: 96,
-} as const;
 const MINIMAP_JUMP_BEFORE_LIMIT = 4;
 const MINIMAP_JUMP_AFTER_LIMIT = 8;
 const USER_SCROLL_INTENT_GRACE_MS = 250;
@@ -353,98 +346,6 @@ function AttachmentPreview({ att, themeColor }: { att: Attachment; themeColor: s
   );
 }
 
-type CustomNodeAttrs =
-  | Record<string, string | boolean>
-  | [string, string][]
-  | Array<{ name: string; value: string | boolean }>
-  | null
-  | undefined;
-
-function normalizeCodeTheme(raw?: string) {
-  const t = raw?.trim();
-  if (t === 'vs-code' || t === 'vscode') return 'dark-plus';
-  if (t === 'one-dark') return 'one-dark-pro';
-  return t || undefined;
-}
-
-function getChatCodeThemes(selectedDarkTheme?: string, selectedLightTheme?: string) {
-  const darkTheme = normalizeCodeTheme(selectedDarkTheme) || DEFAULT_DARK_CODE_BLOCK_THEME;
-  const lightTheme = normalizeCodeTheme(selectedLightTheme) || DEFAULT_LIGHT_CODE_BLOCK_THEME;
-  return {
-    darkTheme,
-    lightTheme,
-    themes: Array.from(new Set([lightTheme, darkTheme])),
-  };
-}
-
-let _codeBlockPreviewHandler: ((payload: CodeBlockPreviewPayload) => void) | null = null;
-let _mermaidOpenModalHandler: ((svgString: string | null) => void) | null = null;
-
-function getChatCodeBlockProps(darkTheme: string, lightTheme: string) {
-  return {
-    darkTheme,
-    lightTheme,
-    renderHeaderActions: (ctx: CodeBlockActionContext) => (
-      <CodeBlockHeaderActions ctx={ctx} />
-    ),
-    onPreviewCode: (payload: CodeBlockPreviewPayload) => {
-      _codeBlockPreviewHandler?.(payload);
-    },
-  };
-}
-
-const CHAT_MERMAID_PROPS = {
-  renderHeaderActions: (ctx: MermaidBlockActionContext) => (
-    <MermaidBlockHeaderActions ctx={ctx} />
-  ),
-  renderModeToggle: (ctx: MermaidBlockActionContext) => (
-    <DiagramModeToggle showSource={ctx.showSource} onSwitchMode={ctx.switchMode} />
-  ),
-  renderZoomControls: (ctx: MermaidBlockActionContext) => (
-    <MermaidZoomControls ctx={ctx} />
-  ),
-  onOpenModal: (ev: { preventDefault: () => void; svgString?: string | null }) => {
-    if (_mermaidOpenModalHandler) {
-      ev.preventDefault();
-      _mermaidOpenModalHandler(ev.svgString ?? null);
-    }
-  },
-};
-
-const CHAT_INFOGRAPHIC_PROPS = {
-  renderHeaderActions: (ctx: InfographicBlockActionContext) => (
-    <InfographicBlockHeaderActions ctx={ctx} />
-  ),
-  renderModeToggle: (ctx: InfographicBlockActionContext) => (
-    <DiagramModeToggle showSource={ctx.showSource} onSwitchMode={ctx.switchMode} />
-  ),
-  renderZoomControls: (ctx: InfographicBlockActionContext) => (
-    <MermaidZoomControls ctx={ctx as any} />
-  ),
-};
-
-function getCustomAttr(attrs: CustomNodeAttrs, name: string): string | undefined {
-  if (!attrs) return undefined;
-
-  if (Array.isArray(attrs)) {
-    for (const attr of attrs) {
-      if (Array.isArray(attr)) {
-        const [attrName, value] = attr;
-        if (attrName === name) return value;
-        continue;
-      }
-
-      if (attr && typeof attr === 'object' && 'name' in attr && attr.name === name) {
-        return typeof attr.value === 'string' ? attr.value : undefined;
-      }
-    }
-    return undefined;
-  }
-
-  const value = attrs[name];
-  return typeof value === 'string' ? value : undefined;
-}
-
 function isChatD2CodeBlockNode(node: ChatMarkdownNode): node is ChatD2CodeBlockNode {
   return node.type === 'code_block'
     && 'code' in node
@@ -586,101 +487,6 @@ async function loadChatD2Ctor() {
   }
 
   return chatD2CtorPromise;
-}
-
-function ThinkNode(props: NodeComponentProps<{
-  type: 'think';
-  content: string;
-  attrs?: CustomNodeAttrs;
-}>) {
-  const { t } = useTranslation();
-  const selectedDarkCodeTheme = useSettingsStore((s) => s.settings.code_theme);
-  const selectedLightCodeTheme = useSettingsStore((s) => s.settings.code_theme_light);
-  const codeFontFamily = useSettingsStore((s) => s.settings.code_font_family);
-  const { node, ctx } = props;
-  const thinkingNodesCacheRef = useRef<Map<string, ChatMarkdownNode[]>>(new Map());
-  const rawThinkingContent = String(node.content ?? '');
-  const isStreaming = rawThinkingContent.includes(THINKING_LOADING_MARKER);
-  const totalMsAttr = getCustomAttr(node.attrs, 'totalMs') ?? getCustomAttr(node.attrs, 'totalms');
-  const totalMs = totalMsAttr ? parseInt(totalMsAttr, 10) : null;
-  const thinkingContent = rawThinkingContent
-    .replace(`${THINKING_LOADING_MARKER}\n`, '')
-    .replace(THINKING_LOADING_MARKER, '');
-  const [expanded, setExpanded] = useState(isStreaming);
-  const prevStreamingRef = useRef(isStreaming);
-
-  useEffect(() => {
-    setExpanded(isStreaming);
-    prevStreamingRef.current = isStreaming;
-  }, [isStreaming]);
-
-  useEffect(() => {
-    if (isStreaming) {
-      setExpanded(true);
-    } else if (prevStreamingRef.current) {
-      setExpanded(false);
-    }
-    prevStreamingRef.current = isStreaming;
-  }, [isStreaming]);
-
-  const title = isStreaming
-    ? t('chat.thinkingInProgress')
-    : totalMs && !isNaN(totalMs)
-      ? `${t('chat.thinkingComplete')} ${formatDuration(totalMs)}`
-      : t('chat.thinkingComplete');
-
-  const thinkingNodes = useMemo(() => {
-    return getOrParseThinkingNodes(
-      thinkingNodesCacheRef.current,
-      thinkingContent,
-      isStreaming,
-      safeParseChatMarkdown,
-    );
-  }, [isStreaming, thinkingContent]);
-  const { darkTheme, lightTheme, themes } = useMemo(
-    () => getChatCodeThemes(selectedDarkCodeTheme, selectedLightCodeTheme),
-    [selectedDarkCodeTheme, selectedLightCodeTheme],
-  );
-  const codeBlockProps = useMemo(
-    () => getChatCodeBlockProps(darkTheme, lightTheme),
-    [darkTheme, lightTheme],
-  );
-  const codeBlockMonacoOptions = useMemo(
-    () => codeFontFamily ? { fontFamily: codeFontFamily } : undefined,
-    [codeFontFamily],
-  );
-  const rendererKey = `${ctx?.customId ?? 'default'}:${ctx?.isDark ? 'dark' : 'light'}:${darkTheme}:${lightTheme}`;
-
-  return (
-    <Think
-      title={title}
-      blink={isStreaming}
-      loading={isStreaming ? (
-        <SyncOutlined style={{ fontSize: 12, animation: 'aqbot-think-spin 1s linear infinite' }} />
-      ) : false}
-      icon={<Brain size={14} />}
-      expanded={expanded}
-      onExpand={setExpanded}
-    >
-      <NodeRenderer
-        key={rendererKey}
-        nodes={thinkingNodes}
-        customId={ctx?.customId}
-        isDark={ctx?.isDark}
-        final={!isStreaming}
-        typewriter={false}
-        themes={themes}
-        codeBlockLightTheme={lightTheme}
-        codeBlockDarkTheme={darkTheme}
-        codeBlockProps={codeBlockProps}
-        codeBlockMonacoOptions={codeBlockMonacoOptions}
-        customHtmlTags={CHAT_CUSTOM_HTML_TAGS.filter((t) => t !== 'think')}
-        mermaidProps={CHAT_MERMAID_PROPS}
-        infographicProps={CHAT_INFOGRAPHIC_PROPS}
-        {...CHAT_RENDER_BATCH_PROPS}
-      />
-    </Think>
-  );
 }
 
 type ChatD2CodeBlockNode = {
@@ -2259,20 +2065,20 @@ export function ChatView() {
 
   // Register module-level preview handler for code blocks
   useEffect(() => {
-    _codeBlockPreviewHandler = (payload: CodeBlockPreviewPayload) => {
+    setCodeBlockPreviewHandler((payload: CodeBlockPreviewPayload) => {
       setPreviewPayload(payload);
       setPreviewModalOpen(true);
-    };
-    return () => { _codeBlockPreviewHandler = null; };
+    });
+    return () => { setCodeBlockPreviewHandler(null); };
   }, []);
 
   // Register module-level preview handler for mermaid
   useEffect(() => {
-    _mermaidOpenModalHandler = (svgString: string | null) => {
+    setMermaidOpenModalHandler((svgString: string | null) => {
       setMermaidPreviewSvg(svgString);
       setMermaidPreviewOpen(true);
-    };
-    return () => { _mermaidOpenModalHandler = null; };
+    });
+    return () => { setMermaidOpenModalHandler(null); };
   }, []);
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);

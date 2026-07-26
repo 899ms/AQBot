@@ -27,6 +27,7 @@ vi.mock('@/components/settings', () => ({
   McpServerSettings: () => <div>mcp-servers-content</div>,
   BackupCenter: () => <div>backup-content</div>,
   StorageSpaceManager: () => <div>storage-content</div>,
+  SelectionToolbarSettings: () => <div>selection-toolbar-content</div>,
 }));
 
 vi.mock('@/components/settings/DefaultModelSettings', () => ({
@@ -61,5 +62,15 @@ describe('SettingsPage', () => {
 
     expect(screen.getByText('display-content')).toBeInTheDocument();
     expect(contentScroller.scrollTop).toBe(0);
+  });
+
+  it('renders selection toolbar settings from the settings navigation', () => {
+    render(<SettingsPage />);
+
+    act(() => {
+      useUIStore.getState().setSettingsSection('selectionToolbar');
+    });
+
+    expect(screen.getByText('selection-toolbar-content')).toBeInTheDocument();
   });
 });

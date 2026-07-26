@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,6 +27,44 @@ function hasConfigOverride() {
 }
 
 const env = { ...process.env };
+
+if (process.platform === "darwin") {
+  env.MACOSX_DEPLOYMENT_TARGET ??= "11.0";
+}
+
+if (process.platform === "darwin" && args[0] === "dev") {
+  const identityCheck = spawnSync(
+    "security",
+    ["find-identity", "-v", "-p", "codesigning"],
+    { encoding: "utf8" },
+  );
+  if (
+    identityCheck.status !== 0
+    || !identityCheck.stdout.split("\n").some((line) => line.includes('"AQBot Dev"'))
+  ) {
+    console.error(
+      "AQBot Dev code-signing identity is missing. Run `pnpm macos:signing:bootstrap` first.",
+    );
+    process.exit(1);
+  }
+
+  const hasRunner = args.some(
+    (arg) => arg === "--runner" || arg === "-r" || arg.startsWith("--runner="),
+  );
+  if (!hasRunner) {
+    args.push(
+      "--runner",
+      path.join(repoRoot, "scripts", "macos", "tauri-dev-runner.mjs"),
+    );
+  }
+  args.push(
+    "--config",
+    JSON.stringify({
+      productName: "AQBot Dev",
+      identifier: "top.aqbot.desktop.dev",
+    }),
+  );
+}
 
 if (isBundleCommand()) {
   cleanStaleDmgTempFiles();

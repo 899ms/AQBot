@@ -4,6 +4,7 @@ import {
   DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT,
   DEFAULT_AGENT_WORKSPACE_NAME_STRATEGY,
   DEFAULT_MCP_TOOL_LOOP_MAX_ITERATIONS,
+  createDefaultSelectionToolbarSettings,
   type AppSettings,
 } from '@/types';
 import { DEFAULT_SHORTCUT_BINDINGS } from '@/lib/shortcuts';
@@ -125,6 +126,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   agent_workspace_name_strategy: DEFAULT_AGENT_WORKSPACE_NAME_STRATEGY,
   agent_workspace_datetime_format: DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT,
   agent_bash_path: null,
+  selection_toolbar: createDefaultSelectionToolbarSettings(),
   // WebDAV sync settings — must be present so stale saves never omit them
   webdav_host: null,
   webdav_username: null,
@@ -274,7 +276,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       console.warn('[settingsStore] saveSettings skipped: settings not loaded yet');
       return;
     }
-    const merged = { ...get().settings, ...partial };
+    const previous = get().settings;
+    const merged = { ...previous, ...partial };
     set((state) => ({
       settings: merged,
       error: null,
@@ -288,7 +291,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     try {
       await invoke('save_settings', { settings: merged });
     } catch (e) {
-      set({ error: String(e) });
+      set((state) => ({
+        settings: previous,
+        error: String(e),
+        settingsMeta: {
+          ...state.settingsMeta,
+          loadedAt: Date.now(),
+          revision: state.settingsMeta.revision + 1,
+        },
+      }));
     }
   },
 

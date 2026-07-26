@@ -17,8 +17,16 @@ concurrency:
 
 jobs:
   test-build:
-    name: Test Build (aarch64-apple-darwin)
-    runs-on: macos-latest
+    name: Test Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,14 +35,28 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: ${{ matrix.target }}
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: 'v1'
-          key: 'macos-latest-aarch64-apple-darwin'
+          key: '${{ matrix.os }}-${{ matrix.target }}'
           workspaces: src-tauri -> target
+
+      - name: Install x86_64 OpenSSL (macOS Intel)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          ARCH=$(uname -m)
+          if [[ "$ARCH" != "x86_64" ]]; then
+            echo "Expected x86_64 runner, got $ARCH"
+            exit 1
+          fi
+          brew install openssl@3
+          OPENSSL_PREFIX=$(brew --prefix openssl@3)
+          echo "OPENSSL_DIR=$OPENSSL_PREFIX" >> $GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=$OPENSSL_PREFIX/include" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=$OPENSSL_PREFIX/lib" >> $GITHUB_ENV
 
       - name: Install Protoc
         uses: arduino/setup-protoc@v3
@@ -54,7 +76,7 @@ jobs:
         run: |
           SM_SHA=$(git -C libs/stream-monaco rev-parse HEAD)
           MS_SHA=$(git -C libs/markstream-vue rev-parse HEAD)
-          echo "cache-key=${{ runner.os }}-aarch64-apple-darwin-linked-deps-${SM_SHA:0:12}-${MS_SHA:0:12}" >> $GITHUB_OUTPUT
+          echo "cache-key=${{ runner.os }}-${{ matrix.target }}-linked-deps-${SM_SHA:0:12}-${MS_SHA:0:12}" >> $GITHUB_OUTPUT
 
       - name: Cache linked dependencies
         id: cache-linked-deps
@@ -83,6 +105,13 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Import macOS release signing identity
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: bash scripts/macos/import-ci-signing.sh
+
       - name: Build with Tauri
         uses: tauri-apps/tauri-action@v0
         env:
@@ -90,7 +119,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: '-'
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'AQBot ${{ github.ref_name }} (Test)'
@@ -98,4 +126,17 @@ jobs:
           releaseDraft: true
           prerelease: true
           tauriScript: pnpm tauri
-          args: --target aarch64-apple-darwin
+          args: --target ${{ matrix.target }}
+
+      - name: Verify macOS release signature
+        shell: bash
+        run: |
+          APP_PATH="$(find "src-tauri/target/${{ matrix.target }}/release/bundle/macos" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          codesign --display --verbose=4 "$APP_PATH" 2>&1 | grep -F 'Authority=AQBot Release'
+
+      - name: Clean up macOS signing identity
+        if: always()
+        shell: bash
+        run: bash scripts/macos/cleanup-ci-signing.sh

@@ -104,6 +104,10 @@ vi.mock('@/components/layout/Sidebar', () => ({
   Sidebar: () => <div>sidebar</div>,
 }));
 
+vi.mock('@/components/layout/CrashRecoveryModal', () => ({
+  CrashRecoveryModal: () => null,
+}));
+
 vi.mock('@/components/layout/TitleBar', () => ({
   TitleBar: () => <div>titlebar</div>,
 }));

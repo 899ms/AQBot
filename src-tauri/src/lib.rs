@@ -44,20 +44,25 @@ pub struct AppState {
         Arc<Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<String>>>>,
     pub agent_always_allowed:
         Arc<Mutex<std::collections::HashMap<String, std::collections::HashSet<String>>>>,
+    pub selection_toolbar: Arc<selection_toolbar::SelectionToolbarRuntime>,
 }
 
 mod commands;
 mod context_manager;
+mod crash_diagnostics;
+mod diagnostic_log;
 mod diagnostics;
 mod indexing;
 pub mod knowledge_index_scheduler;
 #[cfg(any(target_os = "linux", test))]
 mod linux_webkit;
+mod macos_crash_report;
 mod media_protocol;
 mod model_catalog;
 #[doc(hidden)]
 pub mod model_catalog_tools;
 mod paths;
+mod selection_toolbar;
 mod startup_diagnostics;
 mod tray;
 mod window_lifecycle;
@@ -173,6 +178,15 @@ pub fn run() {
         builder = builder.plugin(startup_diagnostics::diagnostic_marker_plugin(
             "aqbot_diag_after_clipboard_manager",
         ));
+
+        #[cfg(target_os = "macos")]
+        {
+            builder =
+                startup_diagnostics::register_plugin(builder, "nspanel", tauri_nspanel::init());
+            builder = builder.plugin(startup_diagnostics::diagnostic_marker_plugin(
+                "aqbot_diag_after_nspanel",
+            ));
+        }
 
         builder = startup_diagnostics::register_plugin(
             builder,
@@ -456,6 +470,22 @@ pub fn run() {
         commands::desktop::list_system_fonts,
         commands::desktop::minimize_window,
         commands::desktop::toggle_maximize_window,
+        // crash diagnostics
+        commands::crash_diagnostics::get_previous_crash_report,
+        commands::crash_diagnostics::acknowledge_previous_crash_report,
+        // selection toolbar
+        commands::selection_toolbar::selection_toolbar_get_runtime_status,
+        commands::selection_toolbar::selection_toolbar_get_snapshot,
+        commands::selection_toolbar::selection_toolbar_open_permission_settings,
+        commands::selection_toolbar::selection_toolbar_request_permission,
+        commands::selection_toolbar::selection_toolbar_retry_monitoring,
+        commands::selection_toolbar::selection_toolbar_frontend_ready,
+        commands::selection_toolbar::selection_toolbar_set_surface,
+        commands::selection_toolbar::selection_toolbar_execute_tool,
+        commands::selection_toolbar::selection_toolbar_stop_generation,
+        commands::selection_toolbar::selection_toolbar_copy_selection,
+        commands::selection_toolbar::selection_toolbar_copy_result,
+        commands::selection_toolbar::selection_toolbar_close,
         // files
         commands::files::upload_file,
         commands::files::download_file,
@@ -548,6 +578,12 @@ pub fn run() {
             // %USERPROFILE%\.aqbot\ on Windows).
             let app_dir = paths::aqbot_home();
             std::fs::create_dir_all(&app_dir).expect("failed to create AQBot home dir");
+            app.manage(crash_diagnostics::CrashDiagnosticsState::initialize(
+                &app_dir,
+                app.package_info().version.to_string(),
+                app.config().identifier.clone(),
+                diagnostic_log::path(),
+            ));
             match aqbot_core::pending_restore::apply_pending_restore(&app_dir) {
                 Ok(aqbot_core::pending_restore::PendingRestoreOutcome::Applied) => {
                     tracing::info!("Pending restore applied before database startup")
@@ -787,7 +823,17 @@ pub fn run() {
                 agent_permission_senders: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 agent_ask_senders: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 agent_always_allowed: Arc::new(Mutex::new(std::collections::HashMap::new())),
+                selection_toolbar: Arc::new(selection_toolbar::SelectionToolbarRuntime::new()),
             });
+
+            {
+                let toolbar = app.state::<AppState>().selection_toolbar.clone();
+                let toolbar_app = app.handle().clone();
+                let toolbar_settings = app_settings.clone();
+                tauri::async_runtime::spawn(async move {
+                    toolbar.reconcile(&toolbar_app, &toolbar_settings).await;
+                });
+            }
 
             {
                 let drawing_state = app.state::<AppState>().inner().clone();
@@ -1100,6 +1146,17 @@ pub fn run() {
 
     tracing::info!("Starting Tauri application event loop");
     app.run(|app, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            let toolbar = app.state::<AppState>().selection_toolbar.clone();
+            tauri::async_runtime::block_on(toolbar.shutdown(app));
+            if let Err(error) = app
+                .state::<crash_diagnostics::CrashDiagnosticsState>()
+                .finish_clean()
+            {
+                tracing::error!(%error, "Could not clear AQBot clean-exit session marker");
+            }
+        }
+
         if let tauri::RunEvent::ExitRequested { api, .. } = &event {
             let state = app.state::<AppState>();
             if state.main_window_released_to_tray.load(Ordering::Relaxed)
@@ -1115,7 +1172,13 @@ pub fn run() {
             ..
         } = event
         {
-            if !has_visible_windows {
+            // Do not restore the main window when the only visible surface is the
+            // selection toolbar (dock click / accidental app activation).
+            if crate::selection_toolbar::window::only_toolbar_visible(app) {
+                tracing::debug!(
+                    "Suppressing main window restore: only selection toolbar is visible"
+                );
+            } else if !has_visible_windows {
                 window_lifecycle::restore_main_window(app);
             }
         }

@@ -1,0 +1,335 @@
+html,
+body,
+#root {
+  background: transparent !important;
+  margin: 0;
+  overflow: hidden;
+}
+
+/* ── Shared frosted surface ─────────────────────────────────────────── */
+
+.selection-toolbar__bar,
+.selection-toolbar__overflow,
+.selection-toolbar__result {
+  background: var(--selection-toolbar-bg, rgba(252, 252, 253, 0.92));
+  -webkit-backdrop-filter: blur(24px) saturate(1.6);
+  backdrop-filter: blur(24px) saturate(1.6);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-sizing: border-box;
+  color: #1f1f1f;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+html[data-theme="dark"] .selection-toolbar__bar,
+html[data-theme="dark"] .selection-toolbar__overflow,
+html[data-theme="dark"] .selection-toolbar__result {
+  --selection-toolbar-bg: rgba(32, 32, 34, 0.9);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #f5f5f5;
+}
+
+/* ── Toolbar strip ──────────────────────────────────────────────────── */
+
+.selection-toolbar__bar {
+  align-items: center;
+  animation: selection-toolbar-fade-in 140ms ease-out;
+  border-radius: 10px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 6px 20px rgba(0, 0, 0, 0.14);
+  display: flex;
+  gap: 1px;
+  height: 36px;
+  padding: 3px 5px;
+  width: 320px;
+}
+
+.selection-toolbar__drag,
+.selection-toolbar__tool,
+.selection-toolbar__more {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: inherit;
+  display: inline-flex;
+  height: 28px;
+  justify-content: center;
+  padding: 0;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.selection-toolbar__drag {
+  color: #9a9a9a;
+  cursor: grab;
+  flex: 0 0 14px;
+}
+
+.selection-toolbar__drag:active {
+  cursor: grabbing;
+}
+
+/* Native window dragging swallows the pointer events the webview would use for
+   :active, so force the grabbing cursor for the whole drag session. */
+html[data-dragging],
+html[data-dragging] * {
+  cursor: grabbing !important;
+}
+
+.selection-toolbar__tool {
+  cursor: pointer;
+  flex: 1 1 0;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 5px;
+}
+
+.selection-toolbar__more {
+  cursor: pointer;
+  flex: 0 0 26px;
+}
+
+.selection-toolbar__tool:hover:not(:disabled),
+.selection-toolbar__tool[data-hover='true']:not(:disabled),
+.selection-toolbar__more:hover:not(:disabled),
+.selection-toolbar__more[data-hover='true']:not(:disabled),
+.selection-toolbar__overflow-item:hover:not(:disabled),
+.selection-toolbar__overflow-item[data-hover='true']:not(:disabled) {
+  background: rgba(23, 169, 61, 0.12);
+  color: #128a32;
+}
+
+html[data-theme="dark"] .selection-toolbar__tool:hover:not(:disabled),
+html[data-theme="dark"] .selection-toolbar__tool[data-hover='true']:not(:disabled),
+html[data-theme="dark"] .selection-toolbar__more:hover:not(:disabled),
+html[data-theme="dark"] .selection-toolbar__more[data-hover='true']:not(:disabled),
+html[data-theme="dark"] .selection-toolbar__overflow-item:hover:not(:disabled),
+html[data-theme="dark"] .selection-toolbar__overflow-item[data-hover='true']:not(:disabled) {
+  background: rgba(46, 204, 91, 0.16);
+  color: #4bd06f;
+}
+
+/* The tool whose run/result is active — deterministic, driven by run state. */
+.selection-toolbar__tool[data-active='true'],
+.selection-toolbar__tool[data-active='true']:disabled {
+  background: rgba(23, 169, 61, 0.16);
+  color: #0f7d2c;
+  opacity: 1;
+}
+
+html[data-theme="dark"] .selection-toolbar__tool[data-active='true'],
+html[data-theme="dark"] .selection-toolbar__tool[data-active='true']:disabled {
+  background: rgba(46, 204, 91, 0.22);
+  color: #5ada7e;
+}
+
+.selection-toolbar__tool:disabled,
+.selection-toolbar__more:disabled,
+.selection-toolbar__overflow-item:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+@keyframes selection-toolbar-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.selection-toolbar__tool:active:not(:disabled),
+.selection-toolbar__more:active:not(:disabled),
+.selection-toolbar__overflow-item:active:not(:disabled) {
+  background: rgba(23, 169, 61, 0.2);
+}
+
+.selection-toolbar__tool:focus-visible,
+.selection-toolbar__more:focus-visible {
+  outline: 2px solid rgba(23, 169, 61, 0.65);
+  outline-offset: -2px;
+}
+
+.selection-toolbar__logo {
+  height: 18px;
+  margin: 0 5px 0 2px;
+  width: 18px;
+}
+
+.selection-toolbar__tools {
+  display: flex;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.selection-toolbar__tool > svg {
+  flex: 0 0 auto;
+}
+
+.selection-toolbar__tool-label {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selection-toolbar__copied {
+  color: #17a93d;
+  flex: 0 0 auto;
+  margin: 0 5px;
+}
+
+/* ── Overflow list ──────────────────────────────────────────────────── */
+
+.selection-toolbar__overflow {
+  border-radius: 10px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 10px 28px rgba(0, 0, 0, 0.16);
+  height: 268px;
+  overflow: hidden;
+  width: 320px;
+}
+
+.selection-toolbar__result-stack {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 364px;
+  width: 400px;
+}
+
+.selection-toolbar__overflow .selection-toolbar__bar {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.16);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.selection-toolbar__overflow-list {
+  max-height: 216px;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.selection-toolbar__overflow-item {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  gap: 9px;
+  min-height: 34px;
+  padding: 6px 10px;
+  text-align: left;
+  transition:
+    background-color 120ms ease,
+    color 120ms ease;
+  width: 100%;
+}
+
+/* ── Result panel ───────────────────────────────────────────────────── */
+
+.selection-toolbar__result {
+  border-radius: 12px;
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.1),
+    0 16px 40px rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  height: 320px;
+  overflow: hidden;
+  width: 400px;
+}
+
+.selection-toolbar__result-header {
+  align-items: center;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.16);
+  display: flex;
+  flex: 0 0 auto;
+  height: 42px;
+  justify-content: space-between;
+  padding: 0 8px 0 12px;
+}
+
+.selection-toolbar__result-title,
+.selection-toolbar__result-actions {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+}
+
+.selection-toolbar__result-actions {
+  gap: 2px;
+}
+
+.selection-toolbar__result-title {
+  font-size: 14px;
+  font-weight: 600;
+  min-width: 0;
+}
+
+.selection-toolbar__result-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selection-toolbar__result-content {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px;
+}
+
+.selection-toolbar__result-content .aqbot-chat-markdown {
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+/* Centered secondary stop control right below the streaming output. */
+.selection-toolbar__result-footer {
+  border-top: 1px solid rgba(127, 127, 127, 0.12);
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: center;
+  padding: 7px 0 9px;
+}
+
+.selection-toolbar__waiting {
+  color: #8c8c8c;
+  font-size: 13px;
+}
+
+.selection-toolbar__error {
+  color: #ff4d4f;
+  white-space: pre-wrap;
+}
+
+/* Chat defines this inside ChatView's inline styles; the toolbar window
+   renders ThinkNode without ChatView, so declare the spinner here too. */
+@keyframes aqbot-think-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}

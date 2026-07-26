@@ -1,3 +1,7 @@
+import type { SelectionToolbarSettings } from './selectionToolbar';
+export * from './crashDiagnostics';
+export * from './selectionToolbar';
+
 // === Provider System ===
 export type ProviderType =
   | 'openai'
@@ -735,6 +739,8 @@ export interface AppSettings {
   agent_workspace_datetime_format?: string | null;
   /** Agent bash/sh executable path. Null uses PATH auto-detection. */
   agent_bash_path?: string | null;
+  /** Cross-application text-selection toolbar. */
+  selection_toolbar: SelectionToolbarSettings;
 }
 
 // === Streaming ===
@@ -915,7 +921,7 @@ export interface DrawingEditInput extends DrawingGenerateInput {
 export interface DrawingMaskEditInput extends DrawingEditInput {
   mask_file_id: string;
 }
-export type SettingsSection = 'providers' | 'defaultModel' | 'conversationSettings' | 'general' | 'display' | 'proxy' | 'shortcuts' | 'data' | 'storage' | 'about' | 'searchProviders' | 'mcpServers' | 'backup';
+export type SettingsSection = 'providers' | 'defaultModel' | 'conversationSettings' | 'general' | 'display' | 'proxy' | 'shortcuts' | 'data' | 'storage' | 'about' | 'searchProviders' | 'mcpServers' | 'backup' | 'selectionToolbar';
 
 // === Files Module ===
 export type FileCategory = 'images' | 'files';

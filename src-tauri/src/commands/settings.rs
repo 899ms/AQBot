@@ -26,6 +26,7 @@ pub async fn save_settings(
     state: State<'_, AppState>,
     mut settings: AppSettings,
 ) -> Result<(), String> {
+    settings.selection_toolbar.validate()?;
     settings.backup_dir = aqbot_core::path_vars::encode_path_opt(&settings.backup_dir);
     settings.gateway_ssl_cert_path =
         aqbot_core::path_vars::encode_path_opt(&settings.gateway_ssl_cert_path);
@@ -44,6 +45,7 @@ pub async fn save_settings(
     app_state
         .release_webview_on_tray
         .store(settings.release_webview_on_tray, Ordering::Relaxed);
+    app_state.selection_toolbar.reconcile(&app, &settings).await;
 
     crate::tray::sync_tray_language(&app, &settings.language).map_err(|e| e.to_string())
 }

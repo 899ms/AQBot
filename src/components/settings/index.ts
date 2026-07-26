@@ -16,3 +16,4 @@ export { default as MemorySettings } from './MemorySettings';
 
 export { default as BackupCenter } from './BackupCenter';
 export { StorageSpaceManager } from './StorageSpaceManager';
+export { SelectionToolbarSettings } from './SelectionToolbarSettings';

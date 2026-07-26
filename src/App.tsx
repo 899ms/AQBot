@@ -7,6 +7,7 @@ import { TitleBar } from '@/components/layout/TitleBar';
 import { ContentArea } from '@/components/layout/ContentArea';
 import CommandPalette from '@/components/layout/CommandPalette';
 import { GlobalCopyMenu } from '@/components/layout/GlobalCopyMenu';
+import { CrashRecoveryModal } from '@/components/layout/CrashRecoveryModal';
 import { useCommandPalette } from '@/hooks/useCommandPalette';
 import { useUIStore, useSettingsStore, useConversationStore } from '@/stores';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
@@ -19,7 +20,8 @@ import { useShadcnTheme } from '@/theme/shadcnTheme';
 import { isTauri, invoke, listen } from '@/lib/invoke';
 import { preloadChatRenderers } from '@/lib/preloadChatRenderers';
 import { setupAgentEventListeners } from '@/stores/agentStore';
-import { enableD2, setDefaultI18nMap } from 'markstream-react';
+import { enableD2 } from 'markstream-react';
+import { applyMarkstreamI18nMap } from '@/lib/markstreamI18n';
 import './i18n';
 
 const { Sider, Content } = Layout;
@@ -126,6 +128,7 @@ function AppInner() {
       <TitleBar />
       <CommandPalette open={cmdOpen} onClose={() => setCmdOpen(false)} />
       <GlobalCopyMenu />
+      <CrashRecoveryModal />
       <Layout className="flex-1 overflow-hidden" style={{ backgroundColor: 'transparent' }}>
         {!isInSettings && (
           <Sider
@@ -228,27 +231,7 @@ function AppRoot() {
   }, [i18n, language]);
 
   useEffect(() => {
-    const t = i18n.getFixedT(i18n.language);
-    setDefaultI18nMap({
-      'common.close': t('common.close'),
-      'common.collapse': t('common.collapse'),
-      'common.copied': t('common.copied'),
-      'common.copy': t('common.copy'),
-      'common.decrease': t('common.decrease'),
-      'common.expand': t('common.expand'),
-      'common.export': t('common.export'),
-      'common.increase': t('common.increase'),
-      'common.minimize': t('common.minimize'),
-      'common.open': t('common.open'),
-      'common.preview': t('common.preview'),
-      'common.reset': t('common.reset'),
-      'common.resetZoom': t('common.resetZoom'),
-      'common.source': t('common.source'),
-      'common.zoomIn': t('common.zoomIn'),
-      'common.zoomOut': t('common.zoomOut'),
-      'image.loadError': t('image.loadError'),
-      'image.loading': t('image.loading'),
-    });
+    applyMarkstreamI18nMap(i18n.getFixedT(i18n.language));
   }, [i18n, i18n.language]);
 
   // Sync font settings to CSS custom properties

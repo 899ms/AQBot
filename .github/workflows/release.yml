@@ -188,6 +188,14 @@ jobs:
         if: contains(matrix.target, 'windows') || matrix.target == 'x86_64-unknown-linux-gnu'
         uses: ./.github/actions/prepare-tauri-bundler-tools
 
+      - name: Import macOS release signing identity
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: bash scripts/macos/import-ci-signing.sh
+
       - name: Build with Tauri
         uses: tauri-apps/tauri-action@v0
         env:
@@ -195,7 +203,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ contains(matrix.target, 'apple-darwin') && '-' || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'AQBot ${{ github.ref_name }}'
@@ -205,6 +212,20 @@ jobs:
           tauriScript: pnpm tauri
           args: --target ${{ matrix.target }}
           includeUpdaterJson: false
+
+      - name: Verify macOS release signature
+        if: contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: |
+          APP_PATH="$(find "src-tauri/target/${{ matrix.target }}/release/bundle/macos" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          codesign --display --verbose=4 "$APP_PATH" 2>&1 | grep -F 'Authority=AQBot Release'
+
+      - name: Clean up macOS signing identity
+        if: always() && contains(matrix.target, 'apple-darwin')
+        shell: bash
+        run: bash scripts/macos/cleanup-ci-signing.sh
 
       - name: Package Windows portable (zip)
         if: contains(matrix.target, 'windows')

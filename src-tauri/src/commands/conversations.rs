@@ -734,7 +734,8 @@ async fn finalize_new_message_for_ipc(
 }
 
 /// Strip `<think ...>...</think>` blocks from content (all variants).
-fn strip_think_tags(content: &str) -> String {
+/// Also used by the selection toolbar when copying an AI result.
+pub(crate) fn strip_think_tags(content: &str) -> String {
     let mut s = content.to_string();
     loop {
         if let Some(start) = s.find("<think") {
@@ -2174,8 +2175,8 @@ async fn consume_stream(
 
 /// Replace each `<think data-aqbot="1">` marker with `<think totalMs="N">` using
 /// the collected duration values. Upstream `<think>` tags (without `data-aqbot`)
-/// are left unchanged.
-fn fixup_think_tags(content: &str, durations: &[u64]) -> String {
+/// are left unchanged. Also used by the selection toolbar stream merge.
+pub(crate) fn fixup_think_tags(content: &str, durations: &[u64]) -> String {
     const MARKER: &str = "<think data-aqbot=\"1\">";
     let mut result = String::with_capacity(content.len());
     let mut remaining = content;
@@ -5740,6 +5741,7 @@ mod tests {
             agent_permission_senders: Arc::new(Mutex::new(HashMap::new())),
             agent_ask_senders: Arc::new(Mutex::new(HashMap::new())),
             agent_always_allowed: Arc::new(Mutex::new(HashMap::new())),
+            selection_toolbar: Arc::new(crate::selection_toolbar::SelectionToolbarRuntime::new()),
         }
     }
 
@@ -7731,6 +7733,7 @@ mod tests {
             agent_permission_senders: Arc::new(Mutex::new(std::collections::HashMap::new())),
             agent_ask_senders: Arc::new(Mutex::new(std::collections::HashMap::new())),
             agent_always_allowed: Arc::new(Mutex::new(std::collections::HashMap::new())),
+            selection_toolbar: Arc::new(crate::selection_toolbar::SelectionToolbarRuntime::new()),
         };
 
         let attachments = vec![AttachmentInput {

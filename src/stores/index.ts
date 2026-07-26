@@ -9,6 +9,7 @@ export {
 } from './conversationStore';
 export { useCategoryStore } from './categoryStore';
 export { useSettingsStore } from './settingsStore';
+export { useSelectionToolbarStore } from './selectionToolbarStore';
 export { useGatewayStore } from './gatewayStore';
 export { useChatWorkspaceStore } from './chatWorkspaceStore';
 export { useArtifactStore } from './artifactStore';

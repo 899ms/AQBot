@@ -1,0 +1,448 @@
+import { useEffect, useMemo, useRef } from 'react';
+import { Button, ConfigProvider, Spin, theme as antdTheme } from 'antd';
+import {
+  BookOpen,
+  Brain,
+  Check,
+  Code,
+  Copy,
+  GripVertical,
+  Languages,
+  ListCollapse,
+  MessageSquare,
+  MoreHorizontal,
+  PenLine,
+  RotateCcw,
+  Search,
+  Sparkles,
+  SpellCheck,
+  Square,
+  Terminal,
+  WandSparkles,
+  X,
+} from 'lucide-react';
+import NodeRenderer, { enableD2, setCustomComponents } from 'markstream-react';
+import { registerHighlight } from 'stream-markdown';
+import { useTranslation } from 'react-i18next';
+import i18n from '@/i18n';
+import logo from '@/assets/image/logo.png';
+import { SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS, type SelectionToolbarToolView } from '@/types';
+import { useSelectionToolbarStore } from '@/stores/selectionToolbarStore';
+import { useSettingsStore } from '@/stores';
+import { CHAT_CUSTOM_HTML_TAGS } from '@/lib/chatMarkdown';
+import { applyMarkstreamI18nMap } from '@/lib/markstreamI18n';
+import { preloadChatRenderers } from '@/lib/preloadChatRenderers';
+import {
+  CHAT_INFOGRAPHIC_PROPS,
+  CHAT_MERMAID_PROPS,
+  CHAT_RENDER_BATCH_PROPS,
+  ThinkNode,
+  getChatCodeBlockProps,
+  getChatCodeThemes,
+} from '@/components/chat/chatMarkdownShared';
+import { closeStreamingThinkBlock } from '@/components/chat/chatStreaming';
+import './selectionToolbar.css';
+
+// Same registration shape as the chat window so <think> reasoning blocks
+// render with the identical collapsible component.
+setCustomComponents('selection-toolbar', { think: ThinkNode });
+
+const ICONS = {
+  copy: Copy,
+  'wand-sparkles': WandSparkles,
+  languages: Languages,
+  'spell-check': SpellCheck,
+  'list-collapse': ListCollapse,
+  brain: Brain,
+  'book-open': BookOpen,
+  code: Code,
+  'message-square': MessageSquare,
+  'pen-line': PenLine,
+  search: Search,
+  sparkles: Sparkles,
+  terminal: Terminal,
+} as const;
+
+function labelFor(tool: SelectionToolbarToolView, t: (key: string) => string) {
+  if (tool.name) return tool.name;
+  return t(`settings.selectionToolbar.tools.${tool.builtin_key}`);
+}
+
+function ToolButton({ tool }: { tool: SelectionToolbarToolView }) {
+  const { t } = useTranslation();
+  const executeTool = useSelectionToolbarStore((state) => state.executeTool);
+  const busy = useSelectionToolbarStore((state) => state.busy);
+  // The selected state is derived from the active run only — never from hover
+  // side effects — so exactly the tool whose result is shown appears selected.
+  const active = useSelectionToolbarStore((state) => state.run?.tool_id === tool.id);
+  const Icon = ICONS[tool.icon as keyof typeof ICONS] ?? Sparkles;
+  const label = labelFor(tool, t);
+  return (
+    <button
+      aria-label={label}
+      aria-pressed={active}
+      className="selection-toolbar__tool"
+      data-active={active ? 'true' : undefined}
+      disabled={busy}
+      title={label}
+      type="button"
+      onMouseEnter={(event) => {
+        event.currentTarget.dataset.hover = 'true';
+      }}
+      onMouseLeave={(event) => {
+        delete event.currentTarget.dataset.hover;
+      }}
+      onPointerDown={(event) => {
+        // Non-focusable windows may not deliver a full click sequence; run on
+        // primary pointer down after stopPropagation so the backend self-hit
+        // path can keep the session alive (Tori / TextGO pattern).
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.button !== 0 || busy) return;
+        void executeTool(tool);
+      }}
+    >
+      <Icon aria-hidden size={14} />
+      <span className="selection-toolbar__tool-label">{label}</span>
+    </button>
+  );
+}
+
+function beginWindowDrag() {
+  const root = document.documentElement;
+  root.dataset.dragging = 'true';
+  const clear = () => {
+    delete root.dataset.dragging;
+    window.removeEventListener('pointerup', clear);
+    window.removeEventListener('mouseup', clear);
+    window.removeEventListener('mouseenter', clear);
+    window.removeEventListener('blur', clear);
+  };
+  // The native drag swallows pointer events, so clear on whichever event the
+  // webview receives first after the drag session ends.
+  window.addEventListener('pointerup', clear);
+  window.addEventListener('mouseup', clear);
+  window.addEventListener('mouseenter', clear);
+  window.addEventListener('blur', clear);
+  void import('@tauri-apps/api/webviewWindow')
+    .then(({ getCurrentWebviewWindow }) => getCurrentWebviewWindow().startDragging())
+    .catch(clear);
+}
+
+function ToolbarSurface() {
+  const { t } = useTranslation();
+  const session = useSelectionToolbarStore((state) => state.session);
+  const copied = useSelectionToolbarStore((state) => state.copied);
+  const busy = useSelectionToolbarStore((state) => state.busy);
+  const toggleOverflow = useSelectionToolbarStore((state) => state.toggleOverflow);
+  if (!session) return null;
+  const visible = session.tools.slice(0, SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS);
+  const overflow = session.tools.length > SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS;
+
+  return (
+    <div className="selection-toolbar__bar">
+      <button
+        aria-label={t('settings.selectionToolbar.drag')}
+        className="selection-toolbar__drag"
+        type="button"
+        onPointerDown={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (event.button !== 0) return;
+          beginWindowDrag();
+        }}
+      >
+        <GripVertical size={14} />
+      </button>
+      <img alt="" className="selection-toolbar__logo" draggable={false} src={logo} />
+      <div className="selection-toolbar__tools">
+        {visible.map((tool) => <ToolButton key={tool.id} tool={tool} />)}
+      </div>
+      {copied && <Check aria-label={t('common.copied')} className="selection-toolbar__copied" size={16} />}
+      {overflow && (
+        <button
+          aria-label={t('settings.selectionToolbar.more')}
+          className="selection-toolbar__more"
+          disabled={busy}
+          title={t('settings.selectionToolbar.more')}
+          type="button"
+          onMouseEnter={(event) => {
+            event.currentTarget.dataset.hover = 'true';
+          }}
+          onMouseLeave={(event) => {
+            delete event.currentTarget.dataset.hover;
+          }}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (event.button !== 0 || busy) return;
+            void toggleOverflow();
+          }}
+        >
+          <MoreHorizontal aria-hidden size={15} />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function OverflowSurface() {
+  const { t } = useTranslation();
+  const session = useSelectionToolbarStore((state) => state.session);
+  const busy = useSelectionToolbarStore((state) => state.busy);
+  const executeTool = useSelectionToolbarStore((state) => state.executeTool);
+  if (!session) return null;
+  return (
+    <div className="selection-toolbar__overflow">
+      <ToolbarSurface />
+      <div className="selection-toolbar__overflow-list">
+        {session.tools.slice(SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS).map((tool) => {
+          const Icon = ICONS[tool.icon as keyof typeof ICONS] ?? Sparkles;
+          return (
+            <button
+              aria-label={labelFor(tool, t)}
+              className="selection-toolbar__overflow-item"
+              disabled={busy}
+              key={tool.id}
+              type="button"
+              onPointerDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (event.button !== 0 || busy) return;
+                // Execute directly; backend switches surface to result.
+                void executeTool(tool);
+              }}
+            >
+              <Icon size={16} />
+              <span>{labelFor(tool, t)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ResultMarkdown({ output, streaming, isDark }: {
+  output: string;
+  streaming: boolean;
+  isDark: boolean;
+}) {
+  const codeTheme = useSettingsStore((state) => state.settings.code_theme);
+  const codeThemeLight = useSettingsStore((state) => state.settings.code_theme_light);
+  const codeFontFamily = useSettingsStore((state) => state.settings.code_font_family);
+  const { darkTheme, lightTheme, themes } = useMemo(
+    () => getChatCodeThemes(codeTheme, codeThemeLight),
+    [codeTheme, codeThemeLight],
+  );
+  const codeBlockProps = useMemo(
+    () => getChatCodeBlockProps(darkTheme, lightTheme),
+    [darkTheme, lightTheme],
+  );
+  const codeBlockMonacoOptions = useMemo(
+    () => codeFontFamily ? { fontFamily: codeFontFamily } : undefined,
+    [codeFontFamily],
+  );
+  useEffect(() => {
+    registerHighlight({ themes: themes as never }).catch((error) => {
+      console.error('Selection toolbar registerHighlight failed:', error);
+    });
+  }, [themes]);
+  // Close a dangling <think> block while streaming so the parser produces a
+  // complete think node (same trick as the chat streaming path).
+  const content = closeStreamingThinkBlock(output, streaming);
+  return (
+    <div className="aqbot-chat-markdown">
+      <NodeRenderer
+        key={`${isDark ? 'dark' : 'light'}:${darkTheme}:${lightTheme}`}
+        content={content}
+        customId="selection-toolbar"
+        customHtmlTags={CHAT_CUSTOM_HTML_TAGS}
+        final={!streaming}
+        isDark={isDark}
+        typewriter={false}
+        themes={themes}
+        codeBlockLightTheme={lightTheme}
+        codeBlockDarkTheme={darkTheme}
+        codeBlockProps={codeBlockProps}
+        codeBlockMonacoOptions={codeBlockMonacoOptions}
+        mermaidProps={CHAT_MERMAID_PROPS}
+        infographicProps={CHAT_INFOGRAPHIC_PROPS}
+        {...CHAT_RENDER_BATCH_PROPS}
+      />
+    </div>
+  );
+}
+
+/// Chat-style stickiness: follow the stream to the bottom until the user
+/// scrolls away from it; scrolling back to the bottom re-engages following.
+const AUTO_SCROLL_BOTTOM_THRESHOLD = 24;
+
+function ResultSurface() {
+  const { t } = useTranslation();
+  const session = useSelectionToolbarStore((state) => state.session);
+  const run = useSelectionToolbarStore((state) => state.run);
+  const copied = useSelectionToolbarStore((state) => state.copied);
+  const stop = useSelectionToolbarStore((state) => state.stop);
+  const copyResult = useSelectionToolbarStore((state) => state.copyResult);
+  const regenerate = useSelectionToolbarStore((state) => state.regenerate);
+  const close = useSelectionToolbarStore((state) => state.close);
+  const contentRef = useRef<HTMLElement | null>(null);
+  const stickToBottomRef = useRef(true);
+  const requestId = run?.request_id;
+
+  useEffect(() => {
+    stickToBottomRef.current = true;
+  }, [requestId]);
+
+  useEffect(() => {
+    const element = contentRef.current;
+    if (!element || !stickToBottomRef.current) return;
+    element.scrollTop = element.scrollHeight;
+  }, [requestId, run?.output]);
+
+  if (!run) return null;
+  const streaming = run.status === 'started' || run.status === 'streaming';
+  const tool = session?.tools.find((candidate) => candidate.id === run.tool_id);
+  const title = tool
+    ? t('settings.selectionToolbar.aiFeatureTitle', { feature: labelFor(tool, t) })
+    : t('settings.selectionToolbar.result');
+
+  return (
+    <div className="selection-toolbar__result-stack">
+      <ToolbarSurface />
+      <section className="selection-toolbar__result">
+        <header className="selection-toolbar__result-header">
+          <div className="selection-toolbar__result-title">
+            {streaming && <Spin size="small" />}
+            <span>{title}</span>
+          </div>
+          <div className="selection-toolbar__result-actions">
+            {run.output && (
+              <Button
+                aria-label={t('common.copy')}
+                icon={copied ? <Check size={14} /> : <Copy size={14} />}
+                size="small"
+                type="text"
+                onClick={() => void copyResult()}
+              />
+            )}
+            <Button
+              aria-label={t('chat.regenerate')}
+              disabled={streaming}
+              icon={<RotateCcw size={14} />}
+              size="small"
+              title={t('chat.regenerate')}
+              type="text"
+              onClick={() => void regenerate()}
+            />
+            <Button
+              aria-label={t('common.close')}
+              danger
+              icon={<X size={14} />}
+              size="small"
+              type="text"
+              onClick={() => void close('close_button')}
+            />
+          </div>
+        </header>
+        <main
+          aria-live="polite"
+          className="selection-toolbar__result-content"
+          ref={contentRef}
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            stickToBottomRef.current =
+              element.scrollHeight - element.scrollTop - element.clientHeight
+                < AUTO_SCROLL_BOTTOM_THRESHOLD;
+          }}
+        >
+          {run.error ? (
+            <div className="selection-toolbar__error">{run.error}</div>
+          ) : run.output ? (
+            <ResultMarkdown
+              isDark={session?.theme === 'dark'}
+              output={run.output}
+              streaming={streaming}
+            />
+          ) : (
+            <div className="selection-toolbar__waiting">{t('chat.thinkingInProgress')}</div>
+          )}
+        </main>
+        {streaming && (
+          <footer className="selection-toolbar__result-footer">
+            <Button
+              danger
+              icon={<Square size={12} />}
+              size="small"
+              onClick={() => void stop()}
+            >
+              {t('chat.stop')}
+            </Button>
+          </footer>
+        )}
+      </section>
+    </div>
+  );
+}
+
+export function SelectionToolbarApp() {
+  const initialize = useSelectionToolbarStore((state) => state.initialize);
+  const dispose = useSelectionToolbarStore((state) => state.dispose);
+  const session = useSelectionToolbarStore((state) => state.session);
+  const surface = useSelectionToolbarStore((state) => state.surface);
+  const requestId = useSelectionToolbarStore((state) => state.run?.request_id);
+  const ensureSettingsLoaded = useSettingsStore((state) => state.ensureSettingsLoaded);
+
+  useEffect(() => {
+    // The window resizes/moves under a stationary cursor when the surface
+    // changes, so mouseleave may never fire — drop any stale hover marks.
+    document.querySelectorAll<HTMLElement>('[data-hover]').forEach((element) => {
+      delete element.dataset.hover;
+    });
+  }, [surface, requestId, session?.selection_id]);
+
+  useEffect(() => {
+    void initialize();
+    return dispose;
+  }, [dispose, initialize]);
+
+  useEffect(() => {
+    // Same renderer environment as the chat window: settings for code themes,
+    // D2 + monaco warmup so result markdown renders 1:1.
+    void ensureSettingsLoaded().catch(() => {});
+    enableD2(() => import('@terrastruct/d2'));
+    void preloadChatRenderers();
+  }, [ensureSettingsLoaded]);
+
+  useEffect(() => {
+    if (!session) return;
+    document.documentElement.dataset.theme = session.theme;
+    document.documentElement.lang = session.language;
+    document.documentElement.dir = i18n.dir(session.language);
+    void i18n.changeLanguage(session.language).then(() => {
+      applyMarkstreamI18nMap(i18n.getFixedT(session.language));
+    });
+  }, [session]);
+
+  if (!session) return null;
+  if (surface === 'result') return <ResultSurface />;
+  if (surface === 'overflow') return <OverflowSurface />;
+  return <ToolbarSurface />;
+}
+
+export function SelectionToolbarRoot() {
+  const theme = useSelectionToolbarStore((state) => state.session?.theme ?? 'light');
+  const language = useSelectionToolbarStore((state) => state.session?.language ?? 'en-US');
+  return (
+    <ConfigProvider
+      direction={i18n.dir(language)}
+      theme={{
+        algorithm: theme === 'dark' ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
+        token: { borderRadius: 8, colorPrimary: '#17A93D' },
+      }}
+    >
+      <SelectionToolbarApp />
+    </ConfigProvider>
+  );
+}
