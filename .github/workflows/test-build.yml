@@ -27,6 +27,7 @@ jobs:
           - os: macos-15-intel
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -107,6 +108,7 @@ jobs:
 
       - name: Import macOS release signing identity
         shell: bash
+        timeout-minutes: 10
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -139,4 +141,6 @@ jobs:
       - name: Clean up macOS signing identity
         if: always()
         shell: bash
+        timeout-minutes: 5
+        continue-on-error: true
         run: bash scripts/macos/cleanup-ci-signing.sh

@@ -3,6 +3,8 @@
 set -euo pipefail
 set +x
 
+source "$(dirname "${BASH_SOURCE[0]}")/ci-run-with-timeout.sh"
+
 : "${APPLE_CERTIFICATE:?APPLE_CERTIFICATE is required}"
 : "${APPLE_CERTIFICATE_PASSWORD:?APPLE_CERTIFICATE_PASSWORD is required}"
 : "${RUNNER_TEMP:?RUNNER_TEMP is required}"
@@ -55,12 +57,22 @@ openssl pkcs12 \
   -nokeys \
   -passin env:APPLE_CERTIFICATE_PASSWORD \
   -out "${certificate_pem}"
-sudo security add-trusted-cert \
+# Admin-domain trust writes are allowed for root without a prompt (unlike
+# remove-trusted-cert), but Apple keeps tightening trust-settings policy per
+# OS release — bound it so a future regression fails fast instead of hanging
+# the job until the 6h runner limit. Output goes to a file, not the step
+# pipes, so a SIGKILL-orphaned root process cannot keep the step open.
+add_trusted_cert_log="${signing_dir}/add-trusted-cert.log"
+run_with_timeout 60 sudo security add-trusted-cert \
   -d \
   -r trustRoot \
   -p codeSign \
   -k /Library/Keychains/System.keychain \
-  "${certificate_pem}"
+  "${certificate_pem}" >"${add_trusted_cert_log}" 2>&1 || {
+  cat "${add_trusted_cert_log}" >&2 2>/dev/null || true
+  echo "security add-trusted-cert failed or timed out; cannot trust AQBot Release certificate." >&2
+  exit 1
+}
 
 identity_count="$(
   security find-identity -v -p codesigning "${keychain_path}" \

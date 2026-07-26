@@ -94,6 +94,7 @@ jobs:
             target: x86_64-unknown-linux-gnu
 
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -191,6 +192,7 @@ jobs:
       - name: Import macOS release signing identity
         if: contains(matrix.target, 'apple-darwin')
         shell: bash
+        timeout-minutes: 10
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -225,6 +227,8 @@ jobs:
       - name: Clean up macOS signing identity
         if: always() && contains(matrix.target, 'apple-darwin')
         shell: bash
+        timeout-minutes: 5
+        continue-on-error: true
         run: bash scripts/macos/cleanup-ci-signing.sh
 
       - name: Package Windows portable (zip)
@@ -251,6 +255,7 @@ jobs:
     needs: [check-version, draft-release-notes]
     if: ${{ !contains(github.ref_name, '-test') }}
     runs-on: ubuntu-22.04
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
