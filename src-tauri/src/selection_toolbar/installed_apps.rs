@@ -298,14 +298,14 @@ mod windows {
     }
 
     fn app_from_shortcut(path: &Path) -> Option<InstalledApp> {
-        use std::os::windows::ffi::OsStrExt;
-        use windows::core::{Interface, PCWSTR};
-        use windows::Win32::Foundation::MAX_PATH;
-        use windows::Win32::System::Com::{
+        use ::windows::core::{Interface, PCWSTR};
+        use ::windows::Win32::Foundation::MAX_PATH;
+        use ::windows::Win32::System::Com::{
             CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER,
             COINIT_APARTMENTTHREADED,
         };
-        use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+        use ::windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+        use std::os::windows::ffi::OsStrExt;
 
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
