@@ -1064,6 +1064,29 @@ impl SelectionToolbarTool {
     }
 }
 
+/// Whether the selection toolbar is limited to or excluded from specific apps.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionToolbarAppFilterMode {
+    /// No app restriction — toolbar may appear in any supported app.
+    #[default]
+    Off,
+    /// Only apps listed in `app_filter` may show the toolbar.
+    Allowlist,
+    /// Apps listed in `app_filter` never show the toolbar.
+    Blocklist,
+}
+
+/// A single app entry in the selection-toolbar allow/block list.
+///
+/// `id` is the stable key matched against `SelectionObservation.source_app`
+/// (macOS bundle id, Windows executable basename, Linux desktop id / name).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SelectionToolbarAppEntry {
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct SelectionToolbarSettings {
@@ -1072,6 +1095,13 @@ pub struct SelectionToolbarSettings {
     /// Target language for the builtin translate tool; `None` follows the
     /// application UI language.
     pub translate_target_language: Option<String>,
+    /// App scope for when the toolbar is allowed to appear.
+    #[serde(default)]
+    pub app_filter_mode: SelectionToolbarAppFilterMode,
+    /// Apps participating in the current filter mode (empty means: allowlist
+    /// blocks everything, blocklist blocks nothing).
+    #[serde(default)]
+    pub app_filter: Vec<SelectionToolbarAppEntry>,
     pub tools: Vec<SelectionToolbarTool>,
 }
 
@@ -1108,6 +1138,21 @@ impl SelectionToolbarSettings {
             .is_some_and(|language| language.trim().is_empty() || language.len() > 48)
         {
             return Err("Selection toolbar translate target language is invalid".into());
+        }
+
+        let mut app_ids = HashSet::new();
+        for entry in &self.app_filter {
+            let id = entry.id.trim();
+            let name = entry.name.trim();
+            if id.is_empty() || id.len() > 256 {
+                return Err("Selection toolbar app filter id is invalid".into());
+            }
+            if name.is_empty() || name.len() > 128 {
+                return Err("Selection toolbar app filter name is invalid".into());
+            }
+            if !app_ids.insert(id.to_string()) {
+                return Err(format!("Duplicate selection toolbar app filter id: {id}"));
+            }
         }
 
         let mut ids = HashSet::new();
@@ -1168,6 +1213,8 @@ impl Default for SelectionToolbarSettings {
             enabled: false,
             theme_follow: false,
             translate_target_language: None,
+            app_filter_mode: SelectionToolbarAppFilterMode::Off,
+            app_filter: Vec::new(),
             tools: vec![
                 SelectionToolbarTool::BuiltinAi {
                     builtin_key: SelectionToolbarBuiltinAiKey::Translate,
@@ -1193,6 +1240,50 @@ impl Default for SelectionToolbarSettings {
                     enabled: true,
                 },
             ],
+        }
+    }
+}
+
+impl SelectionToolbarSettings {
+    /// Whether a foreground `source_app` identifier is allowed under the
+    /// current filter mode.
+    ///
+    /// Matching is primarily by entry `id` (case-sensitive exact match, except
+    /// Windows-style executable basenames which are compared case-insensitively
+    /// when they end with `.exe`). Entry `name` is a secondary case-insensitive
+    /// match for platforms where the accessibility tree only exposes a display name.
+    pub fn allows_source_app(&self, source_app: &str) -> bool {
+        let source = source_app.trim();
+        if source.is_empty() {
+            return matches!(
+                self.app_filter_mode,
+                SelectionToolbarAppFilterMode::Off | SelectionToolbarAppFilterMode::Blocklist
+            );
+        }
+        let hit = self.app_filter.iter().any(|entry| {
+            let id = entry.id.trim();
+            let name = entry.name.trim();
+            if id.is_empty() {
+                return false;
+            }
+            if id == source {
+                return true;
+            }
+            // Windows executable basenames are case-insensitive.
+            if (id.ends_with(".exe")
+                || source.ends_with(".exe")
+                || id.ends_with(".EXE")
+                || source.ends_with(".EXE"))
+                && id.eq_ignore_ascii_case(source)
+            {
+                return true;
+            }
+            !name.is_empty() && name.eq_ignore_ascii_case(source)
+        });
+        match self.app_filter_mode {
+            SelectionToolbarAppFilterMode::Off => true,
+            SelectionToolbarAppFilterMode::Allowlist => hit,
+            SelectionToolbarAppFilterMode::Blocklist => !hit,
         }
     }
 }
@@ -1501,8 +1592,9 @@ impl Default for AppSettings {
 mod app_settings_tests {
     use super::{
         is_valid_selection_toolbar_icon, AppSettings, ModelCatalogSourcePreference,
-        SelectionToolbarAiConfig, SelectionToolbarBuiltinAiKey, SelectionToolbarSettings,
-        SelectionToolbarTool, DEFAULT_TRANSLATE_PROMPT,
+        SelectionToolbarAiConfig, SelectionToolbarAppEntry, SelectionToolbarAppFilterMode,
+        SelectionToolbarBuiltinAiKey, SelectionToolbarSettings, SelectionToolbarTool,
+        DEFAULT_TRANSLATE_PROMPT,
     };
     use serde_json::json;
 
@@ -1519,11 +1611,84 @@ mod app_settings_tests {
 
         assert!(!settings.selection_toolbar.enabled);
         assert!(!settings.selection_toolbar.theme_follow);
+        assert_eq!(
+            settings.selection_toolbar.app_filter_mode,
+            SelectionToolbarAppFilterMode::Off
+        );
+        assert!(settings.selection_toolbar.app_filter.is_empty());
         assert_eq!(settings.selection_toolbar.tools.len(), 4);
         settings
             .selection_toolbar
             .validate()
             .expect("default selection toolbar settings should be valid");
+    }
+
+    #[test]
+    fn selection_toolbar_app_filter_allows_matches_mode_semantics() {
+        let chrome = SelectionToolbarAppEntry {
+            id: "com.google.Chrome".into(),
+            name: "Google Chrome".into(),
+        };
+        let notepad = SelectionToolbarAppEntry {
+            id: "notepad.exe".into(),
+            name: "Notepad".into(),
+        };
+
+        let mut off = SelectionToolbarSettings::default();
+        off.app_filter = vec![chrome.clone()];
+        assert!(off.allows_source_app("com.google.Chrome"));
+        assert!(off.allows_source_app("com.apple.TextEdit"));
+
+        let mut allow = SelectionToolbarSettings::default();
+        allow.app_filter_mode = SelectionToolbarAppFilterMode::Allowlist;
+        allow.app_filter = vec![chrome.clone(), notepad.clone()];
+        assert!(allow.allows_source_app("com.google.Chrome"));
+        assert!(allow.allows_source_app("NOTEPAD.EXE"));
+        assert!(!allow.allows_source_app("com.apple.TextEdit"));
+        assert!(!allow.allows_source_app(""));
+
+        let mut empty_allow = SelectionToolbarSettings::default();
+        empty_allow.app_filter_mode = SelectionToolbarAppFilterMode::Allowlist;
+        assert!(!empty_allow.allows_source_app("com.google.Chrome"));
+
+        let mut block = SelectionToolbarSettings::default();
+        block.app_filter_mode = SelectionToolbarAppFilterMode::Blocklist;
+        block.app_filter = vec![chrome];
+        assert!(!block.allows_source_app("com.google.Chrome"));
+        assert!(block.allows_source_app("com.apple.TextEdit"));
+        // Secondary match by display name (Linux AT-SPI fallback).
+        let mut block_by_name = SelectionToolbarSettings::default();
+        block_by_name.app_filter_mode = SelectionToolbarAppFilterMode::Blocklist;
+        block_by_name.app_filter = vec![notepad];
+        assert!(!block_by_name.allows_source_app("Notepad"));
+        assert!(block_by_name.allows_source_app("Other App"));
+    }
+
+    #[test]
+    fn selection_toolbar_rejects_invalid_app_filter_entries() {
+        let duplicate = SelectionToolbarSettings {
+            app_filter: vec![
+                SelectionToolbarAppEntry {
+                    id: "app.a".into(),
+                    name: "A".into(),
+                },
+                SelectionToolbarAppEntry {
+                    id: "app.a".into(),
+                    name: "A again".into(),
+                },
+            ],
+            ..SelectionToolbarSettings::default()
+        };
+        assert!(duplicate.validate().is_err());
+
+        let empty_id = SelectionToolbarSettings {
+            app_filter: vec![SelectionToolbarAppEntry {
+                id: "  ".into(),
+                name: "A".into(),
+            }],
+            ..SelectionToolbarSettings::default()
+        };
+        assert!(empty_id.validate().is_err());
     }
 
     #[test]

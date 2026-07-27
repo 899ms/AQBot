@@ -13,28 +13,99 @@ const mocks = vi.hoisted(() => {
       global_dismissal_supported: true,
     },
   };
+  const defaultTools = [
+    {
+      kind: 'builtin_ai' as const,
+      builtin_key: 'translate' as const,
+      enabled: true,
+      ai: {
+        prompt: 'Translate {selection} from {source_language} to {target_language}',
+        provider_id: null,
+        model_id: null,
+        temperature: null,
+        top_p: null,
+        max_tokens: null,
+      },
+    },
+    {
+      kind: 'builtin_ai' as const,
+      builtin_key: 'polish' as const,
+      enabled: true,
+      ai: {
+        prompt: 'Polish {selection}',
+        provider_id: null,
+        model_id: null,
+        temperature: null,
+        top_p: null,
+        max_tokens: null,
+      },
+    },
+    {
+      kind: 'builtin_action' as const,
+      builtin_key: 'copy' as const,
+      enabled: true,
+    },
+  ];
+  const toolbar = {
+    value: {
+      enabled: false,
+      theme_follow: false,
+      app_filter_mode: 'off' as string,
+      app_filter: [] as Array<{ id: string; name: string }>,
+      tools: defaultTools,
+    },
+  };
+  const appIcons = {
+    value: {} as Record<string, string>,
+  };
+  const saveSettings = vi.fn(async (partial: { selection_toolbar?: typeof toolbar.value }) => {
+    if (partial.selection_toolbar) {
+      toolbar.value = { ...toolbar.value, ...partial.selection_toolbar };
+    }
+  });
   return {
     ensureProvidersLoaded: vi.fn(async () => {}),
     runtime,
-    invoke: vi.fn(async (command: string) => command === 'selection_toolbar_open_permission_settings'
-      ? {
+    toolbar,
+    appIcons,
+    defaultTools,
+    invoke: vi.fn(async (command: string) => {
+      if (command === 'selection_toolbar_resolve_app_paths') {
+        return [
+          { id: 'com.apple.TextEdit', name: 'TextEdit', icon_data_url: null },
+        ];
+      }
+      if (command === 'selection_toolbar_resolve_app_icons') return appIcons.value;
+      if (command === 'selection_toolbar_open_permission_settings') {
+        return {
           kind: 'manual_add_required',
           executable_path: '/workspace/target/debug/AQBot',
-        }
-      : runtime.value),
-    saveSettings: vi.fn(async () => {}),
+        };
+      }
+      return runtime.value;
+    }),
+    saveSettings,
   };
 });
 
 beforeEach(() => {
   mocks.runtime.value = {
-        state: 'permission_required',
-        platform: 'macos',
-        permission: 'denied',
-        last_error: null,
-        global_dismissal_supported: true,
+    state: 'permission_required',
+    platform: 'macos',
+    permission: 'denied',
+    last_error: null,
+    global_dismissal_supported: true,
   };
+  mocks.toolbar.value = {
+    enabled: false,
+    theme_follow: false,
+    app_filter_mode: 'off',
+    app_filter: [],
+    tools: mocks.defaultTools,
+  };
+  mocks.appIcons.value = {};
   mocks.invoke.mockClear();
+  mocks.saveSettings.mockClear();
 });
 
 vi.mock('@/lib/invoke', () => ({
@@ -48,17 +119,7 @@ vi.mock('@/stores', () => ({
   useSettingsStore: Object.assign(
     (selector: (state: Record<string, unknown>) => unknown) => selector({
       settings: {
-        selection_toolbar: {
-          enabled: false,
-          theme_follow: false,
-          tools: [
-            {
-              kind: 'builtin_action',
-              builtin_key: 'copy',
-              enabled: true,
-            },
-          ],
-        },
+        selection_toolbar: mocks.toolbar.value,
       },
       saveSettings: mocks.saveSettings,
     }),
@@ -66,11 +127,7 @@ vi.mock('@/stores', () => ({
       getState: () => ({
         error: null,
         settings: {
-          selection_toolbar: {
-            enabled: false,
-            theme_follow: false,
-            tools: [],
-          },
+          selection_toolbar: mocks.toolbar.value,
         },
       }),
     },
@@ -177,5 +234,121 @@ describe('SelectionToolbarSettings', () => {
     expect(await screen.findByText(
       'settings.selectionToolbar.permission.granted',
     )).toBeInTheDocument();
+  });
+
+  it('shows translate-only language placeholders in the translate prompt hint', async () => {
+    const user = userEvent.setup();
+    render(<SelectionToolbarSettings />);
+
+    const editButtons = await screen.findAllByRole('button', { name: 'common.edit' });
+    await user.click(editButtons[0]);
+
+    expect(await screen.findByText(
+      'settings.selectionToolbar.promptHintTranslate',
+    )).toBeInTheDocument();
+    expect(screen.queryByText(
+      'settings.selectionToolbar.promptHint',
+    )).not.toBeInTheDocument();
+  });
+
+  it('hides translate language placeholders for non-translate tools', async () => {
+    const user = userEvent.setup();
+    render(<SelectionToolbarSettings />);
+
+    const editButtons = await screen.findAllByRole('button', { name: 'common.edit' });
+    await user.click(editButtons[1]);
+
+    expect(await screen.findByText(
+      'settings.selectionToolbar.promptHint',
+    )).toBeInTheDocument();
+    expect(screen.queryByText(
+      'settings.selectionToolbar.promptHintTranslate',
+    )).not.toBeInTheDocument();
+  });
+
+  it('shows app filter controls in allowlist mode', async () => {
+    mocks.toolbar.value = {
+      ...mocks.toolbar.value,
+      app_filter_mode: 'allowlist',
+      app_filter: [{ id: 'com.apple.TextEdit', name: 'TextEdit' }],
+    };
+
+    render(<SelectionToolbarSettings />);
+
+    expect(await screen.findByText('settings.selectionToolbar.appFilterTitle')).toBeInTheDocument();
+    expect(screen.getByText('settings.selectionToolbar.appFilterHintAllowlist')).toBeInTheDocument();
+    expect(screen.getByText('TextEdit')).toBeInTheDocument();
+    expect(screen.getByText('com.apple.TextEdit')).toBeInTheDocument();
+    expect(screen.getByRole('button', {
+      name: 'settings.selectionToolbar.appFilterAdd',
+    })).toBeInTheDocument();
+    expect(screen.getByRole('button', {
+      name: 'settings.selectionToolbar.appFilterRemove',
+    })).toBeInTheDocument();
+  });
+
+  it('reuses resolved app icons when the settings page is opened again', async () => {
+    mocks.appIcons.value = {
+      'com.example.CacheTest': 'data:image/png;base64,Y2FjaGVk',
+    };
+    mocks.toolbar.value = {
+      ...mocks.toolbar.value,
+      app_filter_mode: 'allowlist',
+      app_filter: [{ id: 'com.example.CacheTest', name: 'Cache Test' }],
+    };
+
+    const first = render(<SelectionToolbarSettings />);
+    await waitFor(() => expect(
+      mocks.invoke.mock.calls.filter(
+        ([command]) => command === 'selection_toolbar_resolve_app_icons',
+      ),
+    ).toHaveLength(1));
+    await waitFor(() => expect(document.querySelector(
+      'img[src="data:image/png;base64,Y2FjaGVk"]',
+    )).toBeInTheDocument());
+    first.unmount();
+
+    render(<SelectionToolbarSettings />);
+    await waitFor(() => expect(
+      mocks.invoke.mock.calls.filter(
+        ([command]) => command === 'selection_toolbar_resolve_app_icons',
+      ),
+    ).toHaveLength(1));
+  });
+
+  it('retries app icons that failed to resolve when the page is opened again', async () => {
+    mocks.toolbar.value = {
+      ...mocks.toolbar.value,
+      app_filter_mode: 'allowlist',
+      app_filter: [{ id: 'com.example.RetryIcon', name: 'Retry Icon' }],
+    };
+
+    const first = render(<SelectionToolbarSettings />);
+    await waitFor(() => expect(
+      mocks.invoke.mock.calls.filter(
+        ([command]) => command === 'selection_toolbar_resolve_app_icons',
+      ),
+    ).toHaveLength(1));
+    first.unmount();
+
+    render(<SelectionToolbarSettings />);
+    await waitFor(() => expect(
+      mocks.invoke.mock.calls.filter(
+        ([command]) => command === 'selection_toolbar_resolve_app_icons',
+      ),
+    ).toHaveLength(2));
+  });
+
+  it('places the app filter after tools and renders descriptions as secondary text', () => {
+    render(<SelectionToolbarSettings />);
+
+    const toolsTitle = screen.getByText('settings.selectionToolbar.toolsTitle');
+    const appFilterTitle = screen.getByText('settings.selectionToolbar.appFilterTitle');
+    expect(
+      toolsTitle.compareDocumentPosition(appFilterTitle) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByText('settings.selectionToolbar.enabledHint')).toHaveStyle({
+      color: 'rgba(0, 0, 0, 0.45)',
+    });
   });
 });

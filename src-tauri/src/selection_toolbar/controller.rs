@@ -474,6 +474,17 @@ impl SelectionToolbarRuntime {
                 Ok(settings) if settings.selection_toolbar.enabled => settings,
                 _ => return,
             };
+        if !settings
+            .selection_toolbar
+            .allows_source_app(&observation.source_app)
+        {
+            tracing::debug!(
+                source_app = %observation.source_app,
+                mode = ?settings.selection_toolbar.app_filter_mode,
+                "selection ignored by app filter"
+            );
+            return;
+        }
         let status = self.status().await;
         if status.state != RuntimeState::Running {
             self.set_runtime_state(RuntimeState::Running, status.permission, None)

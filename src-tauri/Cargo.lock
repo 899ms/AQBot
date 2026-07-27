@@ -224,6 +224,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "open",
  "open-agent-sdk",
+ "plist",
  "rcgen",
  "reqwest 0.12.28",
  "rustls 0.23.37",

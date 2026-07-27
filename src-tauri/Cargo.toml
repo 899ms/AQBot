@@ -79,8 +79,29 @@ tauri-plugin-single-instance = { version = "=2.4.0", features = ["deep-link"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", features = ["relax-sign-encoding"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSRunningApplication", "NSWindow", "NSWorkspace", "block2", "libc"] }
-objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSDictionary", "NSNotification", "NSObject", "NSOperation", "NSString", "block2"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSBitmapImageRep",
+    "NSGraphics",
+    "NSGraphicsContext",
+    "NSImage",
+    "NSImageRep",
+    "NSRunningApplication",
+    "NSWindow",
+    "NSWorkspace",
+    "block2",
+    "libc",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "NSData",
+    "NSDictionary",
+    "NSNotification",
+    "NSURL",
+    "NSObject",
+    "NSOperation",
+    "NSString",
+    "block2",
+] }
+plist = "1"
 block2 = "0.6.2"
 axuielement = { version = "0.9.1", features = ["async"] }
 core-foundation = "0.10"
@@ -92,10 +113,16 @@ tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "a3122e
 [target.'cfg(target_os = "windows")'.dependencies]
 uiautomation = { version = "0.25.0", features = ["event"] }
 windows = { version = "0.62.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Com",
+    "Win32_System_ProcessStatus",
     "Win32_System_Threading",
     "Win32_System_Variant",
     "Win32_UI_Accessibility",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows-sys = { version = "0.59", features = [

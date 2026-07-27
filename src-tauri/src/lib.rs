@@ -487,6 +487,8 @@ pub fn run() {
         commands::selection_toolbar::selection_toolbar_copy_selection,
         commands::selection_toolbar::selection_toolbar_copy_result,
         commands::selection_toolbar::selection_toolbar_close,
+        commands::selection_toolbar::selection_toolbar_resolve_app_paths,
+        commands::selection_toolbar::selection_toolbar_resolve_app_icons,
         // files
         commands::files::upload_file,
         commands::files::download_file,

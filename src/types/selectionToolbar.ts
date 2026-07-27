@@ -37,12 +37,35 @@ export type SelectionToolbarTool =
       ai: SelectionToolbarAiConfig;
     };
 
+/** Whether the toolbar is limited to or excluded from specific apps. */
+export type SelectionToolbarAppFilterMode = 'off' | 'allowlist' | 'blocklist';
+
+/** A single app entry in the allow/block list (icons are resolved at runtime). */
+export interface SelectionToolbarAppEntry {
+  /** Stable key matched against `source_app` (bundle id / exe name / desktop id). */
+  id: string;
+  /** Display name shown in settings. */
+  name: string;
+}
+
 export interface SelectionToolbarSettings {
   enabled: boolean;
   theme_follow: boolean;
   /** Translate tool target language; null follows the app UI language. */
   translate_target_language: string | null;
+  /** App scope for when the toolbar may appear. Default: no restriction. */
+  app_filter_mode: SelectionToolbarAppFilterMode;
+  /** Apps participating in the current filter mode. */
+  app_filter: SelectionToolbarAppEntry[];
   tools: SelectionToolbarTool[];
+}
+
+/** Candidate returned by `selection_toolbar_list_installed_apps`. */
+export interface SelectionToolbarInstalledApp {
+  id: string;
+  name: string;
+  /** Optional data-URL thumbnail (may be null if the platform could not load an icon). */
+  icon_data_url: string | null;
 }
 
 /** Mirrors `DEFAULT_TRANSLATE_PROMPT` in `src-tauri/crates/core/src/types.rs`. */
@@ -72,6 +95,8 @@ export function createDefaultSelectionToolbarSettings(): SelectionToolbarSetting
     enabled: false,
     theme_follow: false,
     translate_target_language: null,
+    app_filter_mode: 'off',
+    app_filter: [],
     tools: [
       {
         kind: 'builtin_ai',

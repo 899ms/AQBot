@@ -227,7 +227,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
           set({ loading: false });
         } else {
           set({
-            settings: { ...DEFAULT_SETTINGS, ...fetched },
+            settings: {
+              ...DEFAULT_SETTINGS,
+              ...fetched,
+              selection_toolbar: {
+                ...DEFAULT_SETTINGS.selection_toolbar,
+                ...fetched.selection_toolbar,
+                tools: fetched.selection_toolbar?.tools
+                  ?? DEFAULT_SETTINGS.selection_toolbar.tools,
+                app_filter: fetched.selection_toolbar?.app_filter
+                  ?? DEFAULT_SETTINGS.selection_toolbar.app_filter,
+                app_filter_mode: fetched.selection_toolbar?.app_filter_mode
+                  ?? DEFAULT_SETTINGS.selection_toolbar.app_filter_mode,
+              },
+            },
             loading: false,
             _loaded: true,
             error: null,

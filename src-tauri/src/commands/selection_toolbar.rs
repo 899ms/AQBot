@@ -1,13 +1,67 @@
+use std::collections::BTreeMap;
+
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
+#[cfg(not(target_os = "macos"))]
+use crate::selection_toolbar::resolve_app_icons;
+#[cfg(target_os = "macos")]
+use crate::selection_toolbar::{encode_app_icon_sources, resolve_app_icon_sources};
 use crate::{
     selection_toolbar::{
-        PermissionSettingsOutcome, RuntimeSnapshot, RuntimeStatus, SurfaceSize, ToolRunEvent,
-        SELECTION_TOOLBAR_WINDOW_LABEL,
+        resolve_app_paths, InstalledApp, PermissionSettingsOutcome, RuntimeSnapshot, RuntimeStatus,
+        SurfaceSize, ToolRunEvent, SELECTION_TOOLBAR_WINDOW_LABEL,
     },
     AppState,
 };
+
+/// Run AppKit icon APIs on the main thread (required on macOS).
+#[cfg(target_os = "macos")]
+fn run_on_main_thread<T, F>(app: &AppHandle, work: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.run_on_main_thread(move || {
+        let _ = tx.send(work());
+    })
+    .map_err(|error| error.to_string())?;
+    rx.recv()
+        .map_err(|_| "Main-thread app resolution channel closed".into())
+}
+
+#[tauri::command]
+pub async fn selection_toolbar_resolve_app_paths(
+    paths: Vec<String>,
+) -> Result<Vec<InstalledApp>, String> {
+    tauri::async_runtime::spawn_blocking(move || resolve_app_paths(&paths))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn selection_toolbar_resolve_app_icons(
+    app: AppHandle,
+    ids: Vec<String>,
+) -> Result<BTreeMap<String, String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        // AppKit renders each icon directly to a compact 64px PNG on the main
+        // thread; base64 encoding stays on a blocking worker.
+        let sources = run_on_main_thread(&app, move || resolve_app_icon_sources(&ids))?;
+        return tauri::async_runtime::spawn_blocking(move || encode_app_icon_sources(sources))
+            .await
+            .map_err(|error| error.to_string());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        tauri::async_runtime::spawn_blocking(move || resolve_app_icons(&ids))
+            .await
+            .map_err(|error| error.to_string())?
+    }
+}
 
 #[tauri::command]
 pub async fn selection_toolbar_get_runtime_status(

@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Divider,
+  Empty,
   Input,
   Modal,
   Select,
@@ -13,7 +14,7 @@ import {
   message,
   theme,
 } from 'antd';
-import { GripVertical, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { AppWindow, GripVertical, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import {
   DndContext,
   PointerSensor,
@@ -40,6 +41,9 @@ import {
 } from '@/constants/selectionTranslateLanguages';
 import {
   createDefaultSelectionToolbarSettings,
+  type SelectionToolbarAppEntry,
+  type SelectionToolbarAppFilterMode,
+  type SelectionToolbarInstalledApp,
   type SelectionToolbarPermissionSettingsOutcome,
   type SelectionToolbarRuntimeStatus,
   type SelectionToolbarSettings as SelectionToolbarConfig,
@@ -71,6 +75,271 @@ function toolName(tool: SelectionToolbarTool, t: (key: string) => string) {
   return tool.kind === 'custom_ai'
     ? tool.name
     : t(`settings.selectionToolbar.tools.${tool.builtin_key}`);
+}
+
+function AppIcon({
+  src,
+  size = 28,
+}: {
+  src?: string | null;
+  size?: number;
+}) {
+  const { token } = theme.useToken();
+  if (src) {
+    return (
+      <img
+        alt=""
+        src={src}
+        style={{
+          borderRadius: 6,
+          flex: '0 0 auto',
+          height: size,
+          objectFit: 'contain',
+          width: size,
+        }}
+      />
+    );
+  }
+  return (
+    <span
+      style={{
+        alignItems: 'center',
+        background: token.colorFillTertiary,
+        borderRadius: 6,
+        color: token.colorTextSecondary,
+        display: 'inline-flex',
+        flex: '0 0 auto',
+        height: size,
+        justifyContent: 'center',
+        width: size,
+      }}
+    >
+      <AppWindow size={Math.max(14, size - 10)} />
+    </span>
+  );
+}
+
+type AppPickerPlatform = 'macos' | 'windows' | 'linux' | 'unsupported';
+
+function appPickerDefaults(platform: AppPickerPlatform): {
+  defaultPath?: string;
+  filters: Array<{ name: string; extensions: string[] }>;
+} {
+  switch (platform) {
+    case 'macos':
+      return {
+        defaultPath: '/Applications',
+        filters: [{ name: 'Applications', extensions: ['app'] }],
+      };
+    case 'windows':
+      return {
+        defaultPath: 'C:\\Program Files',
+        filters: [
+          { name: 'Executables', extensions: ['exe'] },
+          { name: 'Shortcuts', extensions: ['lnk'] },
+        ],
+      };
+    case 'linux':
+      return {
+        defaultPath: '/usr/share/applications',
+        filters: [
+          { name: 'Desktop entries', extensions: ['desktop'] },
+        ],
+      };
+    default:
+      return {
+        filters: [{ name: 'All', extensions: ['*'] }],
+      };
+  }
+}
+
+function normalizeDialogPaths(selected: string | string[] | null): string[] {
+  if (!selected) return [];
+  return (Array.isArray(selected) ? selected : [selected])
+    .map((path) => path.trim())
+    .filter(Boolean);
+}
+
+function mergeInstalledApps(
+  current: SelectionToolbarInstalledApp[],
+  incoming: SelectionToolbarInstalledApp[],
+): SelectionToolbarInstalledApp[] {
+  const map = new Map(current.map((app) => [app.id, app]));
+  for (const app of incoming) {
+    const existing = map.get(app.id);
+    map.set(app.id, {
+      ...existing,
+      ...app,
+      icon_data_url: app.icon_data_url ?? existing?.icon_data_url ?? null,
+    });
+  }
+  return [...map.values()];
+}
+
+const appIconCache = new Map<string, string>();
+const appIconRequests = new Map<string, Promise<string | null>>();
+
+function cacheInstalledAppIcons(apps: SelectionToolbarInstalledApp[]): Record<string, string> {
+  const icons: Record<string, string> = {};
+  for (const app of apps) {
+    if (!app.icon_data_url) continue;
+    appIconCache.set(app.id, app.icon_data_url);
+    icons[app.id] = app.icon_data_url;
+  }
+  return icons;
+}
+
+function cachedAppIcons(ids: string[]): Record<string, string> {
+  const icons: Record<string, string> = {};
+  for (const id of ids) {
+    const icon = appIconCache.get(id);
+    if (icon) icons[id] = icon;
+  }
+  return icons;
+}
+
+async function resolveAppIcons(ids: string[]): Promise<Record<string, string>> {
+  const uniqueIds = [...new Set(ids)];
+  const missingIds = uniqueIds.filter(
+    (id) => !appIconCache.has(id) && !appIconRequests.has(id),
+  );
+  if (missingIds.length > 0) {
+    const batch = invoke<Record<string, string>>(
+      'selection_toolbar_resolve_app_icons',
+      { ids: missingIds },
+    );
+    for (const id of missingIds) {
+      const request = batch
+        .then((icons) => {
+          const icon = icons[id] ?? null;
+          if (icon) appIconCache.set(id, icon);
+          return icon;
+        })
+        .finally(() => {
+          if (appIconRequests.get(id) === request) appIconRequests.delete(id);
+        });
+      appIconRequests.set(id, request);
+    }
+  }
+
+  await Promise.all(uniqueIds.map((id) => appIconRequests.get(id)));
+  return cachedAppIcons(uniqueIds);
+}
+
+/** Native file dialog + confirmation list (add more / remove before saving). */
+function AppFilterConfirmModal({
+  open,
+  apps,
+  icons,
+  resolving,
+  platform,
+  onClose,
+  onChangeApps,
+  onConfirm,
+  onAddMore,
+}: {
+  open: boolean;
+  apps: SelectionToolbarInstalledApp[];
+  icons: Record<string, string>;
+  resolving: boolean;
+  platform: AppPickerPlatform;
+  onClose: () => void;
+  onChangeApps: (apps: SelectionToolbarInstalledApp[]) => void;
+  onConfirm: () => void;
+  onAddMore: () => void;
+}) {
+  const { t } = useTranslation();
+  const { token } = theme.useToken();
+
+  return (
+    <Modal
+      destroyOnHidden
+      footer={[
+        <Button key="cancel" onClick={onClose}>{t('common.cancel')}</Button>,
+        <Button key="more" disabled={resolving} onClick={onAddMore}>
+          {t('settings.selectionToolbar.appFilterAddMore')}
+        </Button>,
+        <Button
+          key="ok"
+          disabled={apps.length === 0 || resolving}
+          type="primary"
+          onClick={onConfirm}
+        >
+          {t('settings.selectionToolbar.appFilterConfirm')}
+        </Button>,
+      ]}
+      open={open}
+      title={t('settings.selectionToolbar.appFilterConfirmTitle')}
+      width={520}
+      onCancel={onClose}
+    >
+      <div style={{ color: token.colorTextDescription, fontSize: 12, marginBottom: 12 }}>
+        {t(
+          platform === 'macos'
+            ? 'settings.selectionToolbar.appFilterPickHintMac'
+            : platform === 'windows'
+              ? 'settings.selectionToolbar.appFilterPickHintWin'
+              : platform === 'linux'
+                ? 'settings.selectionToolbar.appFilterPickHintLinux'
+                : 'settings.selectionToolbar.appFilterPickHint',
+        )}
+      </div>
+      {apps.length === 0 ? (
+        <Empty description={t('settings.selectionToolbar.appFilterConfirmEmpty')} />
+      ) : (
+        <div
+          style={{
+            border: `1px solid ${token.colorBorderSecondary}`,
+            borderRadius: token.borderRadius,
+            maxHeight: 360,
+            overflow: 'auto',
+          }}
+        >
+          {apps.map((app) => (
+            <div
+              key={app.id}
+              style={{
+                alignItems: 'center',
+                borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                display: 'flex',
+                gap: 10,
+                padding: '8px 10px',
+              }}
+            >
+              <AppIcon src={app.icon_data_url ?? icons[app.id]} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {app.name}
+                </div>
+                <div
+                  style={{
+                    color: token.colorTextDescription,
+                    fontSize: 12,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={app.id}
+                >
+                  {app.id}
+                </div>
+              </div>
+              <Tooltip title={t('settings.selectionToolbar.appFilterRemove')}>
+                <Button
+                  aria-label={t('settings.selectionToolbar.appFilterRemove')}
+                  danger
+                  icon={<Trash2 size={14} />}
+                  size="small"
+                  type="text"
+                  onClick={() => onChangeApps(apps.filter((item) => item.id !== app.id))}
+                />
+              </Tooltip>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
 }
 
 function SortableToolRow({
@@ -161,6 +430,7 @@ function ToolEditor({
   onSave: (tool: SelectionToolbarTool) => void;
 }) {
   const { t } = useTranslation();
+  const { token } = theme.useToken();
   const [draft, setDraft] = useState<SelectionToolbarTool | null>(tool);
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
 
@@ -234,8 +504,12 @@ function ToolEditor({
         value={draft.ai.prompt}
         onChange={(event) => setDraft({ ...draft, ai: { ...draft.ai, prompt: event.target.value } })}
       />
-      <div style={{ color: 'var(--text-color-secondary)', fontSize: 12, margin: '6px 0 16px' }}>
-        {t('settings.selectionToolbar.promptHint')}
+      <div style={{ color: token.colorTextDescription, fontSize: 12, margin: '6px 0 16px' }}>
+        {t(
+          draft.kind === 'builtin_ai' && draft.builtin_key === 'translate'
+            ? 'settings.selectionToolbar.promptHintTranslate'
+            : 'settings.selectionToolbar.promptHint',
+        )}
       </div>
       <ModelSelect
         modelType="Chat"
@@ -287,8 +561,91 @@ export function SelectionToolbarSettings() {
   const [editing, setEditing] = useState<SelectionToolbarTool | null>(null);
   const [manualPermissionPath, setManualPermissionPath] = useState<string | null>(null);
   const [permissionGuideOpen, setPermissionGuideOpen] = useState(false);
+  const [appConfirmOpen, setAppConfirmOpen] = useState(false);
+  const [pendingApps, setPendingApps] = useState<SelectionToolbarInstalledApp[]>([]);
+  const [appPickResolving, setAppPickResolving] = useState(false);
+  const [appIcons, setAppIcons] = useState<Record<string, string>>(
+    () => cachedAppIcons((settings.app_filter ?? []).map((entry) => entry.id)),
+  );
   const runtimeRefreshInFlight = useRef<Promise<SelectionToolbarRuntimeStatus> | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+
+  const appFilterMode: SelectionToolbarAppFilterMode = settings.app_filter_mode ?? 'off';
+  const appFilter: SelectionToolbarAppEntry[] = settings.app_filter ?? [];
+  const pickerPlatform: AppPickerPlatform = runtime?.platform ?? 'unsupported';
+
+  useEffect(() => {
+    if (appFilterMode === 'off' || appFilter.length === 0) return;
+    const ids = appFilter.map((entry) => entry.id);
+    void resolveAppIcons(ids)
+      .then((icons) => setAppIcons((current) => ({ ...current, ...icons })))
+      .catch(() => {
+        // Icons are decorative; ignore resolution failures.
+      });
+  }, [appFilter, appFilterMode]);
+
+  useEffect(() => {
+    if (!appConfirmOpen || pendingApps.length === 0) return;
+    const frame = window.requestAnimationFrame(() => {
+      void resolveAppIcons(pendingApps.map((app) => app.id))
+        .then((icons) => setAppIcons((current) => ({ ...current, ...icons })))
+        .catch(() => {
+          // Icons are decorative; keep the confirmation usable without them.
+        });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [appConfirmOpen, pendingApps]);
+
+  const pickAppsNative = useCallback(async (): Promise<SelectionToolbarInstalledApp[] | null> => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const defaults = appPickerDefaults(pickerPlatform);
+      const selected = await open({
+        multiple: true,
+        directory: false,
+        defaultPath: defaults.defaultPath,
+        filters: defaults.filters,
+        title: t('settings.selectionToolbar.appFilterNativeTitle'),
+      });
+      const paths = normalizeDialogPaths(selected);
+      if (paths.length === 0) return null;
+      setAppPickResolving(true);
+      try {
+        const resolved = await invoke<SelectionToolbarInstalledApp[]>(
+          'selection_toolbar_resolve_app_paths',
+          { paths },
+        );
+        if (resolved.length === 0) {
+          message.warning(t('settings.selectionToolbar.appFilterResolveEmpty'));
+          return [];
+        }
+        const icons = cacheInstalledAppIcons(resolved);
+        if (Object.keys(icons).length > 0) {
+          setAppIcons((current) => ({ ...current, ...icons }));
+        }
+        return resolved;
+      } finally {
+        setAppPickResolving(false);
+      }
+    } catch (error) {
+      message.error(String(error) || t('settings.selectionToolbar.appFilterPickFailed'));
+      return null;
+    }
+  }, [pickerPlatform, t]);
+
+  const startAddApps = useCallback(async () => {
+    const resolved = await pickAppsNative();
+    if (resolved === null) return;
+    if (resolved.length === 0) return;
+    setPendingApps(resolved);
+    setAppConfirmOpen(true);
+  }, [pickAppsNative]);
+
+  const addMorePendingApps = useCallback(async () => {
+    const resolved = await pickAppsNative();
+    if (resolved === null || resolved.length === 0) return;
+    setPendingApps((current) => mergeInstalledApps(current, resolved));
+  }, [pickAppsNative]);
 
   const reportRuntimeError = useCallback((error: unknown) => setRuntime({
     state: 'error',
@@ -476,10 +833,10 @@ export function SelectionToolbarSettings() {
         <div style={{ alignItems: 'center', display: 'flex', justifyContent: 'space-between', padding: '8px 0' }}>
           <div>
             <div>{t('settings.selectionToolbar.enabled')}</div>
-            <div style={{ color: 'var(--text-color-secondary)', fontSize: 12 }}>
+            <div style={{ color: token.colorTextDescription, fontSize: 12 }}>
               {t('settings.selectionToolbar.enabledHint')}
             </div>
-            <div style={{ color: 'var(--text-color-secondary)', fontSize: 12 }}>
+            <div style={{ color: token.colorTextDescription, fontSize: 12 }}>
               {t('settings.selectionToolbar.supportedAppsHint')}
             </div>
           </div>
@@ -502,7 +859,7 @@ export function SelectionToolbarSettings() {
         <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between', padding: '12px 0 4px' }}>
           <div style={{ minWidth: 0 }}>
             <div>{t('settings.selectionToolbar.translateTargetLanguage')}</div>
-            <div style={{ color: 'var(--text-color-secondary)', fontSize: 12 }}>
+            <div style={{ color: token.colorTextDescription, fontSize: 12 }}>
               {t('settings.selectionToolbar.translateTargetHint')}
             </div>
           </div>
@@ -537,6 +894,7 @@ export function SelectionToolbarSettings() {
           />
         </div>
       </SettingsGroup>
+
       <SettingsGroup title={t('settings.selectionToolbar.permissionGroupTitle')}>
         <div style={{ padding: '8px 0 4px' }}>
           <div style={{ alignItems: 'center', display: 'flex', justifyContent: 'space-between', gap: 12 }}>
@@ -690,6 +1048,139 @@ export function SelectionToolbarSettings() {
           </SortableContext>
         </DndContext>
       </SettingsGroup>
+
+      <SettingsGroup
+        extra={appFilterMode !== 'off' ? (
+          <Button
+            icon={<Plus size={14} />}
+            loading={appPickResolving && !appConfirmOpen}
+            size="small"
+            onClick={() => void startAddApps()}
+          >
+            {t('settings.selectionToolbar.appFilterAdd')}
+          </Button>
+        ) : undefined}
+        title={t('settings.selectionToolbar.appFilterTitle')}
+      >
+        <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between', padding: '8px 0' }}>
+          <div style={{ minWidth: 0 }}>
+            <div>{t('settings.selectionToolbar.appFilterMode')}</div>
+            <div style={{ color: token.colorTextDescription, fontSize: 12 }}>
+              {t(
+                appFilterMode === 'allowlist'
+                  ? 'settings.selectionToolbar.appFilterHintAllowlist'
+                  : appFilterMode === 'blocklist'
+                    ? 'settings.selectionToolbar.appFilterHintBlocklist'
+                    : 'settings.selectionToolbar.appFilterHintOff',
+              )}
+            </div>
+          </div>
+          <Select<SelectionToolbarAppFilterMode>
+            aria-label={t('settings.selectionToolbar.appFilterMode')}
+            options={[
+              { value: 'off', label: t('settings.selectionToolbar.appFilterModeOff') },
+              { value: 'allowlist', label: t('settings.selectionToolbar.appFilterModeAllowlist') },
+              { value: 'blocklist', label: t('settings.selectionToolbar.appFilterModeBlocklist') },
+            ]}
+            style={{ flex: '0 0 auto', width: 200 }}
+            value={appFilterMode}
+            onChange={(mode) => persist({
+              ...settings,
+              app_filter_mode: mode,
+              app_filter: settings.app_filter ?? [],
+            })}
+          />
+        </div>
+        {appFilterMode !== 'off' && (
+          <>
+            <Divider style={{ margin: 0 }} />
+            {appFilter.length === 0 ? (
+              <div style={{ color: token.colorTextDescription, fontSize: 12, padding: '12px 0' }}>
+                {t('settings.selectionToolbar.appFilterEmpty')}
+                {appFilterMode === 'allowlist' && (
+                  <div style={{ color: token.colorWarning, marginTop: 4 }}>
+                    {t('settings.selectionToolbar.appFilterHintAllowlist')}
+                  </div>
+                )}
+              </div>
+            ) : (
+              appFilter.map((entry, index) => (
+                <div key={entry.id}>
+                  {index > 0 && <Divider style={{ margin: 0 }} />}
+                  <div
+                    style={{
+                      alignItems: 'center',
+                      display: 'flex',
+                      gap: 10,
+                      padding: '10px 4px',
+                    }}
+                  >
+                    <AppIcon src={appIcons[entry.id] ?? null} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {entry.name}
+                      </div>
+                      <div
+                        style={{
+                          color: token.colorTextDescription,
+                          fontSize: 12,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                        title={entry.id}
+                      >
+                        {entry.id}
+                      </div>
+                    </div>
+                    <Tooltip title={t('settings.selectionToolbar.appFilterRemove')}>
+                      <Button
+                        aria-label={t('settings.selectionToolbar.appFilterRemove')}
+                        danger
+                        icon={<Trash2 size={14} />}
+                        size="small"
+                        type="text"
+                        onClick={() => persist({
+                          ...settings,
+                          app_filter_mode: appFilterMode,
+                          app_filter: appFilter.filter((item) => item.id !== entry.id),
+                        })}
+                      />
+                    </Tooltip>
+                  </div>
+                </div>
+              ))
+            )}
+          </>
+        )}
+      </SettingsGroup>
+      <AppFilterConfirmModal
+        apps={pendingApps}
+        icons={appIcons}
+        open={appConfirmOpen}
+        platform={pickerPlatform}
+        resolving={appPickResolving}
+        onAddMore={() => void addMorePendingApps()}
+        onChangeApps={setPendingApps}
+        onClose={() => {
+          setAppConfirmOpen(false);
+          setPendingApps([]);
+        }}
+        onConfirm={() => {
+          const merged = new Map(appFilter.map((entry) => [entry.id, entry]));
+          for (const app of pendingApps) {
+            merged.set(app.id, { id: app.id, name: app.name });
+          }
+          void persist({
+            ...settings,
+            app_filter_mode: appFilterMode,
+            app_filter: [...merged.values()],
+          });
+          setAppConfirmOpen(false);
+          setPendingApps([]);
+        }}
+      />
+
       <ToolEditor tool={editing} onClose={() => setEditing(null)} onSave={saveEditor} />
     </div>
   );

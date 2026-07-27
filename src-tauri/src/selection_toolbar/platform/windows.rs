@@ -12,8 +12,13 @@ use uiautomation::{
     UIAutomation, UIElement,
 };
 use windows::Win32::{
-    Foundation::{LPARAM, LRESULT, WPARAM},
-    System::{Threading::GetCurrentThreadId, Variant::VT_R8},
+    Foundation::{CloseHandle, HANDLE, LPARAM, LRESULT, WPARAM},
+    System::{
+        Threading::{
+            GetCurrentThreadId, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        },
+        Variant::VT_R8,
+    },
     UI::{
         Input::KeyboardAndMouse::VK_ESCAPE,
         WindowsAndMessaging::{
@@ -23,6 +28,7 @@ use windows::Win32::{
         },
     },
 };
+use windows::core::PWSTR;
 
 use super::{DismissReason, PlatformEvent, PlatformMonitorHandle, PlatformStartError};
 use crate::selection_toolbar::{
@@ -273,15 +279,45 @@ fn read_selection(element: &UIElement) -> uiautomation::Result<Option<SelectionO
         .map(|part| part.to_string())
         .collect::<Vec<_>>()
         .join(".");
+    let source_app = process_image_basename(process_id)
+        .unwrap_or_else(|| format!("process:{process_id}"));
 
     Ok(Some(SelectionObservation {
         text,
-        source_app: format!("process:{process_id}"),
+        source_app,
         source_window,
         range_signature: runtime_id,
         anchor,
         anchor_kind: SelectionAnchorKind::SelectionRect,
     }))
+}
+
+/// Stable filter key for Windows: lower-case executable basename (e.g. `notepad.exe`).
+fn process_image_basename(process_id: u32) -> Option<String> {
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id).ok()?;
+        let path = process_image_path(handle);
+        let _ = CloseHandle(handle);
+        let path = path?;
+        std::path::Path::new(&path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_ascii_lowercase())
+    }
+}
+
+fn process_image_path(handle: HANDLE) -> Option<String> {
+    use windows::Win32::System::Threading::QueryFullProcessImageNameW;
+    unsafe {
+        let mut buffer = vec![0u16; 1024];
+        let mut size = buffer.len() as u32;
+        QueryFullProcessImageNameW(handle, Default::default(), PWSTR(buffer.as_mut_ptr()), &mut size)
+            .ok()?;
+        if size == 0 {
+            return None;
+        }
+        Some(String::from_utf16_lossy(&buffer[..size as usize]))
+    }
 }
 
 fn first_bounding_rect(range: &UITextRange) -> uiautomation::Result<Option<ScreenRect>> {
