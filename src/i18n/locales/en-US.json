@@ -811,6 +811,14 @@
       "Reasoning": "Reasoning",
       "RealtimeVoice": "Realtime Voice"
     },
+    "capabilityCount": "{{count}} capabilities",
+    "capabilityDesc": {
+      "TextChat": "Supports text chat",
+      "Vision": "Supports image understanding and multimodal input",
+      "FunctionCalling": "Supports tool / function calling",
+      "Reasoning": "Supports reasoning / chain-of-thought",
+      "RealtimeVoice": "Supports realtime voice interaction"
+    },
     "modelType": {
       "title": "Model Type",
       "Chat": "Chat",

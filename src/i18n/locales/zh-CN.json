@@ -811,6 +811,14 @@
       "Reasoning": "推理",
       "RealtimeVoice": "实时语音"
     },
+    "capabilityCount": "{{count}}个能力",
+    "capabilityDesc": {
+      "TextChat": "支持文本对话",
+      "Vision": "支持图像理解与多模态输入",
+      "FunctionCalling": "支持工具/函数调用",
+      "Reasoning": "支持推理/思考链",
+      "RealtimeVoice": "支持实时语音交互"
+    },
     "modelType": {
       "title": "模型类型",
       "Chat": "对话",

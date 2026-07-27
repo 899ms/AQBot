@@ -6,6 +6,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Popover,
   Segmented,
   Space,
   Tag,
@@ -13,13 +14,26 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { ChevronDown, ChevronRight, ListChecks, Maximize2, Minimize2, Search } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  Eye,
+  Lightbulb,
+  ListChecks,
+  Maximize2,
+  MessageSquare,
+  Mic,
+  Minimize2,
+  Search,
+  Wrench,
+} from 'lucide-react';
 import { ModelIcon } from '@lobehub/icons';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import type {
   Model,
+  ModelCapability,
   ModelCatalogStatus,
   ModelSyncCandidate,
   ModelSyncStatus,
@@ -32,6 +46,76 @@ import {
 import { ModelCatalogStatusBar } from './ModelCatalogStatusBar';
 
 const { Text } = Typography;
+
+const KNOWN_CAPABILITIES = new Set<ModelCapability>([
+  'TextChat',
+  'Vision',
+  'FunctionCalling',
+  'Reasoning',
+  'RealtimeVoice',
+]);
+
+const CAPABILITY_ICONS: Record<ModelCapability, ReactNode> = {
+  TextChat: <MessageSquare size={14} />,
+  Vision: <Eye size={14} />,
+  FunctionCalling: <Wrench size={14} />,
+  Reasoning: <Lightbulb size={14} />,
+  RealtimeVoice: <Mic size={14} />,
+};
+
+function isModelCapability(value: unknown): value is ModelCapability {
+  return typeof value === 'string' && KNOWN_CAPABILITIES.has(value as ModelCapability);
+}
+
+function CapabilitiesSummaryTag({ capabilities }: { capabilities: ModelCapability[] }) {
+  const { t } = useTranslation();
+  if (capabilities.length === 0) return null;
+
+  const label = t('settings.capabilityCount', { count: capabilities.length });
+  const content = (
+    <div
+      style={{ maxWidth: 280 }}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {capabilities.map((cap) => {
+          const desc = t(`settings.capabilityDesc.${cap}`, '');
+          return (
+            <div key={cap} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
+              {isModelCapability(cap) ? (
+                <span style={{ marginTop: 2, flexShrink: 0 }}>{CAPABILITY_ICONS[cap]}</span>
+              ) : null}
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 13 }}>
+                  {t(`settings.capability.${cap}`, cap)}
+                </div>
+                {desc ? (
+                  <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
+                    {desc}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  return (
+    <Popover content={content} trigger="hover" placement="topLeft">
+      <Tag
+        bordered={false}
+        aria-label={label}
+        style={{ fontSize: 11, lineHeight: '18px', padding: '0 6px', margin: 0, cursor: 'default' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {label}
+      </Tag>
+    </Popover>
+  );
+}
 
 export interface ModelSyncEntry extends ModelSyncCandidate {
   model: Model;
@@ -262,14 +346,6 @@ export function ModelSyncPickerModal({
       setApplying(false);
     }
   }, [finalModels, onApply, onCancel]);
-
-  const formatChangeValue = (value: unknown): string => {
-    if (value == null) return '—';
-    if (Array.isArray(value)) return value.length > 0 ? value.map(String).join(', ') : '—';
-    if (typeof value === 'boolean') return t(value ? 'common.enabled' : 'common.disabled');
-    if (typeof value === 'object') return JSON.stringify(value);
-    return String(value);
-  };
 
   const selectableFiltered = groups.filtered.filter(({ status }) => status !== 'unsupported');
   const allFilteredChecked = selectableFiltered.length > 0
@@ -593,30 +669,8 @@ export function ModelSyncPickerModal({
                             </Tag>
                           </Tooltip>
                         )}
+                        <CapabilitiesSummaryTag capabilities={m.capabilities ?? []} />
                       </div>
-                      {item.changes.length > 0 && (
-                        <Tooltip
-                          title={
-                            <div>
-                              {item.changes.map((change) => (
-                                <div key={change.field}>
-                                  {t(`settings.metadataSyncField.${change.field}`, change.field)}
-                                  {': '}
-                                  {formatChangeValue(change.previous)}
-                                  {' → '}
-                                  {formatChangeValue(change.proposed)}
-                                </div>
-                              ))}
-                            </div>
-                          }
-                        >
-                          <Text type="secondary" style={{ fontSize: 11 }}>
-                            {item.changes
-                              .map((change) => t(`settings.metadataSyncField.${change.field}`, change.field))
-                              .join(' · ')}
-                          </Text>
-                        </Tooltip>
-                      )}
                       {item.unsupported_reason && (
                         <Text type="danger" style={{ fontSize: 11 }}>
                           {item.unsupported_reason}

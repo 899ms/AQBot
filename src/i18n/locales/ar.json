@@ -777,6 +777,14 @@
       "Reasoning": "التفكير المنطقي",
       "RealtimeVoice": "صوت في الوقت الفعلي"
     },
+    "capabilityCount": "{{count}} قدرات",
+    "capabilityDesc": {
+      "TextChat": "يدعم المحادثة النصية",
+      "Vision": "يدعم فهم الصور والإدخال متعدد الوسائط",
+      "FunctionCalling": "يدعم استدعاء الأدوات/الوظائف",
+      "Reasoning": "يدعم التفكير المنطقي / سلسلة التفكير",
+      "RealtimeVoice": "يدعم التفاعل الصوتي في الوقت الفعلي"
+    },
     "modelType": {
       "title": "نوع النموذج",
       "Chat": "محادثة",

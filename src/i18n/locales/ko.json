@@ -777,6 +777,14 @@
       "Reasoning": "추론",
       "RealtimeVoice": "실시간 음성"
     },
+    "capabilityCount": "능력 {{count}}개",
+    "capabilityDesc": {
+      "TextChat": "텍스트 채팅 지원",
+      "Vision": "이미지 이해 및 멀티모달 입력 지원",
+      "FunctionCalling": "도구/함수 호출 지원",
+      "Reasoning": "추론/사고 체인 지원",
+      "RealtimeVoice": "실시간 음성 상호작용 지원"
+    },
     "modelType": {
       "title": "모델 유형",
       "Chat": "채팅",

@@ -788,6 +788,14 @@
       "Reasoning": "推理",
       "RealtimeVoice": "即時語音"
     },
+    "capabilityCount": "{{count}}個能力",
+    "capabilityDesc": {
+      "TextChat": "支援文字對話",
+      "Vision": "支援圖像理解與多模態輸入",
+      "FunctionCalling": "支援工具/函式呼叫",
+      "Reasoning": "支援推理/思考鏈",
+      "RealtimeVoice": "支援即時語音互動"
+    },
     "modelType": {
       "title": "模型類型",
       "Chat": "對話",

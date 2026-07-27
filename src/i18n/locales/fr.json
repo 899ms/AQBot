@@ -777,6 +777,14 @@
       "Reasoning": "Raisonnement",
       "RealtimeVoice": "Voix en temps réel"
     },
+    "capabilityCount": "{{count}} capacités",
+    "capabilityDesc": {
+      "TextChat": "Prend en charge le chat textuel",
+      "Vision": "Prend en charge la compréhension d'images et l'entrée multimodale",
+      "FunctionCalling": "Prend en charge l'appel d'outils / de fonctions",
+      "Reasoning": "Prend en charge le raisonnement / la chaîne de pensée",
+      "RealtimeVoice": "Prend en charge l'interaction vocale en temps réel"
+    },
     "modelType": {
       "title": "Type de modèle",
       "Chat": "Chat",

@@ -255,6 +255,69 @@ describe('ModelSyncPickerModal', () => {
     expect(within(groupHeader as HTMLElement).getByText('2/2')).toBeInTheDocument();
   });
 
+  it('shows a single capability summary tag instead of individual capability tags', () => {
+    const multiCap = {
+      ...makeModel('multi-cap'),
+      capabilities: ['TextChat', 'Vision', 'Reasoning'] as Model['capabilities'],
+    };
+    const noCap = {
+      ...makeModel('no-cap'),
+      capabilities: [] as Model['capabilities'],
+    };
+    render(
+      <ModelSyncPickerModal
+        open
+        entries={[makeEntry(multiCap, 'synced'), makeEntry(noCap, 'remote-only')]}
+        catalog={null}
+        localModels={[multiCap]}
+        onCancel={() => {}}
+        onApply={() => {}}
+      />,
+    );
+
+    // Mock t returns the key when no string fallback is provided
+    expect(screen.getByLabelText('settings.capabilityCount')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('settings.capabilityCount')).toHaveLength(1);
+    // Individual capability enum labels must not appear as list tags
+    expect(screen.queryByText('TextChat')).not.toBeInTheDocument();
+    expect(screen.queryByText('Vision')).not.toBeInTheDocument();
+    expect(screen.queryByText('Reasoning')).not.toBeInTheDocument();
+  });
+
+  it('does not render metadata change summaries under model rows', () => {
+    const model = makeModel('meta-change');
+    render(
+      <ModelSyncPickerModal
+        open
+        entries={[
+          makeEntry(model, 'synced', [
+            {
+              field: 'model_type',
+              previous: 'Chat',
+              proposed: 'Embedding',
+              source: 'catalog',
+            },
+            {
+              field: 'capabilities',
+              previous: ['TextChat'],
+              proposed: ['TextChat', 'Vision'],
+              source: 'catalog',
+            },
+          ]),
+        ]}
+        catalog={null}
+        localModels={[model]}
+        onCancel={() => {}}
+        onApply={() => {}}
+      />,
+    );
+
+    expect(screen.queryByText('settings.metadataSyncField.model_type')).not.toBeInTheDocument();
+    expect(screen.queryByText('settings.metadataSyncField.capabilities')).not.toBeInTheDocument();
+    expect(screen.queryByText('model_type')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Chat.*Embedding|Embedding/)).not.toBeInTheDocument();
+  });
+
   it('keeps unsupported local models when applying without them selected', async () => {
     const unsupportedLocal = makeModel('unsupported-model');
     const supported = makeModel('supported-model');
