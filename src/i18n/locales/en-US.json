@@ -572,6 +572,8 @@
     "chatLineHeight": "Chat Line Height",
     "chatFontFamily": "Chat Font",
     "chatFontWeight": "Chat Font Weight",
+    "chatInput": "Chat Input",
+    "chatInputActionsScale": "Bottom Action Area Scale",
     "fontDefault": "System Default",
     "borderRadius": "Border Radius",
     "primaryColor": "Primary Color",

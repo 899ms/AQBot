@@ -572,6 +572,8 @@
     "chatLineHeight": "Altura de línea del chat",
     "chatFontFamily": "Fuente del chat",
     "chatFontWeight": "Peso de fuente del chat",
+    "chatInput": "Cuadro de entrada",
+    "chatInputActionsScale": "Escala de la barra de acciones inferior",
     "fontDefault": "Sistema predeterminado",
     "borderRadius": "Radio del borde",
     "primaryColor": "Color primario",

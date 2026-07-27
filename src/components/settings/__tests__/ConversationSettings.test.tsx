@@ -18,6 +18,8 @@ vi.mock('react-i18next', () => ({
         'settings.chatFontFamily': '对话字体',
         'settings.chatFontSize': '对话字号',
         'settings.chatFontWeight': '对话字重',
+        'settings.chatInput': '输入框',
+        'settings.chatInputActionsScale': '底部操作区缩放',
         'settings.chatMessageAreaStyle': '消息区域背景边框',
         'settings.chatMessageAreaStyleDesc': '分别控制用户消息和 AI 消息的背景色或边框。',
         'settings.messageAreaStyleNone': '关闭',
@@ -145,16 +147,25 @@ vi.mock('antd', () => {
       value,
       onChange,
       disabled,
+      min,
+      max,
+      step,
       'aria-label': ariaLabel,
     }: {
       value?: number;
       onChange?: (value: number | null) => void;
       disabled?: boolean;
+      min?: number;
+      max?: number;
+      step?: number;
       'aria-label'?: string;
     }) => (
       <input
         aria-label={ariaLabel}
         disabled={disabled}
+        min={min}
+        max={max}
+        step={step}
         type="number"
         value={value ?? ''}
         onChange={(event) => onChange?.(event.target.value === '' ? null : Number(event.target.value))}
@@ -252,6 +263,7 @@ describe('ConversationSettings', () => {
       chat_line_height: 1.7,
       chat_font_family: '',
       chat_font_weight: 400,
+      chat_input_actions_scale: 100,
       chat_user_message_area_style: 'none',
       chat_user_message_area_light_color: 'rgba(0, 0, 0, 0)',
       chat_user_message_area_dark_color: 'rgba(0, 0, 0, 0)',
@@ -293,6 +305,28 @@ describe('ConversationSettings', () => {
     expect(within(messageStyleGroup as HTMLElement).getByText('对话字体')).toBeInTheDocument();
     expect(within(messageStyleGroup as HTMLElement).getByText('对话字重')).toBeInTheDocument();
     expect(within(messageStyleGroup as HTMLElement).getByText('代码字体')).toBeInTheDocument();
+  });
+
+  it('saves a normalized chat input actions scale', () => {
+    render(<ConversationSettings />);
+
+    const input = screen.getByLabelText('底部操作区缩放');
+    expect(input).toHaveValue(100);
+    expect(input).toHaveAttribute('min', '50');
+    expect(input).toHaveAttribute('max', '150');
+    expect(input).toHaveAttribute('step', '10');
+
+    fireEvent.change(input, { target: { value: '44' } });
+    expect(mocks.saveSettings).toHaveBeenLastCalledWith({ chat_input_actions_scale: 50 });
+
+    fireEvent.change(input, { target: { value: '137' } });
+    expect(mocks.saveSettings).toHaveBeenLastCalledWith({ chat_input_actions_scale: 140 });
+
+    fireEvent.change(input, { target: { value: '160' } });
+    expect(mocks.saveSettings).toHaveBeenLastCalledWith({ chat_input_actions_scale: 150 });
+
+    fireEvent.change(input, { target: { value: '' } });
+    expect(mocks.saveSettings).toHaveBeenLastCalledWith({ chat_input_actions_scale: 100 });
   });
 
   it('saves separate user and ai message area style settings', () => {

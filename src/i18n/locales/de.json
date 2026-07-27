@@ -572,6 +572,8 @@
     "chatLineHeight": "Chat-Zeilenhöhe",
     "chatFontFamily": "Chat-Schriftart",
     "chatFontWeight": "Chat-Schriftstärke",
+    "chatInput": "Chat-Eingabe",
+    "chatInputActionsScale": "Skalierung der unteren Aktionsleiste",
     "fontDefault": "Systemstandard",
     "borderRadius": "Eckenradius",
     "primaryColor": "Primärfarbe",

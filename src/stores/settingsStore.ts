@@ -3,8 +3,10 @@ import { invoke } from '@/lib/invoke';
 import {
   DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT,
   DEFAULT_AGENT_WORKSPACE_NAME_STRATEGY,
+  DEFAULT_CHAT_INPUT_ACTIONS_SCALE,
   DEFAULT_MCP_TOOL_LOOP_MAX_ITERATIONS,
   createDefaultSelectionToolbarSettings,
+  normalizeChatInputActionsScale,
   type AppSettings,
 } from '@/types';
 import { DEFAULT_SHORTCUT_BINDINGS } from '@/lib/shortcuts';
@@ -34,6 +36,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   chat_line_height: 1.7,
   chat_font_family: '',
   chat_font_weight: 400,
+  chat_input_actions_scale: DEFAULT_CHAT_INPUT_ACTIONS_SCALE,
   bubble_style: 'minimal',
   chat_user_message_area_style: 'none',
   chat_user_message_area_light_color: 'rgba(0, 0, 0, 0)',
@@ -230,6 +233,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             settings: {
               ...DEFAULT_SETTINGS,
               ...fetched,
+              chat_input_actions_scale: normalizeChatInputActionsScale(
+                fetched.chat_input_actions_scale,
+              ),
               selection_toolbar: {
                 ...DEFAULT_SETTINGS.selection_toolbar,
                 ...fetched.selection_toolbar,
@@ -286,11 +292,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   saveSettings: async (partial) => {
     if (!get()._loaded) {
-      console.warn('[settingsStore] saveSettings skipped: settings not loaded yet');
-      return;
+      await get().ensureSettingsLoaded();
+      if (get().settingsMeta.status !== 'ready') {
+        console.error('[settingsStore] saveSettings failed: settings could not be loaded');
+        return;
+      }
     }
     const previous = get().settings;
-    const merged = { ...previous, ...partial };
+    const merged = {
+      ...previous,
+      ...partial,
+      chat_input_actions_scale: normalizeChatInputActionsScale(
+        partial.chat_input_actions_scale ?? previous.chat_input_actions_scale,
+      ),
+    };
     set((state) => ({
       settings: merged,
       error: null,

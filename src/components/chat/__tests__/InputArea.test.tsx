@@ -89,6 +89,7 @@ const settingsState: { settings: Partial<AppSettings> } = {
     default_provider_id: null,
     default_model_id: null,
     document_attachment_reading_enabled: false,
+    chat_input_actions_scale: 100,
   },
 };
 
@@ -204,6 +205,7 @@ describe('InputArea', () => {
     conversationState.streaming = false;
     getContextUsage.mockResolvedValue(null);
     settingsState.settings.document_attachment_reading_enabled = false;
+    settingsState.settings.chat_input_actions_scale = 100;
   });
 
   const waitForNextFrame = () =>
@@ -268,6 +270,49 @@ describe('InputArea', () => {
     await waitForNextFrame();
 
     expect(document.activeElement).toBe(textarea);
+  });
+
+  it('scales all four bottom action groups without scaling the textarea', () => {
+    const view = render(
+      <App>
+        <InputArea />
+      </App>,
+    );
+
+    const actionGroupIds = [
+      'input-actions-primary',
+      'input-actions-send',
+      'input-actions-mode',
+      'input-actions-status',
+    ];
+    const expectActionScale = (expected: string) => {
+      for (const testId of actionGroupIds) {
+        expect(screen.getByTestId(testId).style.getPropertyValue('zoom')).toBe(expected);
+      }
+    };
+
+    expectActionScale('1');
+    expect(
+      (screen.getByPlaceholderText('chat.inputPlaceholder') as HTMLElement)
+        .style
+        .getPropertyValue('zoom'),
+    ).toBe('');
+
+    settingsState.settings.chat_input_actions_scale = 50;
+    view.rerender(
+      <App>
+        <InputArea />
+      </App>,
+    );
+    expectActionScale('0.5');
+
+    settingsState.settings.chat_input_actions_scale = 150;
+    view.rerender(
+      <App>
+        <InputArea />
+      </App>,
+    );
+    expectActionScale('1.5');
   });
 
   it('does not steal focus from another focused input when the window regains focus', async () => {

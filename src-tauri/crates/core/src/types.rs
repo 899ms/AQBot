@@ -1310,6 +1310,8 @@ pub struct AppSettings {
     pub chat_font_family: String,
     /// Chat message content font weight.
     pub chat_font_weight: u16,
+    /// Chat input bottom action controls scale percentage.
+    pub chat_input_actions_scale: u8,
     pub bubble_style: String,
     /// User message area style: "none" | "background" | "border".
     pub chat_user_message_area_style: String,
@@ -1469,6 +1471,7 @@ impl Default for AppSettings {
             chat_line_height: 1.7,
             chat_font_family: String::new(),
             chat_font_weight: 400,
+            chat_input_actions_scale: 100,
             bubble_style: "minimal".to_string(),
             chat_user_message_area_style: "none".to_string(),
             chat_user_message_area_light_color: "rgba(0, 0, 0, 0)".to_string(),
@@ -2012,6 +2015,23 @@ mod app_settings_tests {
             "rgba(255, 255, 255, 0.06)"
         );
         assert_eq!(settings.chat_ai_message_area_border_width, 1);
+    }
+
+    #[test]
+    fn chat_input_actions_scale_defaults_and_roundtrips() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.chat_input_actions_scale, 100);
+
+        let missing: AppSettings =
+            serde_json::from_value(json!({})).expect("settings should default missing fields");
+        assert_eq!(missing.chat_input_actions_scale, 100);
+
+        let mut customized = AppSettings::default();
+        customized.chat_input_actions_scale = 150;
+        let serialized = serde_json::to_value(customized).expect("settings should serialize");
+        let roundtrip: AppSettings =
+            serde_json::from_value(serialized).expect("settings should deserialize");
+        assert_eq!(roundtrip.chat_input_actions_scale, 150);
     }
 
     #[test]

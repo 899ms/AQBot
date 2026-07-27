@@ -572,6 +572,8 @@
     "chatLineHeight": "ارتفاع سطر المحادثة",
     "chatFontFamily": "خط المحادثة",
     "chatFontWeight": "سماكة خط المحادثة",
+    "chatInput": "إدخال المحادثة",
+    "chatInputActionsScale": "مقياس شريط الإجراءات السفلي",
     "fontDefault": "افتراضي النظام",
     "borderRadius": "نصف قطر الحواف",
     "primaryColor": "اللون الأساسي",

@@ -24,7 +24,13 @@ import { ConversationSettingsModal } from './ConversationSettingsModal';
 import { ModelSelector } from './ModelSelector';
 import { SearchProviderTypeIcon, PROVIDER_TYPE_LABELS } from '@/components/shared/SearchProviderIcon';
 import { ModelIcon } from '@lobehub/icons';
-import type { AttachmentInput, ProviderType, RealtimeConfig } from '@/types';
+import {
+  DEFAULT_CHAT_INPUT_ACTIONS_SCALE,
+  normalizeChatInputActionsScale,
+  type AttachmentInput,
+  type ProviderType,
+  type RealtimeConfig,
+} from '@/types';
 import { invoke } from '@/lib/invoke';
 import { usePageSuspendCleanup } from '@/components/layout/PageLifecycle';
 
@@ -148,6 +154,9 @@ export function InputArea() {
   const conversations = useConversationStore((s) => s.conversations);
   const providers = useProviderStore((s) => s.providers);
   const settings = useSettingsStore((s) => s.settings);
+  const inputActionsScale = normalizeChatInputActionsScale(
+    settings.chat_input_actions_scale ?? DEFAULT_CHAT_INPUT_ACTIONS_SCALE,
+  ) / 100;
 
   const shortcutHint = useCallback((label: string, action: ShortcutAction) => {
     if (!settings) return label;
@@ -1452,8 +1461,12 @@ export function InputArea() {
         />
 
         {/* Bottom action bar */}
-        <div className="flex items-center justify-between px-2 pb-2">
-          <div className="flex items-center gap-0.5">
+        <div className="flex flex-wrap items-center justify-between gap-1 px-2 pb-2">
+          <div
+            data-testid="input-actions-primary"
+            className="flex flex-wrap items-center gap-0.5"
+            style={{ zoom: inputActionsScale }}
+          >
             {searchEnabled ? (
               <Tooltip title={t('chat.search.title')}>
                 <Button
@@ -1682,7 +1695,11 @@ export function InputArea() {
               </Tooltip>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div
+            data-testid="input-actions-send"
+            className="flex items-center gap-2 ml-auto"
+            style={{ zoom: inputActionsScale }}
+          >
             {streaming ? (
               <Button
                 shape="circle"
@@ -1706,8 +1723,12 @@ export function InputArea() {
       </div>
 
       {/* Mode controls bar — below input container */}
-      <div className="flex items-center justify-between px-1 pt-1">
-        <div className="flex items-center gap-1">
+      <div className="flex flex-wrap items-center justify-between gap-y-1 px-1 pt-1">
+        <div
+          data-testid="input-actions-mode"
+          className="flex flex-wrap items-center gap-1"
+          style={{ zoom: inputActionsScale }}
+        >
           <Dropdown
             menu={{
               items: [
@@ -1770,7 +1791,11 @@ export function InputArea() {
             </Tooltip>
           )}
         </div>
-        <div className="flex items-center gap-2 ml-auto">
+        <div
+          data-testid="input-actions-status"
+          className="flex items-center gap-2 ml-auto"
+          style={{ zoom: inputActionsScale }}
+        >
           {currentMode === 'agent' && (
             <Dropdown
               menu={{

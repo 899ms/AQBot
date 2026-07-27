@@ -586,6 +586,26 @@ export interface GatewaySettings {
 export const DEFAULT_MCP_TOOL_LOOP_MAX_ITERATIONS = 100;
 export const DEFAULT_AGENT_WORKSPACE_NAME_STRATEGY = 'uuid';
 export const DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT = 'YYYY-MM-DD-HH-mm-ss';
+export const CHAT_INPUT_ACTIONS_SCALE_MIN = 50;
+export const CHAT_INPUT_ACTIONS_SCALE_MAX = 150;
+export const CHAT_INPUT_ACTIONS_SCALE_STEP = 10;
+export const DEFAULT_CHAT_INPUT_ACTIONS_SCALE = 100;
+
+export function normalizeChatInputActionsScale(
+  value: number | string | null | undefined,
+): number {
+  const numericValue = typeof value === 'number'
+    ? value
+    : Number(value ?? DEFAULT_CHAT_INPUT_ACTIONS_SCALE);
+  if (!Number.isFinite(numericValue)) return DEFAULT_CHAT_INPUT_ACTIONS_SCALE;
+  const steppedValue = Math.round(numericValue / CHAT_INPUT_ACTIONS_SCALE_STEP)
+    * CHAT_INPUT_ACTIONS_SCALE_STEP;
+  return Math.min(
+    CHAT_INPUT_ACTIONS_SCALE_MAX,
+    Math.max(CHAT_INPUT_ACTIONS_SCALE_MIN, steppedValue),
+  );
+}
+
 export type AgentWorkspaceNameStrategy =
   | 'uuid'
   | 'conversation_id'
@@ -609,6 +629,7 @@ export interface AppSettings {
   chat_line_height: number;
   chat_font_family: string;
   chat_font_weight: number;
+  chat_input_actions_scale: number;
   bubble_style: string;
   chat_user_message_area_style: ChatMessageAreaStyle;
   chat_user_message_area_light_color: string;

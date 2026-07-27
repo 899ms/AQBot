@@ -572,6 +572,8 @@
     "chatLineHeight": "대화 줄 높이",
     "chatFontFamily": "대화 글꼴",
     "chatFontWeight": "대화 글꼴 굵기",
+    "chatInput": "입력창",
+    "chatInputActionsScale": "하단 작업 영역 배율",
     "fontDefault": "시스템 기본값",
     "borderRadius": "모서리 반경",
     "primaryColor": "주색",

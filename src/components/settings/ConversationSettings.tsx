@@ -4,9 +4,14 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSettingsStore } from '@/stores';
 import {
+  CHAT_INPUT_ACTIONS_SCALE_MAX,
+  CHAT_INPUT_ACTIONS_SCALE_MIN,
+  CHAT_INPUT_ACTIONS_SCALE_STEP,
   DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT,
   DEFAULT_AGENT_WORKSPACE_NAME_STRATEGY,
+  DEFAULT_CHAT_INPUT_ACTIONS_SCALE,
   DEFAULT_MCP_TOOL_LOOP_MAX_ITERATIONS,
+  normalizeChatInputActionsScale,
   type AgentWorkspaceNameStrategy,
   type ChatMessageAreaStyle,
 } from '@/types';
@@ -172,6 +177,26 @@ export function ConversationSettings() {
           placeholder={t('settings.defaultSystemPromptPlaceholder')}
           autoSize={{ minRows: 3, maxRows: 10 }}
         />
+      </SettingsGroup>
+
+      <SettingsGroup title={t('settings.chatInput')}>
+        <div className="flex items-center justify-between" style={rowStyle}>
+          <span>{t('settings.chatInputActionsScale')}</span>
+          <InputNumber
+            aria-label={t('settings.chatInputActionsScale')}
+            min={CHAT_INPUT_ACTIONS_SCALE_MIN}
+            max={CHAT_INPUT_ACTIONS_SCALE_MAX}
+            step={CHAT_INPUT_ACTIONS_SCALE_STEP}
+            value={normalizeChatInputActionsScale(
+              settings.chat_input_actions_scale ?? DEFAULT_CHAT_INPUT_ACTIONS_SCALE,
+            )}
+            onChange={(value) => saveSettings({
+              chat_input_actions_scale: normalizeChatInputActionsScale(value),
+            })}
+            addonAfter="%"
+            style={{ width: 120 }}
+          />
+        </div>
       </SettingsGroup>
 
       <SettingsGroup title={t('settings.groupMessageStyle')}>

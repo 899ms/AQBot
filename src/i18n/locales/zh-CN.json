@@ -572,6 +572,8 @@
     "chatLineHeight": "对话行高",
     "chatFontFamily": "对话字体",
     "chatFontWeight": "对话字重",
+    "chatInput": "输入框",
+    "chatInputActionsScale": "底部操作区缩放",
     "fontDefault": "系统默认",
     "borderRadius": "圆角大小",
     "primaryColor": "主题色",

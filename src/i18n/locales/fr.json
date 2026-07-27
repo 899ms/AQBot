@@ -572,6 +572,8 @@
     "chatLineHeight": "Hauteur de ligne du chat",
     "chatFontFamily": "Police du chat",
     "chatFontWeight": "Graisse de police du chat",
+    "chatInput": "Zone de saisie",
+    "chatInputActionsScale": "Échelle de la barre d’actions inférieure",
     "fontDefault": "Défaut du système",
     "borderRadius": "Rayon de bordure",
     "primaryColor": "Couleur principale",

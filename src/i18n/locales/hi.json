@@ -572,6 +572,8 @@
     "chatLineHeight": "चैट लाइन ऊँचाई",
     "chatFontFamily": "चैट फ़ॉन्ट",
     "chatFontWeight": "चैट फ़ॉन्ट वेट",
+    "chatInput": "चैट इनपुट",
+    "chatInputActionsScale": "निचले एक्शन क्षेत्र का स्केल",
     "fontDefault": "सिस्टम डिफ़ॉल्ट",
     "borderRadius": "बॉर्डर त्रिज्या",
     "primaryColor": "प्राथमिक रंग",

@@ -572,6 +572,8 @@
     "chatLineHeight": "チャット行間",
     "chatFontFamily": "チャットフォント",
     "chatFontWeight": "チャットフォントウェイト",
+    "chatInput": "入力欄",
+    "chatInputActionsScale": "下部アクション領域の拡大率",
     "fontDefault": "システムデフォルト",
     "borderRadius": "角丸",
     "primaryColor": "プライマリカラー",

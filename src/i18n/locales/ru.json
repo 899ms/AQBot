@@ -572,6 +572,8 @@
     "chatLineHeight": "Высота строки чата",
     "chatFontFamily": "Шрифт чата",
     "chatFontWeight": "Насыщенность шрифта чата",
+    "chatInput": "Поле ввода",
+    "chatInputActionsScale": "Масштаб нижней панели действий",
     "fontDefault": "Системный по умолчанию",
     "borderRadius": "Скругление углов",
     "primaryColor": "Основной цвет",
