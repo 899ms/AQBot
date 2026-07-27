@@ -148,10 +148,30 @@ fn set_window_surface(
         )))
         .map_err(|error| error.to_string())?;
     #[cfg(not(target_os = "macos"))]
+    // The result surface hosts clickable/scrollable content and must accept
+    // focus; the plain toolbar strip must never steal it from the source app.
     window
-        .set_focusable(false)
+        .set_focusable(matches!(surface, SurfaceSize::Result))
         .map_err(|error| error.to_string())?;
     show_without_activating(app, window)
+}
+
+/// Give the toolbar window keyboard/click focus so the result surface's
+/// controls respond to the very first click. On macOS the nonactivating panel
+/// becomes key without activating AQBot; elsewhere the window takes focus.
+pub fn focus_surface(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        return super::macos_panel::make_key_window(app);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let window = app
+            .get_webview_window(SELECTION_TOOLBAR_WINDOW_LABEL)
+            .ok_or_else(|| "Selection toolbar window is not available".to_string())?;
+        window.set_focus().map_err(|error| error.to_string())
+    }
 }
 
 /// Show the toolbar without making AQBot the frontmost application when possible.

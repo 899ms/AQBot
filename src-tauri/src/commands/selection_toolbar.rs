@@ -69,15 +69,40 @@ pub async fn selection_toolbar_execute_tool(
     state: State<'_, AppState>,
     selection_id: String,
     tool_id: String,
+    options: Option<crate::selection_toolbar::ToolRunOptions>,
 ) -> Result<String, String> {
     state.selection_toolbar.lock_interaction();
-    let result =
-        crate::selection_toolbar::execute_ai_tool(&app, state.inner(), &selection_id, &tool_id)
-            .await;
+    let result = crate::selection_toolbar::execute_ai_tool(
+        &app,
+        state.inner(),
+        &selection_id,
+        &tool_id,
+        options.unwrap_or_default(),
+    )
+    .await;
     if result.is_err() {
         state.selection_toolbar.unlock_interaction();
     }
     result
+}
+
+/// Persist the translate panel's target language (`None` follows the app
+/// language again). Saved through the full settings pipeline so validation
+/// and toolbar reconciliation behave exactly like the settings page.
+#[tauri::command]
+pub async fn selection_toolbar_set_translate_target(
+    state: State<'_, AppState>,
+    language: Option<String>,
+) -> Result<(), String> {
+    let mut settings = aqbot_core::repo::settings::get_settings(&state.sea_db)
+        .await
+        .map_err(|error| error.to_string())?;
+    settings.selection_toolbar.translate_target_language =
+        language.filter(|value| !value.trim().is_empty());
+    settings.selection_toolbar.validate()?;
+    aqbot_core::repo::settings::save_settings(&state.sea_db, &settings)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

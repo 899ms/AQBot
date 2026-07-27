@@ -1,24 +1,13 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { Button, ConfigProvider, Spin, theme as antdTheme } from 'antd';
+import { Button, ConfigProvider, Select, Spin, theme as antdTheme } from 'antd';
 import {
-  BookOpen,
-  Brain,
+  ArrowLeftRight,
   Check,
-  Code,
   Copy,
   GripVertical,
-  Languages,
-  ListCollapse,
-  MessageSquare,
   MoreHorizontal,
-  PenLine,
   RotateCcw,
-  Search,
-  Sparkles,
-  SpellCheck,
   Square,
-  Terminal,
-  WandSparkles,
   X,
 } from 'lucide-react';
 import NodeRenderer, { enableD2, setCustomComponents } from 'markstream-react';
@@ -29,6 +18,11 @@ import logo from '@/assets/image/logo.png';
 import { SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS, type SelectionToolbarToolView } from '@/types';
 import { useSelectionToolbarStore } from '@/stores/selectionToolbarStore';
 import { useSettingsStore } from '@/stores';
+import { LucideToolIcon } from '@/components/shared/LucideToolIcon';
+import {
+  SELECTION_TRANSLATE_LANGUAGES,
+  normalizeTranslateLanguage,
+} from '@/constants/selectionTranslateLanguages';
 import { CHAT_CUSTOM_HTML_TAGS } from '@/lib/chatMarkdown';
 import { applyMarkstreamI18nMap } from '@/lib/markstreamI18n';
 import { preloadChatRenderers } from '@/lib/preloadChatRenderers';
@@ -47,22 +41,6 @@ import './selectionToolbar.css';
 // render with the identical collapsible component.
 setCustomComponents('selection-toolbar', { think: ThinkNode });
 
-const ICONS = {
-  copy: Copy,
-  'wand-sparkles': WandSparkles,
-  languages: Languages,
-  'spell-check': SpellCheck,
-  'list-collapse': ListCollapse,
-  brain: Brain,
-  'book-open': BookOpen,
-  code: Code,
-  'message-square': MessageSquare,
-  'pen-line': PenLine,
-  search: Search,
-  sparkles: Sparkles,
-  terminal: Terminal,
-} as const;
-
 function labelFor(tool: SelectionToolbarToolView, t: (key: string) => string) {
   if (tool.name) return tool.name;
   return t(`settings.selectionToolbar.tools.${tool.builtin_key}`);
@@ -75,7 +53,6 @@ function ToolButton({ tool }: { tool: SelectionToolbarToolView }) {
   // The selected state is derived from the active run only — never from hover
   // side effects — so exactly the tool whose result is shown appears selected.
   const active = useSelectionToolbarStore((state) => state.run?.tool_id === tool.id);
-  const Icon = ICONS[tool.icon as keyof typeof ICONS] ?? Sparkles;
   const label = labelFor(tool, t);
   return (
     <button
@@ -102,7 +79,7 @@ function ToolButton({ tool }: { tool: SelectionToolbarToolView }) {
         void executeTool(tool);
       }}
     >
-      <Icon aria-hidden size={14} />
+      <LucideToolIcon name={tool.icon} size={14} />
       <span className="selection-toolbar__tool-label">{label}</span>
     </button>
   );
@@ -197,7 +174,6 @@ function OverflowSurface() {
       <ToolbarSurface />
       <div className="selection-toolbar__overflow-list">
         {session.tools.slice(SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS).map((tool) => {
-          const Icon = ICONS[tool.icon as keyof typeof ICONS] ?? Sparkles;
           return (
             <button
               aria-label={labelFor(tool, t)}
@@ -213,7 +189,7 @@ function OverflowSurface() {
                 void executeTool(tool);
               }}
             >
-              <Icon size={16} />
+              <LucideToolIcon name={tool.icon} size={16} />
               <span>{labelFor(tool, t)}</span>
             </button>
           );
@@ -269,6 +245,97 @@ function ResultMarkdown({ output, streaming, isDark }: {
         mermaidProps={CHAT_MERMAID_PROPS}
         infographicProps={CHAT_INFOGRAPHIC_PROPS}
         {...CHAT_RENDER_BATCH_PROPS}
+      />
+    </div>
+  );
+}
+
+interface TranslateLanguageOption {
+  value: string;
+  label: string;
+  english: string;
+}
+
+function filterTranslateOption(input: string, option?: TranslateLanguageOption): boolean {
+  const query = input.trim().toLowerCase();
+  if (!query || !option) return true;
+  return (
+    option.value.toLowerCase().includes(query)
+    || option.label.toLowerCase().includes(query)
+    || option.english.toLowerCase().includes(query)
+  );
+}
+
+/// Google-Translate-style language row for the builtin translate tool:
+/// source (auto-detect by default) ⇄ target; changing either re-runs the
+/// translation and the target choice is persisted for future sessions.
+function TranslateBar() {
+  const { t } = useTranslation();
+  const session = useSelectionToolbarStore((state) => state.session);
+  const translateSource = useSelectionToolbarStore((state) => state.translateSource);
+  const translateTarget = useSelectionToolbarStore((state) => state.translateTarget);
+  const setTranslateLanguages = useSelectionToolbarStore((state) => state.setTranslateLanguages);
+  const target = translateTarget
+    ?? normalizeTranslateLanguage(session?.translate_target_language ?? session?.language);
+  const targetOptions = useMemo<TranslateLanguageOption[]>(
+    () => SELECTION_TRANSLATE_LANGUAGES.map((language) => ({
+      value: language.code,
+      label: language.native,
+      english: language.english,
+    })),
+    [],
+  );
+  const sourceOptions = useMemo<TranslateLanguageOption[]>(
+    () => [
+      {
+        value: 'auto',
+        label: t('settings.selectionToolbar.translateAutoDetect'),
+        english: 'auto detect',
+      },
+      ...targetOptions,
+    ],
+    [t, targetOptions],
+  );
+
+  return (
+    <div className="selection-toolbar__translate-bar">
+      <Select<string, TranslateLanguageOption>
+        aria-label={t('settings.selectionToolbar.translateSourceLanguage')}
+        filterOption={filterTranslateOption}
+        listHeight={190}
+        options={sourceOptions}
+        popupMatchSelectWidth={false}
+        showSearch
+        size="small"
+        style={{ flex: 1, minWidth: 0 }}
+        value={translateSource}
+        variant="borderless"
+        onChange={(source) => void setTranslateLanguages(source, target)}
+      />
+      <Button
+        aria-label={t('settings.selectionToolbar.translateSwap')}
+        disabled={translateSource === 'auto'}
+        icon={<ArrowLeftRight size={13} />}
+        size="small"
+        title={t('settings.selectionToolbar.translateSwap')}
+        type="text"
+        onClick={() => {
+          if (translateSource === 'auto') return;
+          void setTranslateLanguages(target, translateSource);
+        }}
+      />
+      <Select<string, TranslateLanguageOption>
+        aria-label={t('settings.selectionToolbar.translateTargetLanguage')}
+        filterOption={filterTranslateOption}
+        listHeight={190}
+        options={targetOptions}
+        popupMatchSelectWidth={false}
+        showSearch
+        size="small"
+        style={{ flex: 1, minWidth: 0 }}
+        value={target}
+        variant="borderless"
+        onChange={(next) => void setTranslateLanguages(translateSource, next)}
       />
     </div>
   );
@@ -346,6 +413,7 @@ function ResultSurface() {
             />
           </div>
         </header>
+        {tool?.builtin_key === 'translate' && tool.kind === 'ai' && <TranslateBar />}
         <main
           aria-live="polite"
           className="selection-toolbar__result-content"

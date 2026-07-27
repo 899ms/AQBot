@@ -194,6 +194,14 @@ impl SelectionToolbarRuntime {
         if let Some(position) = position {
             *self.last_window_position.lock().await = Some(position);
         }
+        if matches!(surface, SurfaceSize::Result) {
+            // The result panel appears under a stationary cursor, so the
+            // hover→make-key path may never fire; focus it explicitly so its
+            // buttons respond to the first click.
+            if let Err(error) = window::focus_surface(app) {
+                tracing::warn!(%error, "Could not focus the selection toolbar result surface");
+            }
+        }
         Ok(())
     }
 
@@ -481,7 +489,16 @@ impl SelectionToolbarRuntime {
         let anchor_kind = observation.anchor_kind;
         let session = {
             let mut store = self.store.lock().await;
-            let id = store.accept_selection(observation, tools, theme, &settings.language);
+            let id = store.accept_selection(
+                observation,
+                tools,
+                theme,
+                &settings.language,
+                settings
+                    .selection_toolbar
+                    .translate_target_language
+                    .as_deref(),
+            );
             store
                 .snapshot()
                 .session
@@ -529,7 +546,15 @@ impl SelectionToolbarRuntime {
         let theme = toolbar_theme(app, settings).to_string();
         let session = {
             let mut store = self.store.lock().await;
-            store.refresh_session(tools, &theme, &settings.language);
+            store.refresh_session(
+                tools,
+                &theme,
+                &settings.language,
+                settings
+                    .selection_toolbar
+                    .translate_target_language
+                    .as_deref(),
+            );
             store.snapshot().session
         };
         if let Some(session) = session {
@@ -639,6 +664,7 @@ mod tests {
             vec![],
             "light",
             "en-US",
+            None,
         );
         runtime
     }

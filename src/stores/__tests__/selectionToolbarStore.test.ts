@@ -196,6 +196,105 @@ describe('selection toolbar store', () => {
     expect(useSelectionToolbarStore.getState().runtime.state).toBe('running');
   });
 
+  it('re-runs translate with the panel languages and persists target changes', async () => {
+    const translateTool = {
+      id: 'translate',
+      kind: 'ai' as const,
+      icon: 'languages',
+      builtin_key: 'translate' as const,
+      name: null,
+    };
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'selection_toolbar_get_snapshot') {
+        return {
+          runtime: {
+            state: 'running',
+            platform: 'macos',
+            permission: 'granted',
+            last_error: null,
+            global_dismissal_supported: true,
+          },
+          session: {
+            selection_id: 'selection-1',
+            tools: [translateTool],
+            theme: 'light',
+            language: 'en-US',
+            translate_target_language: null,
+          },
+          run: null,
+        };
+      }
+      if (command === 'selection_toolbar_execute_tool') return 'request-9';
+      return undefined;
+    });
+    const { useSelectionToolbarStore } = await import('../selectionToolbarStore');
+    await useSelectionToolbarStore.getState().initialize();
+
+    await useSelectionToolbarStore.getState().setTranslateLanguages('en', 'ja');
+
+    expect(invokeMock).toHaveBeenCalledWith('selection_toolbar_set_translate_target', {
+      language: 'ja',
+    });
+    expect(invokeMock).toHaveBeenCalledWith('selection_toolbar_execute_tool', {
+      selectionId: 'selection-1',
+      toolId: 'translate',
+      options: { source_language: 'en', target_language: 'ja' },
+    });
+
+    // A plain re-click on the translate tool keeps the chosen languages.
+    invokeMock.mockClear();
+    invokeMock.mockImplementation(async (command: string) =>
+      command === 'selection_toolbar_execute_tool' ? 'request-10' : undefined,
+    );
+    await useSelectionToolbarStore.getState().executeTool(translateTool);
+    expect(invokeMock).toHaveBeenCalledWith('selection_toolbar_execute_tool', {
+      selectionId: 'selection-1',
+      toolId: 'translate',
+      options: { source_language: 'en', target_language: 'ja' },
+    });
+  });
+
+  it('sends no language options for non-translate tools', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'selection_toolbar_get_snapshot') {
+        return {
+          runtime: {
+            state: 'running',
+            platform: 'macos',
+            permission: 'granted',
+            last_error: null,
+            global_dismissal_supported: true,
+          },
+          session: {
+            selection_id: 'selection-1',
+            tools: [],
+            theme: 'light',
+            language: 'en-US',
+          },
+          run: null,
+        };
+      }
+      if (command === 'selection_toolbar_execute_tool') return 'request-11';
+      return undefined;
+    });
+    const { useSelectionToolbarStore } = await import('../selectionToolbarStore');
+    await useSelectionToolbarStore.getState().initialize();
+
+    await useSelectionToolbarStore.getState().executeTool({
+      id: 'summarize',
+      kind: 'ai',
+      icon: 'list-collapse',
+      builtin_key: 'summarize',
+      name: null,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith('selection_toolbar_execute_tool', {
+      selectionId: 'selection-1',
+      toolId: 'summarize',
+      options: null,
+    });
+  });
+
   it('routes stop, result copy, and close through request and selection identifiers', async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'selection_toolbar_get_snapshot') {

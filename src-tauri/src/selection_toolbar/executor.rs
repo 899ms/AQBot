@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use aqbot_core::{
     crypto::decrypt_key,
-    repo::{provider, settings as settings_repo},
+    repo::{conversation as conversation_repo, provider, settings as settings_repo},
     types::{
         AppSettings, ChatContent, ChatMessage, ChatRequest, ModelParamOverrides, ModelType,
         ProviderProxyConfig, ProviderType, SelectionToolbarAiConfig,
@@ -13,11 +13,25 @@ use aqbot_providers::{
     registry::ProviderRegistry, resolve_base_url_for_type, ProviderRequestContext,
 };
 use futures::StreamExt;
+use serde::Deserialize;
 use tauri::{AppHandle, Emitter};
 
 use crate::AppState;
 
 use super::{SurfaceSize, ToolRunEvent, SELECTION_TOOLBAR_WINDOW_LABEL};
+
+/// Per-run overrides supplied by the toolbar UI (currently the translate
+/// panel's language pickers). All fields optional so older frontends and
+/// non-translate tools can omit them.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ToolRunOptions {
+    /// Language of the selected text; `None`/empty means auto-detect.
+    #[serde(default)]
+    pub source_language: Option<String>,
+    /// Overrides the configured translate target language for this run.
+    #[serde(default)]
+    pub target_language: Option<String>,
+}
 
 #[derive(Debug, PartialEq)]
 struct EffectiveParams {
@@ -36,6 +50,7 @@ pub async fn execute_tool(
     state: &AppState,
     selection_id: &str,
     tool_id: &str,
+    options: ToolRunOptions,
 ) -> Result<String, String> {
     let settings = settings_repo::get_settings(&state.sea_db)
         .await
@@ -58,8 +73,22 @@ pub async fn execute_tool(
         .selection_text(selection_id)
         .await
         .ok_or_else(|| "The selected text is no longer active".to_string())?;
-    let prompt = render_prompt(&ai.prompt, &selection);
-    let (configured_provider_id, model_id) = resolve_model_target(&ai, &settings)?;
+    let prompt = render_prompt(
+        &ai.prompt,
+        &selection,
+        &resolve_languages(&options, &settings),
+    );
+    let (configured_provider_id, model_id) = match resolve_model_target(&ai, &settings)? {
+        Some(target) => target,
+        // No tool-level or global default model: inherit the model of the most
+        // recently active conversation instead of failing outright.
+        None => conversation_repo::most_recent_conversation_model(&state.sea_db)
+            .await
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| {
+                "No default Chat model is configured and there is no recent conversation to inherit one from".to_string()
+            })?,
+    };
     let provider_id = provider::resolve_provider_id(&state.sea_db, &configured_provider_id)
         .await
         .map_err(|error| error.to_string())?;
@@ -352,23 +381,58 @@ async fn finalize_stopped(
     );
 }
 
-fn render_prompt(template: &str, selection: &str) -> String {
-    template.replace("{selection}", selection)
+#[derive(Debug, PartialEq)]
+struct PromptLanguages {
+    source: String,
+    target: String,
 }
 
+/// Effective languages for the `{source_language}` / `{target_language}`
+/// placeholders: run override → configured translate target → app UI language.
+fn resolve_languages(options: &ToolRunOptions, settings: &AppSettings) -> PromptLanguages {
+    let non_blank = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let source = non_blank(&options.source_language).filter(|code| code != "auto");
+    let target = non_blank(&options.target_language)
+        .or_else(|| non_blank(&settings.selection_toolbar.translate_target_language))
+        .unwrap_or_else(|| settings.language.clone());
+    PromptLanguages {
+        source: source
+            .map(|code| super::languages::prompt_language_name(&code))
+            .unwrap_or_else(|| "the automatically detected source language".to_string()),
+        target: super::languages::prompt_language_name(&target),
+    }
+}
+
+fn render_prompt(template: &str, selection: &str, languages: &PromptLanguages) -> String {
+    // Languages first, selection last: the selected text must never be
+    // re-scanned for placeholders.
+    template
+        .replace("{source_language}", &languages.source)
+        .replace("{target_language}", &languages.target)
+        .replace("{selection}", selection)
+}
+
+/// `Ok(None)` means "nothing configured" — the caller falls back to the most
+/// recent conversation's model.
 fn resolve_model_target(
     ai: &SelectionToolbarAiConfig,
     settings: &AppSettings,
-) -> Result<(String, String), String> {
+) -> Result<Option<(String, String)>, String> {
     match (&ai.provider_id, &ai.model_id) {
-        (Some(provider_id), Some(model_id)) => Ok((provider_id.clone(), model_id.clone())),
-        (None, None) => match (
+        (Some(provider_id), Some(model_id)) => Ok(Some((provider_id.clone(), model_id.clone()))),
+        (None, None) => Ok(match (
             settings.default_provider_id.as_ref(),
             settings.default_model_id.as_ref(),
         ) {
-            (Some(provider_id), Some(model_id)) => Ok((provider_id.clone(), model_id.clone())),
-            _ => Err("No default Chat provider and model are configured".into()),
-        },
+            (Some(provider_id), Some(model_id)) => Some((provider_id.clone(), model_id.clone())),
+            _ => None,
+        }),
         _ => Err("Selection toolbar provider and model must be configured together".into()),
     }
 }
@@ -501,7 +565,10 @@ async fn publish_error(
 mod tests {
     use aqbot_core::types::{AppSettings, ModelParamOverrides, SelectionToolbarAiConfig};
 
-    use super::{render_prompt, resolve_effective_params, resolve_model_target, ThinkMerge};
+    use super::{
+        render_prompt, resolve_effective_params, resolve_languages, resolve_model_target,
+        PromptLanguages, ThinkMerge, ToolRunOptions,
+    };
 
     #[test]
     fn thinking_deltas_are_merged_into_chat_style_think_blocks() {
@@ -567,9 +634,72 @@ mod tests {
 
     #[test]
     fn prompt_replaces_every_selection_placeholder() {
+        let languages = PromptLanguages {
+            source: "English".into(),
+            target: "Simplified Chinese".into(),
+        };
         assert_eq!(
-            render_prompt("Before {selection}; after {selection}", "private"),
+            render_prompt("Before {selection}; after {selection}", "private", &languages),
             "Before private; after private"
+        );
+    }
+
+    #[test]
+    fn prompt_renders_languages_without_rescanning_the_selection() {
+        let languages = PromptLanguages {
+            source: "English".into(),
+            target: "Japanese".into(),
+        };
+        assert_eq!(
+            render_prompt(
+                "From {source_language} to {target_language}:\n{selection}",
+                "keep {target_language} literal",
+                &languages,
+            ),
+            "From English to Japanese:\nkeep {target_language} literal"
+        );
+    }
+
+    #[test]
+    fn languages_resolve_override_then_setting_then_app_language() {
+        let mut settings = AppSettings {
+            language: "zh-CN".into(),
+            ..Default::default()
+        };
+
+        let auto = resolve_languages(&ToolRunOptions::default(), &settings);
+        assert_eq!(
+            auto,
+            PromptLanguages {
+                source: "the automatically detected source language".into(),
+                target: "Simplified Chinese".into(),
+            }
+        );
+
+        settings.selection_toolbar.translate_target_language = Some("ja".into());
+        let configured = resolve_languages(&ToolRunOptions::default(), &settings);
+        assert_eq!(configured.target, "Japanese");
+
+        let overridden = resolve_languages(
+            &ToolRunOptions {
+                source_language: Some("fr".into()),
+                target_language: Some("ko".into()),
+            },
+            &settings,
+        );
+        assert_eq!(overridden.source, "French");
+        assert_eq!(overridden.target, "Korean");
+
+        let auto_source = resolve_languages(
+            &ToolRunOptions {
+                source_language: Some("auto".into()),
+                target_language: None,
+            },
+            &settings,
+        );
+        assert_eq!(
+            auto_source.source,
+            "the automatically detected source language"
         );
     }
 
@@ -584,7 +714,7 @@ mod tests {
 
         assert_eq!(
             resolve_model_target(&ai, &settings).unwrap(),
-            ("provider-default".into(), "model-default".into())
+            Some(("provider-default".into(), "model-default".into()))
         );
 
         ai.provider_id = Some("provider-explicit".into());
@@ -593,8 +723,19 @@ mod tests {
         settings.default_model_id = None;
         assert_eq!(
             resolve_model_target(&ai, &settings).unwrap(),
-            ("provider-explicit".into(), "model-explicit".into())
+            Some(("provider-explicit".into(), "model-explicit".into()))
         );
+
+        ai.provider_id = None;
+        ai.model_id = None;
+        assert_eq!(
+            resolve_model_target(&ai, &settings).unwrap(),
+            None,
+            "missing defaults defer to the recent-conversation fallback"
+        );
+
+        ai.provider_id = Some("provider-only".into());
+        assert!(resolve_model_target(&ai, &settings).is_err());
     }
 
     #[test]

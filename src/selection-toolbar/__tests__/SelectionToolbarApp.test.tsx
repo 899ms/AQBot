@@ -2,11 +2,20 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SelectionToolbarApp } from '../SelectionToolbarApp';
 
-const { executeTool, copyResult, regenerate, stop, nodeRendererProps, storeState } = vi.hoisted(() => ({
+const {
+  executeTool,
+  copyResult,
+  regenerate,
+  stop,
+  setTranslateLanguages,
+  nodeRendererProps,
+  storeState,
+} = vi.hoisted(() => ({
   executeTool: vi.fn(async () => {}),
   copyResult: vi.fn(async () => {}),
   regenerate: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),
+  setTranslateLanguages: vi.fn(async () => {}),
   nodeRendererProps: vi.fn(),
   storeState: {} as Record<string, unknown>,
 }));
@@ -98,11 +107,14 @@ describe('SelectionToolbarApp', () => {
       copied: false,
       busy: false,
       error: null,
+      translateSource: 'auto',
+      translateTarget: null,
       initialize: vi.fn(async () => {}),
       executeTool,
       stop,
       copyResult,
       regenerate,
+      setTranslateLanguages,
       close: vi.fn(async () => {}),
       toggleOverflow: vi.fn(async () => {}),
       dispose: vi.fn(),
@@ -222,6 +234,99 @@ describe('SelectionToolbarApp', () => {
     expect(regenerateButton).toBeEnabled();
     fireEvent.click(regenerateButton);
     expect(regenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the translate language bar only for the builtin translate tool', () => {
+    const translateTool = {
+      id: 'translate',
+      kind: 'ai' as const,
+      builtin_key: 'translate',
+      name: null,
+      icon: 'languages',
+    };
+    Object.assign(storeState, {
+      session: {
+        selection_id: 'selection',
+        tools: [translateTool, ...tools],
+        theme: 'light',
+        language: 'en-US',
+        translate_target_language: 'zh-CN',
+      },
+      surface: 'result',
+      run: {
+        request_id: 'request',
+        selection_id: 'selection',
+        tool_id: 'translate',
+        status: 'completed',
+        output: '翻译结果',
+        error: null,
+      },
+    });
+
+    const { container } = render(<SelectionToolbarApp />);
+
+    const bar = container.querySelector('.selection-toolbar__translate-bar');
+    expect(bar).toBeInTheDocument();
+    // Auto-detect source keeps the swap button disabled.
+    expect(
+      screen.getByRole('button', { name: 'settings.selectionToolbar.translateSwap' }),
+    ).toBeDisabled();
+  });
+
+  it('swaps source and target languages through the translate bar', () => {
+    const translateTool = {
+      id: 'translate',
+      kind: 'ai' as const,
+      builtin_key: 'translate',
+      name: null,
+      icon: 'languages',
+    };
+    Object.assign(storeState, {
+      session: {
+        selection_id: 'selection',
+        tools: [translateTool],
+        theme: 'light',
+        language: 'en-US',
+        translate_target_language: 'zh-CN',
+      },
+      surface: 'result',
+      translateSource: 'en',
+      translateTarget: null,
+      run: {
+        request_id: 'request',
+        selection_id: 'selection',
+        tool_id: 'translate',
+        status: 'completed',
+        output: '翻译结果',
+        error: null,
+      },
+    });
+
+    render(<SelectionToolbarApp />);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'settings.selectionToolbar.translateSwap' }),
+    );
+
+    // Session target (zh-CN) becomes the source; the old source becomes target.
+    expect(setTranslateLanguages).toHaveBeenCalledWith('zh-CN', 'en');
+  });
+
+  it('hides the translate language bar for other tools', () => {
+    Object.assign(storeState, {
+      surface: 'result',
+      run: {
+        request_id: 'request',
+        selection_id: 'selection',
+        tool_id: 'tool-1',
+        status: 'completed',
+        output: 'done',
+        error: null,
+      },
+    });
+
+    const { container } = render(<SelectionToolbarApp />);
+
+    expect(container.querySelector('.selection-toolbar__translate-bar')).not.toBeInTheDocument();
   });
 
   it('copies the raw partial output while streaming', () => {

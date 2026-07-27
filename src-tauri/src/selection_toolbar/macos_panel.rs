@@ -153,7 +153,9 @@ pub fn is_panel_visible(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-fn make_key_window(app: &AppHandle) -> Result<(), String> {
+/// Make the nonactivating panel the key window so its controls respond to the
+/// first click/keystroke. Does not activate AQBot (Spotlight-style panel).
+pub fn make_key_window(app: &AppHandle) -> Result<(), String> {
     run_on_main_blocking(app, |handle| {
         let panel = handle
             .get_webview_panel(SELECTION_TOOLBAR_WINDOW_LABEL)

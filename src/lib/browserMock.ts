@@ -530,6 +530,7 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
       } as T;
     case 'selection_toolbar_frontend_ready':
     case 'selection_toolbar_set_surface':
+    case 'selection_toolbar_set_translate_target':
     case 'selection_toolbar_stop_generation':
     case 'selection_toolbar_copy_selection':
     case 'selection_toolbar_copy_result':

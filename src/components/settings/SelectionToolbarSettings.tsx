@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Button,
@@ -13,25 +13,7 @@ import {
   message,
   theme,
 } from 'antd';
-import {
-  BookOpen,
-  Brain,
-  Code,
-  Copy,
-  GripVertical,
-  Languages,
-  ListCollapse,
-  MessageSquare,
-  PenLine,
-  Plus,
-  RotateCcw,
-  Search,
-  Sparkles,
-  SpellCheck,
-  Terminal,
-  Trash2,
-  WandSparkles,
-} from 'lucide-react';
+import { GripVertical, Plus, RotateCcw, Trash2 } from 'lucide-react';
 import {
   DndContext,
   PointerSensor,
@@ -51,10 +33,13 @@ import { invoke } from '@/lib/invoke';
 import { useProviderStore, useSettingsStore } from '@/stores';
 import { ModelParamSliders } from '@/components/common/ModelParamSliders';
 import { ModelSelect, parseModelValue } from '@/components/shared/ModelSelect';
+import { LucideToolIcon } from '@/components/shared/LucideToolIcon';
 import {
-  SELECTION_TOOLBAR_CUSTOM_ICONS,
+  SELECTION_TRANSLATE_LANGUAGES,
+  type SelectionTranslateLanguage,
+} from '@/constants/selectionTranslateLanguages';
+import {
   createDefaultSelectionToolbarSettings,
-  type SelectionToolbarCustomIcon,
   type SelectionToolbarPermissionSettingsOutcome,
   type SelectionToolbarRuntimeStatus,
   type SelectionToolbarSettings as SelectionToolbarConfig,
@@ -62,37 +47,24 @@ import {
 } from '@/types';
 import { SettingsGroup } from './SettingsGroup';
 
-const { TextArea } = Input;
+const LucideIconPickerModal = lazy(() => import('@/components/shared/LucideIconPickerModal'));
 
-const ICONS = {
-  'wand-sparkles': WandSparkles,
-  languages: Languages,
-  'spell-check': SpellCheck,
-  'list-collapse': ListCollapse,
-  brain: Brain,
-  'book-open': BookOpen,
-  code: Code,
-  'message-square': MessageSquare,
-  'pen-line': PenLine,
-  search: Search,
-  sparkles: Sparkles,
-  terminal: Terminal,
-} as const;
+const { TextArea } = Input;
 
 function toolId(tool: SelectionToolbarTool) {
   return tool.kind === 'custom_ai' ? tool.id : tool.builtin_key;
 }
 
-function toolIcon(tool: SelectionToolbarTool) {
-  if (tool.kind === 'builtin_action') return Copy;
+function toolIconName(tool: SelectionToolbarTool): string {
+  if (tool.kind === 'builtin_action') return 'copy';
   if (tool.kind === 'builtin_ai') {
     return {
-      translate: Languages,
-      polish: SpellCheck,
-      summarize: ListCollapse,
+      translate: 'languages',
+      polish: 'spell-check',
+      summarize: 'list-collapse',
     }[tool.builtin_key];
   }
-  return ICONS[tool.icon];
+  return tool.icon;
 }
 
 function toolName(tool: SelectionToolbarTool, t: (key: string) => string) {
@@ -117,7 +89,6 @@ function SortableToolRow({
   const { t } = useTranslation();
   const { token } = theme.useToken();
   const sortable = useSortable({ id: toolId(tool) });
-  const Icon = toolIcon(tool);
 
   return (
     <div
@@ -148,7 +119,7 @@ function SortableToolRow({
       >
         <GripVertical size={16} />
       </button>
-      <Icon size={18} />
+      <LucideToolIcon name={toolIconName(tool)} size={18} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ alignItems: 'center', display: 'flex', gap: 6 }}>
           <span style={{ fontWeight: 500 }}>{toolName(tool, t)}</span>
@@ -191,8 +162,12 @@ function ToolEditor({
 }) {
   const { t } = useTranslation();
   const [draft, setDraft] = useState<SelectionToolbarTool | null>(tool);
+  const [iconPickerOpen, setIconPickerOpen] = useState(false);
 
-  useEffect(() => setDraft(tool), [tool]);
+  useEffect(() => {
+    setDraft(tool);
+    setIconPickerOpen(false);
+  }, [tool]);
   if (!draft || draft.kind === 'builtin_action') return null;
 
   const modelValue = draft.ai.provider_id && draft.ai.model_id
@@ -224,18 +199,30 @@ function ToolEditor({
       onCancel={onClose}
     >
       {draft.kind === 'custom_ai' && (
-        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr 180px', marginBottom: 16 }}>
+        <div style={{ display: 'grid', gap: 12, gridTemplateColumns: '1fr auto', marginBottom: 16 }}>
           <Input
             aria-label={t('settings.selectionToolbar.name')}
             value={draft.name}
             onChange={(event) => setDraft({ ...draft, name: event.target.value })}
           />
-          <Select
+          <Button
             aria-label={t('settings.selectionToolbar.icon')}
-            options={SELECTION_TOOLBAR_CUSTOM_ICONS.map((icon) => ({ label: icon, value: icon }))}
-            value={draft.icon}
-            onChange={(icon: SelectionToolbarCustomIcon) => setDraft({ ...draft, icon })}
-          />
+            icon={<LucideToolIcon name={draft.icon} size={16} />}
+            title={draft.icon}
+            onClick={() => setIconPickerOpen(true)}
+          >
+            {t('settings.selectionToolbar.icon')}
+          </Button>
+          {iconPickerOpen && (
+            <Suspense fallback={null}>
+              <LucideIconPickerModal
+                open
+                value={draft.icon}
+                onClose={() => setIconPickerOpen(false)}
+                onSelect={(icon) => setDraft({ ...draft, icon })}
+              />
+            </Suspense>
+          )}
         </div>
       )}
       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
@@ -503,12 +490,50 @@ export function SelectionToolbarSettings() {
           />
         </div>
         <Divider style={{ margin: 0 }} />
-        <div style={{ alignItems: 'center', display: 'flex', justifyContent: 'space-between', padding: '12px 0 4px' }}>
+        <div style={{ alignItems: 'center', display: 'flex', justifyContent: 'space-between', padding: '12px 0' }}>
           <span>{t('settings.selectionToolbar.themeFollow')}</span>
           <Switch
             aria-label={t('settings.selectionToolbar.themeFollow')}
             checked={settings.theme_follow}
             onChange={(theme_follow) => persist({ ...settings, theme_follow })}
+          />
+        </div>
+        <Divider style={{ margin: 0 }} />
+        <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between', padding: '12px 0 4px' }}>
+          <div style={{ minWidth: 0 }}>
+            <div>{t('settings.selectionToolbar.translateTargetLanguage')}</div>
+            <div style={{ color: 'var(--text-color-secondary)', fontSize: 12 }}>
+              {t('settings.selectionToolbar.translateTargetHint')}
+            </div>
+          </div>
+          <Select<string, { value: string; label: string; english: string }>
+            aria-label={t('settings.selectionToolbar.translateTargetLanguage')}
+            filterOption={(input, option) => {
+              const query = input.trim().toLowerCase();
+              if (!query || !option) return true;
+              return option.value.toLowerCase().includes(query)
+                || option.label.toLowerCase().includes(query)
+                || option.english.toLowerCase().includes(query);
+            }}
+            options={[
+              {
+                value: 'follow',
+                label: t('settings.selectionToolbar.translateFollowApp'),
+                english: 'follow application language',
+              },
+              ...SELECTION_TRANSLATE_LANGUAGES.map((language: SelectionTranslateLanguage) => ({
+                value: language.code,
+                label: language.native,
+                english: language.english,
+              })),
+            ]}
+            showSearch
+            style={{ flex: '0 0 auto', width: 200 }}
+            value={settings.translate_target_language ?? 'follow'}
+            onChange={(value) => persist({
+              ...settings,
+              translate_target_language: value === 'follow' ? null : value,
+            })}
           />
         </div>
       </SettingsGroup>

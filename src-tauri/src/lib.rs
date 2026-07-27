@@ -482,6 +482,7 @@ pub fn run() {
         commands::selection_toolbar::selection_toolbar_frontend_ready,
         commands::selection_toolbar::selection_toolbar_set_surface,
         commands::selection_toolbar::selection_toolbar_execute_tool,
+        commands::selection_toolbar::selection_toolbar_set_translate_target,
         commands::selection_toolbar::selection_toolbar_stop_generation,
         commands::selection_toolbar::selection_toolbar_copy_selection,
         commands::selection_toolbar::selection_toolbar_copy_result,

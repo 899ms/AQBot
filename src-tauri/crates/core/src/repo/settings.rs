@@ -15,8 +15,10 @@ pub async fn get_settings(db: &DatabaseConnection) -> Result<AppSettings> {
         map.insert(row.key.clone(), val);
     }
 
-    let settings: AppSettings =
+    let mut settings: AppSettings =
         serde_json::from_value(serde_json::Value::Object(map)).unwrap_or_default();
+    // Stored prompts that still equal an older default follow the current one.
+    settings.selection_toolbar.upgrade_legacy_defaults();
     Ok(settings)
 }
 

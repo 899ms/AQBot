@@ -29,6 +29,11 @@ function cancelCopyCloseTimer() {
   }
 }
 
+export interface SelectionToolbarTranslateOptions {
+  sourceLanguage?: string | null;
+  targetLanguage?: string | null;
+}
+
 interface SelectionToolbarState {
   runtime: SelectionToolbarRuntimeStatus;
   session: SelectionToolbarSessionView | null;
@@ -37,14 +42,26 @@ interface SelectionToolbarState {
   copied: boolean;
   busy: boolean;
   error: string | null;
+  /** Translate panel source language; 'auto' means auto-detect. */
+  translateSource: string;
+  /** Translate panel target language; null falls back to the configured/app language. */
+  translateTarget: string | null;
   initialize: () => Promise<void>;
-  executeTool: (tool: SelectionToolbarToolView) => Promise<void>;
+  executeTool: (
+    tool: SelectionToolbarToolView,
+    options?: SelectionToolbarTranslateOptions,
+  ) => Promise<void>;
+  setTranslateLanguages: (source: string, target: string) => Promise<void>;
   stop: () => Promise<void>;
   copyResult: () => Promise<void>;
   regenerate: () => Promise<void>;
   close: (reason: string) => Promise<void>;
   toggleOverflow: () => Promise<void>;
   dispose: () => void;
+}
+
+function isTranslateTool(tool: SelectionToolbarToolView): boolean {
+  return tool.kind === 'ai' && tool.builtin_key === 'translate';
 }
 
 function applyRunEvent(
@@ -100,6 +117,8 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
   copied: false,
   busy: false,
   error: null,
+  translateSource: 'auto',
+  translateTarget: null,
 
   initialize: async () => {
     if (initialization) return initialization;
@@ -119,6 +138,8 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
                   copied: false,
                   busy: false,
                   error: null,
+                  translateSource: 'auto',
+                  translateTarget: null,
                 },
           );
         }),
@@ -132,6 +153,8 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
             copied: false,
             busy: false,
             error: null,
+            translateSource: 'auto',
+            translateTarget: null,
           });
         }),
         listen<SelectionToolbarRunEvent>('selection-toolbar://run', ({ payload }) => {
@@ -167,7 +190,7 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
     return initialization;
   },
 
-  executeTool: async (tool) => {
+  executeTool: async (tool, options) => {
     if (get().busy) return;
     const session = get().session;
     if (!session) {
@@ -193,9 +216,24 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
         }, 700);
         return;
       }
+      // The translate tool always runs with the panel's language choices so
+      // re-clicks and regenerate keep the user's selection.
+      const effective = options
+        ?? (isTranslateTool(tool)
+          ? {
+              sourceLanguage: get().translateSource,
+              targetLanguage: get().translateTarget,
+            }
+          : undefined);
       const requestId = await invoke<string>('selection_toolbar_execute_tool', {
         selectionId: session.selection_id,
         toolId: tool.id,
+        options: effective
+          ? {
+              source_language: effective.sourceLanguage ?? null,
+              target_language: effective.targetLanguage ?? null,
+            }
+          : null,
       });
       if (!get().run || get().run?.request_id !== requestId) {
         set({
@@ -238,6 +276,23 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
     }
   },
 
+  setTranslateLanguages: async (source, target) => {
+    const previousTarget = get().translateTarget;
+    set({ translateSource: source, translateTarget: target });
+    if (target !== previousTarget) {
+      // Persist so future sessions open with the chosen target; a failure only
+      // affects the default of later sessions, not this run.
+      void invoke('selection_toolbar_set_translate_target', { language: target }).catch(
+        (error) => {
+          console.warn('Failed to persist translate target language:', error);
+        },
+      );
+    }
+    const tool = get().session?.tools.find(isTranslateTool);
+    if (!tool) return;
+    await get().executeTool(tool, { sourceLanguage: source, targetLanguage: target });
+  },
+
   stop: async () => {
     const run = get().run;
     if (!run) return;
@@ -271,6 +326,8 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
       copied: false,
       busy: false,
       error: null,
+      translateSource: 'auto',
+      translateTarget: null,
     });
   },
 

@@ -61,6 +61,21 @@ pub async fn list_conversations(db: &DatabaseConnection) -> Result<Vec<Conversat
     Ok(rows.into_iter().map(conversation_from_entity).collect())
 }
 
+/// Provider/model pair of the most recently updated non-archived conversation.
+/// Unlike [`list_conversations`], pinning does not affect the ordering — this
+/// is strictly "the model the user chatted with last".
+pub async fn most_recent_conversation_model(
+    db: &DatabaseConnection,
+) -> Result<Option<(String, String)>> {
+    let row = conversations::Entity::find()
+        .filter(conversations::Column::IsArchived.eq(0))
+        .order_by_desc(conversations::Column::UpdatedAt)
+        .one(db)
+        .await?;
+
+    Ok(row.map(|conversation| (conversation.provider_id, conversation.model_id)))
+}
+
 pub async fn list_archived_conversations(db: &DatabaseConnection) -> Result<Vec<Conversation>> {
     let rows = conversations::Entity::find()
         .filter(conversations::Column::IsArchived.ne(0))

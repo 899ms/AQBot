@@ -144,6 +144,9 @@ pub struct SessionView {
     pub tools: Vec<ToolbarToolView>,
     pub theme: String,
     pub language: String,
+    /// Configured translate target language; `None` follows `language`.
+    #[serde(default)]
+    pub translate_target_language: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -246,6 +249,7 @@ impl RuntimeStore {
         tools: Vec<ToolbarToolView>,
         theme: &str,
         language: &str,
+        translate_target_language: Option<&str>,
     ) -> String {
         self.cancel_active_run();
         self.run = None;
@@ -256,6 +260,7 @@ impl RuntimeStore {
                 tools,
                 theme: theme.into(),
                 language: language.into(),
+                translate_target_language: translate_target_language.map(str::to_string),
             },
             observation,
         });
@@ -276,11 +281,19 @@ impl RuntimeStore {
             .map(|selection| &selection.observation)
     }
 
-    pub fn refresh_session(&mut self, tools: Vec<ToolbarToolView>, theme: &str, language: &str) {
+    pub fn refresh_session(
+        &mut self,
+        tools: Vec<ToolbarToolView>,
+        theme: &str,
+        language: &str,
+        translate_target_language: Option<&str>,
+    ) {
         if let Some(selection) = self.selection.as_mut() {
             selection.view.tools = tools;
             selection.view.theme = theme.into();
             selection.view.language = language.into();
+            selection.view.translate_target_language =
+                translate_target_language.map(str::to_string);
         }
     }
 
@@ -450,6 +463,7 @@ mod tests {
             vec![ToolbarToolView::action("copy", "copy")],
             "dark",
             "zh-CN",
+            None,
         );
 
         let json = serde_json::to_string(&store.snapshot()).unwrap();
@@ -474,6 +488,7 @@ mod tests {
             )],
             "light",
             "en-US",
+            None,
         );
         let (request_id, _) = store.begin_run(&selection_id, "summarize").unwrap();
         assert!(store.append_delta(&request_id, "**partial**"));
@@ -490,9 +505,9 @@ mod tests {
     #[test]
     fn a_new_selection_cancels_the_previous_run_and_resets_result_state() {
         let mut store = RuntimeStore::new(SelectionPlatform::Macos);
-        let first = store.accept_selection(selected("first"), vec![], "light", "en-US");
+        let first = store.accept_selection(selected("first"), vec![], "light", "en-US", None);
         let (_, cancel) = store.begin_run(&first, "summarize").unwrap();
-        let second = store.accept_selection(selected("second"), vec![], "light", "en-US");
+        let second = store.accept_selection(selected("second"), vec![], "light", "en-US", None);
 
         assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
         assert_ne!(first, second);
