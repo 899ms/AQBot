@@ -122,7 +122,8 @@ export function InputArea() {
   const compressingConversationId = useConversationStore((s) => s.compressingConversationId);
   const cancelCurrentStream = useConversationStore((s) => s.cancelCurrentStream);
   const activeConversationId = useConversationStore((s) => s.activeConversationId);
-  const compressing = compressingConversationId === activeConversationId;
+  const compressing = activeConversationId !== null
+    && compressingConversationId === activeConversationId;
   const sendMessage = useConversationStore((s) => s.sendMessage);
   const sendAgentMessage = useConversationStore((s) => s.sendAgentMessage);
   const createConversation = useConversationStore((s) => s.createConversation);

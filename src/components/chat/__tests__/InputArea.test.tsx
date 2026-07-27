@@ -232,6 +232,28 @@ describe('InputArea', () => {
     expect(screen.getByPlaceholderText('chat.inputPlaceholder')).toHaveValue('保留未发送草稿');
   });
 
+  it('shows compression loading only for a matching non-null active conversation', () => {
+    const renderInput = () => (
+      <App>
+        <InputArea />
+      </App>
+    );
+
+    conversationState.activeConversationId = null;
+    conversationState.compressingConversationId = null;
+    const view = render(renderInput());
+    expect(screen.queryByRole('button', { name: 'loading' })).not.toBeInTheDocument();
+
+    conversationState.activeConversationId = 'conv-1';
+    conversationState.compressingConversationId = 'conv-1';
+    view.rerender(renderInput());
+    expect(screen.getByRole('button', { name: 'loading' })).toBeInTheDocument();
+
+    conversationState.compressingConversationId = 'conv-2';
+    view.rerender(renderInput());
+    expect(screen.queryByRole('button', { name: 'loading' })).not.toBeInTheDocument();
+  });
+
   it('focuses the chat textarea when the window regains focus without another active input', async () => {
     render(
       <App>

@@ -2099,7 +2099,8 @@ export function ChatView() {
     (activeCustomConvIcon?.type as AvatarType) ?? 'icon',
     activeCustomConvIcon?.value ?? '',
   );
-  const compressing = compressingConversationId === activeConversationId;
+  const compressing = activeConversationId !== null
+    && compressingConversationId === activeConversationId;
   const isTitleGenerating = activeConversationId != null && titleGeneratingConversationId === activeConversationId;
   const summaryBoundaryLabel = useMemo(() => {
     const boundaryId = summaryModalSummary?.compressed_until_message_id;
