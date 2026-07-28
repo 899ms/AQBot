@@ -153,9 +153,27 @@ const DEFAULT_SETTINGS: AppSettings = {
   s3_include_documents: false,
 };
 
+function normalizeSelectionToolbarTools(
+  tools: AppSettings['selection_toolbar']['tools'] | undefined,
+): AppSettings['selection_toolbar']['tools'] {
+  if (!tools) return DEFAULT_SETTINGS.selection_toolbar.tools;
+  if (tools.some((tool) =>
+    tool.kind === 'builtin_ai' && tool.builtin_key === 'explain')) {
+    return tools;
+  }
+  const explain = DEFAULT_SETTINGS.selection_toolbar.tools.find((tool) =>
+    tool.kind === 'builtin_ai' && tool.builtin_key === 'explain');
+  if (!explain) return tools;
+  const normalized = [...tools];
+  const translateIndex = normalized.findIndex((tool) =>
+    tool.kind === 'builtin_ai' && tool.builtin_key === 'translate');
+  normalized.splice(translateIndex < 0 ? 0 : translateIndex + 1, 0, explain);
+  return normalized;
+}
+
 export interface GlobalShortcutDiagnostic {
   timestamp: string;
-  phase: 'env' | 'register' | 'cleanup';
+  phase: 'env' | 'register' | 'trigger' | 'cleanup';
   level: 'info' | 'warn' | 'error';
   message: string;
   action?: string;
@@ -240,8 +258,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
               selection_toolbar: {
                 ...DEFAULT_SETTINGS.selection_toolbar,
                 ...fetched.selection_toolbar,
-                tools: fetched.selection_toolbar?.tools
-                  ?? DEFAULT_SETTINGS.selection_toolbar.tools,
+                tools: normalizeSelectionToolbarTools(
+                  fetched.selection_toolbar?.tools,
+                ),
                 app_filter: fetched.selection_toolbar?.app_filter
                   ?? DEFAULT_SETTINGS.selection_toolbar.app_filter,
                 app_filter_mode: fetched.selection_toolbar?.app_filter_mode

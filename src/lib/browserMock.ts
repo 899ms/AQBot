@@ -539,6 +539,7 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
       return undefined as T;
     case 'selection_toolbar_open_permission_settings':
     case 'selection_toolbar_request_permission':
+    case 'selection_toolbar_trigger':
     case 'selection_toolbar_execute_tool':
       throw new Error('Selection toolbar is unavailable in browser preview mode.');
 

@@ -4,8 +4,6 @@ import {
   ArrowLeftRight,
   Check,
   Copy,
-  GripVertical,
-  MoreHorizontal,
   RotateCcw,
   Square,
   X,
@@ -14,11 +12,11 @@ import NodeRenderer, { enableD2, setCustomComponents } from 'markstream-react';
 import { registerHighlight } from 'stream-markdown';
 import { useTranslation } from 'react-i18next';
 import i18n from '@/i18n';
-import logo from '@/assets/image/logo.png';
 import { SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS, type SelectionToolbarToolView } from '@/types';
 import { useSelectionToolbarStore } from '@/stores/selectionToolbarStore';
 import { useSettingsStore } from '@/stores';
 import { LucideToolIcon } from '@/components/shared/LucideToolIcon';
+import { SelectionToolbarStrip } from '@/components/shared/SelectionToolbarStrip';
 import {
   SELECTION_TRANSLATE_LANGUAGES,
   normalizeTranslateLanguage,
@@ -44,45 +42,6 @@ setCustomComponents('selection-toolbar', { think: ThinkNode });
 function labelFor(tool: SelectionToolbarToolView, t: (key: string) => string) {
   if (tool.name) return tool.name;
   return t(`settings.selectionToolbar.tools.${tool.builtin_key}`);
-}
-
-function ToolButton({ tool }: { tool: SelectionToolbarToolView }) {
-  const { t } = useTranslation();
-  const executeTool = useSelectionToolbarStore((state) => state.executeTool);
-  const busy = useSelectionToolbarStore((state) => state.busy);
-  // The selected state is derived from the active run only — never from hover
-  // side effects — so exactly the tool whose result is shown appears selected.
-  const active = useSelectionToolbarStore((state) => state.run?.tool_id === tool.id);
-  const label = labelFor(tool, t);
-  return (
-    <button
-      aria-label={label}
-      aria-pressed={active}
-      className="selection-toolbar__tool"
-      data-active={active ? 'true' : undefined}
-      disabled={busy}
-      title={label}
-      type="button"
-      onMouseEnter={(event) => {
-        event.currentTarget.dataset.hover = 'true';
-      }}
-      onMouseLeave={(event) => {
-        delete event.currentTarget.dataset.hover;
-      }}
-      onPointerDown={(event) => {
-        // Non-focusable windows may not deliver a full click sequence; run on
-        // primary pointer down after stopPropagation so the backend self-hit
-        // path can keep the session alive (Tori / TextGO pattern).
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.button !== 0 || busy) return;
-        void executeTool(tool);
-      }}
-    >
-      <LucideToolIcon name={tool.icon} size={14} />
-      <span className="selection-toolbar__tool-label">{label}</span>
-    </button>
-  );
 }
 
 function beginWindowDrag() {
@@ -111,55 +70,30 @@ function ToolbarSurface() {
   const session = useSelectionToolbarStore((state) => state.session);
   const copied = useSelectionToolbarStore((state) => state.copied);
   const busy = useSelectionToolbarStore((state) => state.busy);
+  const activeToolId = useSelectionToolbarStore((state) => state.run?.tool_id);
+  const executeTool = useSelectionToolbarStore((state) => state.executeTool);
   const toggleOverflow = useSelectionToolbarStore((state) => state.toggleOverflow);
   if (!session) return null;
-  const visible = session.tools.slice(0, SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS);
-  const overflow = session.tools.length > SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS;
-
   return (
-    <div className="selection-toolbar__bar">
-      <button
-        aria-label={t('settings.selectionToolbar.drag')}
-        className="selection-toolbar__drag"
-        type="button"
-        onPointerDown={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          if (event.button !== 0) return;
-          beginWindowDrag();
-        }}
-      >
-        <GripVertical size={14} />
-      </button>
-      <img alt="" className="selection-toolbar__logo" draggable={false} src={logo} />
-      <div className="selection-toolbar__tools">
-        {visible.map((tool) => <ToolButton key={tool.id} tool={tool} />)}
-      </div>
-      {copied && <Check aria-label={t('common.copied')} className="selection-toolbar__copied" size={16} />}
-      {overflow && (
-        <button
-          aria-label={t('settings.selectionToolbar.more')}
-          className="selection-toolbar__more"
-          disabled={busy}
-          title={t('settings.selectionToolbar.more')}
-          type="button"
-          onMouseEnter={(event) => {
-            event.currentTarget.dataset.hover = 'true';
-          }}
-          onMouseLeave={(event) => {
-            delete event.currentTarget.dataset.hover;
-          }}
-          onPointerDown={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            if (event.button !== 0 || busy) return;
-            void toggleOverflow();
-          }}
-        >
-          <MoreHorizontal aria-hidden size={15} />
-        </button>
-      )}
-    </div>
+    <SelectionToolbarStrip
+      busy={busy}
+      copied={copied}
+      copiedLabel={t('common.copied')}
+      dragLabel={t('settings.selectionToolbar.drag')}
+      items={session.tools.map((tool) => ({
+        id: tool.id,
+        icon: tool.icon,
+        label: labelFor(tool, t),
+        active: activeToolId === tool.id,
+      }))}
+      moreLabel={t('settings.selectionToolbar.more')}
+      onDragPointerDown={beginWindowDrag}
+      onMorePointerDown={() => void toggleOverflow()}
+      onToolPointerDown={(id) => {
+        const tool = session.tools.find((item) => item.id === id);
+        if (tool) void executeTool(tool);
+      }}
+    />
   );
 }
 

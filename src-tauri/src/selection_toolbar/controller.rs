@@ -4,7 +4,9 @@ use std::sync::{
 };
 use std::time::Instant;
 
-use aqbot_core::types::{AppSettings, SelectionToolbarBuiltinAiKey, SelectionToolbarTool};
+use aqbot_core::types::{
+    AppSettings, SelectionToolbarBuiltinAiKey, SelectionToolbarTool, SelectionToolbarTriggerMode,
+};
 use tauri::{AppHandle, Emitter, Manager, Theme};
 use tokio::sync::{mpsc, Mutex};
 
@@ -29,6 +31,9 @@ pub struct SelectionToolbarRuntime {
     dragged_for_session: AtomicBool,
     /// True while a tool is running or the pointer is interacting with the toolbar.
     interaction_lock: AtomicBool,
+    /// Latest non-empty selection observed by the platform monitor. Shortcut
+    /// mode keeps this without opening a toolbar until the accelerator fires.
+    pending_selection: Mutex<Option<SelectionObservation>>,
     /// Selection-toolbar webview has registered event listeners.
     frontend_ready: AtomicBool,
     /// Session emitted before the frontend was ready.
@@ -48,6 +53,7 @@ impl SelectionToolbarRuntime {
             last_window_position: Mutex::new(None),
             dragged_for_session: AtomicBool::new(false),
             interaction_lock: AtomicBool::new(false),
+            pending_selection: Mutex::new(None),
             frontend_ready: AtomicBool::new(false),
             pending_session: Mutex::new(None),
         }
@@ -73,6 +79,10 @@ impl SelectionToolbarRuntime {
         }
         if self.monitor.lock().await.is_some() {
             if self.status().await.state == RuntimeState::PermissionRequired {
+                return;
+            }
+            if settings.selection_toolbar.trigger_mode == SelectionToolbarTriggerMode::Shortcut {
+                let _ = self.hide(app, "trigger_mode_changed").await;
                 return;
             }
             self.refresh_session(app, settings).await;
@@ -119,12 +129,48 @@ impl SelectionToolbarRuntime {
         if let Some(handle) = self.monitor.lock().await.take() {
             handle.stop();
         }
+        self.clear_selection_candidate().await;
         let settings =
             aqbot_core::repo::settings::get_settings(&app.state::<crate::AppState>().sea_db)
                 .await
                 .map_err(|error| error.to_string())?;
         self.reconcile(app, &settings).await;
         Ok(self.status().await)
+    }
+
+    pub async fn trigger_shortcut(&self, app: &AppHandle) -> Result<(), String> {
+        let settings =
+            aqbot_core::repo::settings::get_settings(&app.state::<crate::AppState>().sea_db)
+                .await
+                .map_err(|error| error.to_string())?;
+        if !settings.selection_toolbar.enabled {
+            return Err("Selection toolbar is disabled".into());
+        }
+        if settings.selection_toolbar.trigger_mode != SelectionToolbarTriggerMode::Shortcut {
+            return Err("Selection toolbar shortcut trigger mode is not enabled".into());
+        }
+        let observation = self
+            .pending_selection
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| "No active text selection is available".to_string())?;
+        if !settings
+            .selection_toolbar
+            .allows_source_app(&observation.source_app)
+        {
+            return Err("The active text selection is excluded by the app filter".into());
+        }
+        self.show_selection(app, observation, &settings).await
+    }
+
+    async fn remember_selection_candidate(&self, observation: &SelectionObservation) {
+        let candidate = (!observation.text.trim().is_empty()).then(|| observation.clone());
+        *self.pending_selection.lock().await = candidate;
+    }
+
+    async fn clear_selection_candidate(&self) {
+        *self.pending_selection.lock().await = None;
     }
 
     pub fn open_permission_settings(&self) -> Result<PermissionSettingsOutcome, String> {
@@ -332,6 +378,7 @@ impl SelectionToolbarRuntime {
                     text_len = observation.text.chars().count(),
                     "selection event received"
                 );
+                self.remember_selection_candidate(&observation).await;
                 let generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
                 self.debouncer
                     .lock()
@@ -372,6 +419,7 @@ impl SelectionToolbarRuntime {
                         "Suppressing platform Clear while toolbar interaction is active"
                     );
                 } else {
+                    self.clear_selection_candidate().await;
                     let _ = self.hide(app, "platform").await;
                 }
             }
@@ -380,6 +428,9 @@ impl SelectionToolbarRuntime {
                 // Esc always closes. App switch / hide / minimize must not close
                 // the toolbar while the user is interacting with it or a result
                 // panel is open — only an outside click, Esc or the close button.
+                if reason == DismissReason::AppChanged {
+                    self.clear_selection_candidate().await;
+                }
                 if reason == DismissReason::AppChanged && self.sticky_interaction_active().await {
                     tracing::debug!(
                         "Keeping selection toolbar open across an app change while interacting"
@@ -395,6 +446,7 @@ impl SelectionToolbarRuntime {
                     tracing::debug!("Ignoring global pointer down over selection toolbar");
                     self.interaction_lock.store(true, Ordering::Relaxed);
                 } else {
+                    self.clear_selection_candidate().await;
                     let _ = self.hide(app, "outside_click").await;
                 }
             }
@@ -405,6 +457,7 @@ impl SelectionToolbarRuntime {
                     Some(error),
                 )
                 .await;
+                self.clear_selection_candidate().await;
                 let _ = self.hide(app, "monitor_error").await;
             }
         }
@@ -464,9 +517,6 @@ impl SelectionToolbarRuntime {
             text_len = observation.text.chars().count(),
             "publishing selection"
         );
-        if self.should_skip_publish(&observation).await {
-            return;
-        }
         let settings =
             match aqbot_core::repo::settings::get_settings(&app.state::<crate::AppState>().sea_db)
                 .await
@@ -474,6 +524,10 @@ impl SelectionToolbarRuntime {
                 Ok(settings) if settings.selection_toolbar.enabled => settings,
                 _ => return,
             };
+        if settings.selection_toolbar.trigger_mode != SelectionToolbarTriggerMode::Selection {
+            tracing::debug!("selection cached until the configured shortcut is pressed");
+            return;
+        }
         if !settings
             .selection_toolbar
             .allows_source_app(&observation.source_app)
@@ -485,6 +539,18 @@ impl SelectionToolbarRuntime {
             );
             return;
         }
+        let _ = self.show_selection(app, observation, &settings).await;
+    }
+
+    async fn show_selection(
+        &self,
+        app: &AppHandle,
+        observation: SelectionObservation,
+        settings: &AppSettings,
+    ) -> Result<(), String> {
+        if self.should_skip_publish(&observation).await {
+            return Ok(());
+        }
         let status = self.status().await;
         if status.state != RuntimeState::Running {
             self.set_runtime_state(RuntimeState::Running, status.permission, None)
@@ -493,7 +559,7 @@ impl SelectionToolbarRuntime {
         let tools = toolbar_tool_views(&settings);
         if tools.is_empty() {
             let _ = self.hide(app, "no_enabled_tools").await;
-            return;
+            return Err("Selection toolbar has no enabled tools".into());
         }
         let theme = toolbar_theme(app, &settings);
         let anchor = observation.anchor;
@@ -520,8 +586,8 @@ impl SelectionToolbarRuntime {
         let position = match window::show_surface(app, anchor, anchor_kind, SurfaceSize::Toolbar) {
             Ok(position) => position,
             Err(error) => {
-                self.set_error("window_show_failed", error).await;
-                return;
+                self.set_error("window_show_failed", error.clone()).await;
+                return Err(error);
             }
         };
         tracing::info!(
@@ -546,6 +612,7 @@ impl SelectionToolbarRuntime {
                 *self.pending_session.lock().await = Some(session);
             }
         }
+        Ok(())
     }
 
     async fn refresh_session(&self, app: &AppHandle, settings: &AppSettings) {
@@ -581,6 +648,7 @@ impl SelectionToolbarRuntime {
         if let Some(handle) = self.monitor.lock().await.take() {
             handle.stop();
         }
+        self.clear_selection_candidate().await;
         let _ = self.hide(app, "disabled").await;
         self.set_runtime_state(RuntimeState::Disabled, platform::permission_state(), None)
             .await;
@@ -743,6 +811,39 @@ mod tests {
                 .await
         );
     }
+
+    #[tokio::test]
+    async fn shortcut_candidate_tracks_the_latest_non_empty_selection() {
+        let runtime = SelectionToolbarRuntime::new();
+        runtime
+            .remember_selection_candidate(&observation("first", "app.one"))
+            .await;
+        runtime
+            .remember_selection_candidate(&observation("second", "app.two"))
+            .await;
+
+        let candidate = runtime.pending_selection.lock().await.clone();
+        assert_eq!(candidate.as_ref().map(|value| value.text.as_str()), Some("second"));
+        assert_eq!(
+            candidate.as_ref().map(|value| value.source_app.as_str()),
+            Some("app.two")
+        );
+
+        runtime
+            .remember_selection_candidate(&observation("   ", "app.two"))
+            .await;
+        assert!(runtime.pending_selection.lock().await.is_none());
+    }
+
+    #[test]
+    fn default_toolbar_views_include_explain_with_question_icon() {
+        let views = toolbar_tool_views(&AppSettings::default());
+        let explain = views
+            .iter()
+            .find(|view| view.id == "explain")
+            .expect("default toolbar should include explain");
+        assert_eq!(explain.icon, "file-question");
+    }
 }
 
 fn toolbar_tool_views(settings: &AppSettings) -> Vec<ToolbarToolView> {
@@ -758,6 +859,7 @@ fn toolbar_tool_views(settings: &AppSettings) -> Vec<ToolbarToolView> {
                 None,
                 match builtin_key {
                     SelectionToolbarBuiltinAiKey::Translate => "languages",
+                    SelectionToolbarBuiltinAiKey::Explain => "file-question",
                     SelectionToolbarBuiltinAiKey::Polish => "spell-check",
                     SelectionToolbarBuiltinAiKey::Summarize => "list-collapse",
                 },

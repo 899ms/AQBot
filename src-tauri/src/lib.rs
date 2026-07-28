@@ -479,6 +479,7 @@ pub fn run() {
         commands::selection_toolbar::selection_toolbar_open_permission_settings,
         commands::selection_toolbar::selection_toolbar_request_permission,
         commands::selection_toolbar::selection_toolbar_retry_monitoring,
+        commands::selection_toolbar::selection_toolbar_trigger,
         commands::selection_toolbar::selection_toolbar_frontend_ready,
         commands::selection_toolbar::selection_toolbar_set_surface,
         commands::selection_toolbar::selection_toolbar_execute_tool,

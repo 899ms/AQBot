@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SelectionToolbarSettings } from '../SelectionToolbarSettings';
@@ -29,10 +29,36 @@ const mocks = vi.hoisted(() => {
     },
     {
       kind: 'builtin_ai' as const,
+      builtin_key: 'explain' as const,
+      enabled: true,
+      ai: {
+        prompt: 'Explain {selection} in {app_language}',
+        provider_id: null,
+        model_id: null,
+        temperature: null,
+        top_p: null,
+        max_tokens: null,
+      },
+    },
+    {
+      kind: 'builtin_ai' as const,
       builtin_key: 'polish' as const,
       enabled: true,
       ai: {
         prompt: 'Polish {selection}',
+        provider_id: null,
+        model_id: null,
+        temperature: null,
+        top_p: null,
+        max_tokens: null,
+      },
+    },
+    {
+      kind: 'builtin_ai' as const,
+      builtin_key: 'summarize' as const,
+      enabled: true,
+      ai: {
+        prompt: 'Summarize {selection}',
         provider_id: null,
         model_id: null,
         temperature: null,
@@ -50,6 +76,9 @@ const mocks = vi.hoisted(() => {
     value: {
       enabled: false,
       theme_follow: false,
+      trigger_mode: 'selection' as string,
+      trigger_shortcut: 'CmdOrCtrl+Shift+E',
+      translate_target_language: null as string | null,
       app_filter_mode: 'off' as string,
       app_filter: [] as Array<{ id: string; name: string }>,
       tools: defaultTools,
@@ -58,9 +87,18 @@ const mocks = vi.hoisted(() => {
   const appIcons = {
     value: {} as Record<string, string>,
   };
+  const globalShortcutsEnabled = { value: true };
+  const globalShortcutStatus = {
+    value: {
+      enabled: true,
+      registered: [] as string[],
+      failed: [] as Array<{ shortcut: string; reason: string }>,
+      diagnostics: [],
+    },
+  };
   const saveSettings = vi.fn(async (partial: { selection_toolbar?: typeof toolbar.value }) => {
     if (partial.selection_toolbar) {
-      toolbar.value = { ...toolbar.value, ...partial.selection_toolbar };
+      toolbar.value = partial.selection_toolbar;
     }
   });
   return {
@@ -68,6 +106,8 @@ const mocks = vi.hoisted(() => {
     runtime,
     toolbar,
     appIcons,
+    globalShortcutsEnabled,
+    globalShortcutStatus,
     defaultTools,
     invoke: vi.fn(async (command: string) => {
       if (command === 'selection_toolbar_resolve_app_paths') {
@@ -99,11 +139,21 @@ beforeEach(() => {
   mocks.toolbar.value = {
     enabled: false,
     theme_follow: false,
+    trigger_mode: 'selection',
+    trigger_shortcut: 'CmdOrCtrl+Shift+E',
+    translate_target_language: null,
     app_filter_mode: 'off',
     app_filter: [],
     tools: mocks.defaultTools,
   };
   mocks.appIcons.value = {};
+  mocks.globalShortcutsEnabled.value = true;
+  mocks.globalShortcutStatus.value = {
+    enabled: true,
+    registered: [],
+    failed: [],
+    diagnostics: [],
+  };
   mocks.invoke.mockClear();
   mocks.saveSettings.mockClear();
 });
@@ -120,7 +170,9 @@ vi.mock('@/stores', () => ({
     (selector: (state: Record<string, unknown>) => unknown) => selector({
       settings: {
         selection_toolbar: mocks.toolbar.value,
+        global_shortcuts_enabled: mocks.globalShortcutsEnabled.value,
       },
+      globalShortcutStatus: mocks.globalShortcutStatus.value,
       saveSettings: mocks.saveSettings,
     }),
     {
@@ -128,6 +180,7 @@ vi.mock('@/stores', () => ({
         error: null,
         settings: {
           selection_toolbar: mocks.toolbar.value,
+          global_shortcuts_enabled: mocks.globalShortcutsEnabled.value,
         },
       }),
     },
@@ -148,6 +201,101 @@ vi.mock('@/components/shared/ModelSelect', () => ({
 }));
 
 describe('SelectionToolbarSettings', () => {
+  it('renders a live readonly preview with the built-in explain tool', () => {
+    render(<SelectionToolbarSettings />);
+
+    const preview = screen.getByRole('img', {
+      name: 'settings.selectionToolbar.preview',
+    });
+    expect(within(preview).getByText(
+      'settings.selectionToolbar.tools.explain',
+    )).toBeInTheDocument();
+    expect(preview).toHaveAttribute('data-preview', 'true');
+  });
+
+  it('shows shortcut recording only in shortcut trigger mode and persists capture', async () => {
+    mocks.toolbar.value = {
+      ...mocks.toolbar.value,
+      trigger_mode: 'shortcut',
+    };
+    const user = userEvent.setup();
+    render(<SelectionToolbarSettings />);
+
+    const input = screen.getByRole('textbox', {
+      name: 'settings.selectionToolbar.triggerShortcut',
+    });
+    await user.click(screen.getByRole('button', { name: 'settings.recordShortcut' }));
+    fireEvent.keyDown(input, { key: 'K', metaKey: true, shiftKey: true });
+
+    await waitFor(() => expect(mocks.saveSettings).toHaveBeenCalledWith({
+      selection_toolbar: expect.objectContaining({
+        trigger_mode: 'shortcut',
+        trigger_shortcut: 'CmdOrCtrl+Shift+K',
+      }),
+    }));
+  });
+
+  it('persists shortcut trigger mode and resets its binding to the default', async () => {
+    mocks.toolbar.value = {
+      ...mocks.toolbar.value,
+      trigger_mode: 'shortcut',
+      trigger_shortcut: 'CmdOrCtrl+Shift+K',
+    };
+    const user = userEvent.setup();
+    render(<SelectionToolbarSettings />);
+
+    await user.click(screen.getByRole('button', {
+      name: 'settings.resetShortcutSingle',
+    }));
+
+    await waitFor(() => expect(mocks.saveSettings).toHaveBeenCalledWith({
+      selection_toolbar: expect.objectContaining({
+        trigger_mode: 'shortcut',
+        trigger_shortcut: 'CmdOrCtrl+Shift+E',
+      }),
+    }));
+  });
+
+  it('shows configured shortcut conflicts and registration failures', () => {
+    mocks.toolbar.value = {
+      ...mocks.toolbar.value,
+      trigger_mode: 'shortcut',
+      trigger_shortcut: 'CmdOrCtrl+Shift+A',
+    };
+    mocks.globalShortcutStatus.value = {
+      enabled: true,
+      registered: [],
+      failed: [{
+        shortcut: 'CommandOrControl+Shift+A',
+        reason: 'already registered',
+      }],
+      diagnostics: [],
+    };
+
+    render(<SelectionToolbarSettings />);
+
+    expect(screen.getByText(
+      'settings.selectionToolbar.shortcutConflict',
+    )).toBeInTheDocument();
+    expect(screen.getByText(
+      'settings.selectionToolbar.shortcutRegisterFailed',
+    )).toBeInTheDocument();
+  });
+
+  it('warns when shortcut trigger mode cannot use the global shortcut switch', () => {
+    mocks.toolbar.value = {
+      ...mocks.toolbar.value,
+      trigger_mode: 'shortcut',
+    };
+    mocks.globalShortcutsEnabled.value = false;
+
+    render(<SelectionToolbarSettings />);
+
+    expect(screen.getByText(
+      'settings.selectionToolbar.globalShortcutsDisabled',
+    )).toBeInTheDocument();
+  });
+
   it('uses the full settings content width without a page-specific maximum', () => {
     render(<SelectionToolbarSettings />);
 

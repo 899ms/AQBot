@@ -385,6 +385,7 @@ async fn finalize_stopped(
 struct PromptLanguages {
     source: String,
     target: String,
+    app: String,
 }
 
 /// Effective languages for the `{source_language}` / `{target_language}`
@@ -406,6 +407,7 @@ fn resolve_languages(options: &ToolRunOptions, settings: &AppSettings) -> Prompt
             .map(|code| super::languages::prompt_language_name(&code))
             .unwrap_or_else(|| "the automatically detected source language".to_string()),
         target: super::languages::prompt_language_name(&target),
+        app: super::languages::prompt_language_name(&settings.language),
     }
 }
 
@@ -415,6 +417,7 @@ fn render_prompt(template: &str, selection: &str, languages: &PromptLanguages) -
     template
         .replace("{source_language}", &languages.source)
         .replace("{target_language}", &languages.target)
+        .replace("{app_language}", &languages.app)
         .replace("{selection}", selection)
 }
 
@@ -637,6 +640,7 @@ mod tests {
         let languages = PromptLanguages {
             source: "English".into(),
             target: "Simplified Chinese".into(),
+            app: "Simplified Chinese".into(),
         };
         assert_eq!(
             render_prompt("Before {selection}; after {selection}", "private", &languages),
@@ -649,14 +653,15 @@ mod tests {
         let languages = PromptLanguages {
             source: "English".into(),
             target: "Japanese".into(),
+            app: "Simplified Chinese".into(),
         };
         assert_eq!(
             render_prompt(
-                "From {source_language} to {target_language}:\n{selection}",
-                "keep {target_language} literal",
+                "From {source_language} to {target_language}; explain in {app_language}:\n{selection}",
+                "keep {target_language} and {app_language} literal",
                 &languages,
             ),
-            "From English to Japanese:\nkeep {target_language} literal"
+            "From English to Japanese; explain in Simplified Chinese:\nkeep {target_language} and {app_language} literal"
         );
     }
 
@@ -673,6 +678,7 @@ mod tests {
             PromptLanguages {
                 source: "the automatically detected source language".into(),
                 target: "Simplified Chinese".into(),
+                app: "Simplified Chinese".into(),
             }
         );
 
@@ -689,6 +695,7 @@ mod tests {
         );
         assert_eq!(overridden.source, "French");
         assert_eq!(overridden.target, "Korean");
+        assert_eq!(overridden.app, "Simplified Chinese");
 
         let auto_source = resolve_languages(
             &ToolRunOptions {
