@@ -61,6 +61,22 @@ pub async fn list_conversations(db: &DatabaseConnection) -> Result<Vec<Conversat
     Ok(rows.into_iter().map(conversation_from_entity).collect())
 }
 
+/// Most recently updated non-archived conversations for tray / quick switchers.
+/// Pinning does not affect order — strictly `updated_at` DESC.
+pub async fn list_recent_conversations(
+    db: &DatabaseConnection,
+    limit: u64,
+) -> Result<Vec<Conversation>> {
+    let rows = conversations::Entity::find()
+        .filter(conversations::Column::IsArchived.eq(0))
+        .order_by_desc(conversations::Column::UpdatedAt)
+        .limit(limit)
+        .all(db)
+        .await?;
+
+    Ok(rows.into_iter().map(conversation_from_entity).collect())
+}
+
 /// Provider/model pair of the most recently updated non-archived conversation.
 /// Unlike [`list_conversations`], pinning does not affect the ordering — this
 /// is strictly "the model the user chatted with last".

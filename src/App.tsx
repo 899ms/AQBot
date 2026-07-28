@@ -15,6 +15,7 @@ import { useGlobalShortcutManager } from '@/hooks/useGlobalShortcutManager';
 import { useResolvedDarkMode } from '@/hooks/useResolvedDarkMode';
 import { useGlobalOverlayScrollbars } from '@/hooks/useGlobalOverlayScrollbars';
 import { useUpdateChecker } from '@/hooks/useUpdateChecker';
+import { useTrayMenuActions } from '@/hooks/useTrayMenuActions';
 import { useProviderDeepLink } from '@/hooks/useProviderDeepLink';
 import { useShadcnTheme } from '@/theme/shadcnTheme';
 import { isTauri, invoke, listen } from '@/lib/invoke';
@@ -50,6 +51,7 @@ function AppInner() {
   const { open: cmdOpen, setOpen: setCmdOpen } = useCommandPalette();
   const isInSettings = renderedActivePage === 'settings';
   useProviderDeepLink({ modal, message });
+  useTrayMenuActions();
   useGlobalOverlayScrollbars(appRootRef);
 
   // Handle app close confirmation from backend

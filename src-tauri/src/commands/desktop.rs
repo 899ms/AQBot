@@ -1,3 +1,4 @@
+use crate::tray::PendingTrayAction;
 use crate::AppState;
 use std::sync::atomic::Ordering;
 use tauri::Manager;
@@ -65,6 +66,18 @@ pub async fn force_quit(app: tauri::AppHandle) -> Result<(), String> {
     state.is_quitting.store(true, Ordering::Relaxed);
     app.exit(0);
     Ok(())
+}
+
+/// Rebuild tray menu (recent conversations, selection-toolbar check, i18n labels).
+#[tauri::command]
+pub async fn refresh_tray_menu(app: tauri::AppHandle) -> Result<(), String> {
+    crate::tray::sync_tray_menu(&app).await
+}
+
+/// Drain a tray action queued while the main webview was destroyed or not yet ready.
+#[tauri::command]
+pub fn take_pending_tray_action(app: tauri::AppHandle) -> Option<PendingTrayAction> {
+    crate::tray::take_pending_action(&app)
 }
 
 #[tauri::command]

@@ -2011,6 +2011,10 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
       return undefined as T;
     case 'set_tray_actions':
       return undefined as T;
+    case 'refresh_tray_menu':
+      return undefined as T;
+    case 'take_pending_tray_action':
+      return null as T;
     case 'handle_protocol_launch':
       return undefined as T;
 

@@ -5742,6 +5742,7 @@ mod tests {
             agent_ask_senders: Arc::new(Mutex::new(HashMap::new())),
             agent_always_allowed: Arc::new(Mutex::new(HashMap::new())),
             selection_toolbar: Arc::new(crate::selection_toolbar::SelectionToolbarRuntime::new()),
+            pending_tray_action: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -7734,6 +7735,7 @@ mod tests {
             agent_ask_senders: Arc::new(Mutex::new(std::collections::HashMap::new())),
             agent_always_allowed: Arc::new(Mutex::new(std::collections::HashMap::new())),
             selection_toolbar: Arc::new(crate::selection_toolbar::SelectionToolbarRuntime::new()),
+            pending_tray_action: Arc::new(std::sync::Mutex::new(None)),
         };
 
         let attachments = vec![AttachmentInput {

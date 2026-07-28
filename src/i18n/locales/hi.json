@@ -1529,7 +1529,12 @@
   "tray": {
     "show": "दिखाएँ",
     "hide": "छुपाएँ",
-    "quit": "बाहर निकलें"
+    "quit": "बाहर निकलें",
+    "recent": "हालिया",
+    "untitled": "नई बातचीत",
+    "selectionToolbar": "चयन टूलबार",
+    "github": "GitHub",
+    "checkUpdate": "अपडेट जांचें"
   },
   "error": {
     "network": "नेटवर्क कनेक्शन विफल",

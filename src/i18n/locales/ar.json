@@ -1529,7 +1529,12 @@
   "tray": {
     "show": "إظهار",
     "hide": "إخفاء",
-    "quit": "إنهاء"
+    "quit": "إنهاء",
+    "recent": "الأخيرة",
+    "untitled": "محادثة جديدة",
+    "selectionToolbar": "شريط التحديد",
+    "github": "GitHub",
+    "checkUpdate": "التحقق من التحديثات"
   },
   "error": {
     "network": "فشل الاتصال بالشبكة",

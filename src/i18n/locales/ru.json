@@ -1529,7 +1529,12 @@
   "tray": {
     "show": "Показать",
     "hide": "Скрыть",
-    "quit": "Выход"
+    "quit": "Выход",
+    "recent": "Недавние",
+    "untitled": "Новый диалог",
+    "selectionToolbar": "Панель выделения",
+    "github": "GitHub",
+    "checkUpdate": "Проверить обновления"
   },
   "error": {
     "network": "Ошибка сетевого соединения",

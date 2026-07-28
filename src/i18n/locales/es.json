@@ -1529,7 +1529,12 @@
   "tray": {
     "show": "Mostrar",
     "hide": "Ocultar",
-    "quit": "Salir"
+    "quit": "Salir",
+    "recent": "Recientes",
+    "untitled": "Nueva conversación",
+    "selectionToolbar": "Barra de selección",
+    "github": "GitHub",
+    "checkUpdate": "Buscar actualizaciones"
   },
   "error": {
     "network": "Error de conexión de red",

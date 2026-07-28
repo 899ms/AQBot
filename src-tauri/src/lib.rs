@@ -45,6 +45,8 @@ pub struct AppState {
     pub agent_always_allowed:
         Arc<Mutex<std::collections::HashMap<String, std::collections::HashSet<String>>>>,
     pub selection_toolbar: Arc<selection_toolbar::SelectionToolbarRuntime>,
+    /// Tray actions that must survive main-window webview destroy/restore.
+    pub pending_tray_action: Arc<std::sync::Mutex<Option<tray::PendingTrayAction>>>,
 }
 
 mod commands;
@@ -470,6 +472,8 @@ pub fn run() {
         commands::desktop::list_system_fonts,
         commands::desktop::minimize_window,
         commands::desktop::toggle_maximize_window,
+        commands::desktop::refresh_tray_menu,
+        commands::desktop::take_pending_tray_action,
         // crash diagnostics
         commands::crash_diagnostics::get_previous_crash_report,
         commands::crash_diagnostics::acknowledge_previous_crash_report,
@@ -829,6 +833,7 @@ pub fn run() {
                 agent_ask_senders: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 agent_always_allowed: Arc::new(Mutex::new(std::collections::HashMap::new())),
                 selection_toolbar: Arc::new(selection_toolbar::SelectionToolbarRuntime::new()),
+                pending_tray_action: Arc::new(std::sync::Mutex::new(None)),
             });
 
             {

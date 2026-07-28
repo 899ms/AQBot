@@ -1529,7 +1529,12 @@
   "tray": {
     "show": "顯示",
     "hide": "隱藏",
-    "quit": "結束"
+    "quit": "結束",
+    "recent": "最近對話",
+    "untitled": "新對話",
+    "selectionToolbar": "劃詞工具列",
+    "github": "GitHub",
+    "checkUpdate": "檢查更新"
   },
   "error": {
     "network": "網路連線失敗，請檢查網路設定",

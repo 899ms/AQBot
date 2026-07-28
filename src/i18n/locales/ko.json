@@ -1529,7 +1529,12 @@
   "tray": {
     "show": "표시",
     "hide": "숨기기",
-    "quit": "종료"
+    "quit": "종료",
+    "recent": "최근 대화",
+    "untitled": "새 대화",
+    "selectionToolbar": "선택 도구 모음",
+    "github": "GitHub",
+    "checkUpdate": "업데이트 확인"
   },
   "error": {
     "network": "네트워크 연결에 실패했습니다",

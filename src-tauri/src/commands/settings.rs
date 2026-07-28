@@ -47,5 +47,6 @@ pub async fn save_settings(
         .store(settings.release_webview_on_tray, Ordering::Relaxed);
     app_state.selection_toolbar.reconcile(&app, &settings).await;
 
-    crate::tray::sync_tray_language(&app, &settings.language).map_err(|e| e.to_string())
+    crate::tray::sync_tray_language(&app, &settings.language).map_err(|e| e.to_string())?;
+    Ok(())
 }

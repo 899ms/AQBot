@@ -1529,7 +1529,12 @@
   "tray": {
     "show": "Anzeigen",
     "hide": "Ausblenden",
-    "quit": "Beenden"
+    "quit": "Beenden",
+    "recent": "Zuletzt",
+    "untitled": "Neue Unterhaltung",
+    "selectionToolbar": "Auswahl-Toolbar",
+    "github": "GitHub",
+    "checkUpdate": "Nach Updates suchen"
   },
   "error": {
     "network": "Netzwerkverbindung fehlgeschlagen",

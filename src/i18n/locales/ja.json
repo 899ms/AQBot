@@ -1529,7 +1529,12 @@
   "tray": {
     "show": "表示",
     "hide": "非表示",
-    "quit": "終了"
+    "quit": "終了",
+    "recent": "最近の会話",
+    "untitled": "新しい会話",
+    "selectionToolbar": "選択ツールバー",
+    "github": "GitHub",
+    "checkUpdate": "更新を確認"
   },
   "error": {
     "network": "ネットワーク接続に失敗しました",
