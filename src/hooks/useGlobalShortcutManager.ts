@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { isTauri } from '@/lib/invoke';
+import { invoke, isTauri } from '@/lib/invoke';
 import { useSettingsStore } from '@/stores';
 import {
   SHORTCUT_ACTIONS,
@@ -115,9 +115,30 @@ export function useGlobalShortcutManager() {
         });
         if (cancelled) return;
 
-        for (const action of SHORTCUT_ACTIONS) {
-          if (!isGlobalShortcutAction(action)) continue;
-          const binding = getShortcutBinding(settings, action);
+        const registrations: Array<{
+          action: string;
+          binding: string;
+          execute: () => Promise<void>;
+        }> = SHORTCUT_ACTIONS
+          .filter(isGlobalShortcutAction)
+          .map((action) => ({
+            action,
+            binding: getShortcutBinding(settings, action),
+            execute: () => executeShortcutAction(action as ShortcutAction),
+          }));
+        if (
+          settings.selection_toolbar.enabled
+          && settings.selection_toolbar.trigger_mode === 'shortcut'
+        ) {
+          registrations.push({
+            action: 'selectionToolbar',
+            binding: settings.selection_toolbar.trigger_shortcut,
+            execute: () => invoke('selection_toolbar_trigger'),
+          });
+        }
+
+        for (const registration of registrations) {
+          const { action, binding, execute } = registration;
           const accelerator = toTauriAccelerator(binding);
           pushDiagnostic({
             phase: 'register',
@@ -142,7 +163,25 @@ export function useGlobalShortcutManager() {
                 eventShortcut: event.shortcut,
                 state: event.state,
               });
-              await executeShortcutAction(action as ShortcutAction);
+              try {
+                await execute();
+              } catch (error) {
+                const reason = String(error);
+                pushDiagnostic({
+                  phase: 'trigger',
+                  level: 'warn',
+                  action,
+                  shortcut: accelerator,
+                  reason,
+                  message: 'Global shortcut action failed.',
+                });
+                updateStatus({
+                  enabled: true,
+                  registered: [...registered],
+                  failed: [...failed],
+                });
+                console.warn(`Global shortcut action failed for ${action} (${accelerator}):`, error);
+              }
             });
             const verifyRegistered = await isRegistered(accelerator);
             if (!verifyRegistered) {

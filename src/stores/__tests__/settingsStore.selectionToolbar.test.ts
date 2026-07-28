@@ -21,8 +21,41 @@ describe('selection toolbar settings', () => {
     expect(useSettingsStore.getState().settings.selection_toolbar).toMatchObject({
       enabled: false,
       theme_follow: false,
+      trigger_mode: 'selection',
+      trigger_shortcut: 'CmdOrCtrl+Shift+E',
     });
-    expect(useSettingsStore.getState().settings.selection_toolbar.tools).toHaveLength(4);
+    expect(useSettingsStore.getState().settings.selection_toolbar.tools).toHaveLength(5);
+  });
+
+  it('inserts explain after translate when fetched tools use the legacy shape', async () => {
+    invokeMock.mockResolvedValueOnce({
+      selection_toolbar: {
+        tools: [
+          {
+            kind: 'builtin_ai',
+            builtin_key: 'translate',
+            enabled: true,
+            ai: {
+              prompt: 'Translate {selection}',
+              provider_id: null,
+              model_id: null,
+              temperature: null,
+              top_p: null,
+              max_tokens: null,
+            },
+          },
+          { kind: 'builtin_action', builtin_key: 'copy', enabled: true },
+        ],
+      },
+    });
+    const { useSettingsStore } = await import('../settingsStore');
+
+    await useSettingsStore.getState().fetchSettings();
+
+    expect(
+      useSettingsStore.getState().settings.selection_toolbar.tools.map((tool) =>
+        tool.kind === 'custom_ai' ? tool.id : tool.builtin_key),
+    ).toEqual(['translate', 'explain', 'copy']);
   });
 
   it('rolls back an optimistic toolbar update when persistence fails', async () => {

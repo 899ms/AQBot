@@ -100,6 +100,14 @@ pub async fn selection_toolbar_retry_monitoring(
 }
 
 #[tauri::command]
+pub async fn selection_toolbar_trigger(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    state.selection_toolbar.trigger_shortcut(&app).await
+}
+
+#[tauri::command]
 pub async fn selection_toolbar_set_surface(
     app: AppHandle,
     state: State<'_, AppState>,
