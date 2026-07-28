@@ -1,8 +1,8 @@
 import { Menu, theme } from 'antd';
 import { Cloud, Settings, Palette, Globe, Zap, Database, Info, Search, Plug, CloudUpload, Bot, HardDrive, MessageSquare, ArrowLeft, TextCursorInput } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { useUIStore } from '@/stores';
-import type { SettingsSection } from '@/types';
+import { useSettingsStore, useUIStore } from '@/stores';
+import type { SettingsSection, SettingsSidebarDensity } from '@/types';
 
 const MENU_ICONS: Record<SettingsSection, React.ReactNode> = {
   providers: <Cloud size={16} />,
@@ -38,12 +38,29 @@ const SECTION_KEYS: SettingsSection[] = [
   'about',
 ];
 
+const DENSITY_HEIGHT_OFFSETS: Record<SettingsSidebarDensity, number> = {
+  compact: -4,
+  standard: 0,
+  spacious: 8,
+};
+
+export function resolveSettingsSidebarItemHeight(
+  fontSize: number,
+  density: SettingsSidebarDensity,
+): number {
+  const baseHeight = Math.min(52, Math.max(40, 40 + 2 * (fontSize - 14)));
+  return Math.min(56, Math.max(36, baseHeight + DENSITY_HEIGHT_OFFSETS[density]));
+}
+
 export function SettingsSidebar() {
   const { t } = useTranslation();
   const { token } = theme.useToken();
+  const fontSize = useSettingsStore((s) => s.settings.font_size);
+  const density = useSettingsStore((s) => s.settings.settings_sidebar_density);
   const settingsSection = useUIStore((s) => s.settingsSection);
   const setSettingsSection = useUIStore((s) => s.setSettingsSection);
   const exitSettings = useUIStore((s) => s.exitSettings);
+  const itemHeight = resolveSettingsSidebarItemHeight(fontSize, density);
 
   const items = SECTION_KEYS.map((key) => ({
     key,
@@ -97,6 +114,7 @@ export function SettingsSidebar() {
           selectedKeys={[settingsSection]}
           items={items}
           style={{ borderInlineEnd: 'none' }}
+          styles={{ item: { height: itemHeight, lineHeight: `${itemHeight}px` } }}
           onClick={({ key }) => setSettingsSection(key as SettingsSection)}
         />
       </div>

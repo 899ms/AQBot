@@ -375,6 +375,7 @@ const DEFAULT_SETTINGS = {
   theme_mode: 'system',
   primary_color: '#17A93D',
   font_size: 14,
+  settings_sidebar_density: 'standard',
   language: 'zh-CN',
   minimize_to_tray: true,
   release_webview_on_tray: false,

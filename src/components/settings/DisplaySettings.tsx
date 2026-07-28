@@ -1,8 +1,9 @@
-import { ColorPicker, Divider, Segmented, Slider } from 'antd';
+import { ColorPicker, Divider, Segmented, Slider, theme } from 'antd';
 import { Sun, Moon, Monitor } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useMemo } from 'react';
 import { useSettingsStore } from '@/stores';
+import type { SettingsSidebarDensity } from '@/types';
 import { SHIKI_LIGHT_THEMES, SHIKI_DARK_THEMES, formatThemeName } from '@/constants/codeThemes';
 import { useSystemFonts } from '@/hooks/useSystemFonts';
 import { SettingsGroup } from './SettingsGroup';
@@ -10,6 +11,7 @@ import { SettingsSelect } from './SettingsSelect';
 
 export function DisplaySettings() {
   const { t } = useTranslation();
+  const { token } = theme.useToken();
   const settings = useSettingsStore((s) => s.settings);
   const saveSettings = useSettingsStore((s) => s.saveSettings);
   const systemFonts = useSystemFonts();
@@ -87,6 +89,33 @@ export function DisplaySettings() {
             value={settings.font_size}
             onChange={(val) => saveSettings({ font_size: val })}
             marks={{ 12: '12', 14: '14', 16: '16', 18: '18', 20: '20' }}
+          />
+        </div>
+        <Divider style={{ margin: '4px 0' }} />
+        <div style={rowStyle} className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <span id="settings-sidebar-density-label">
+              {t('settings.settingsSidebarDensity')}
+            </span>
+            <div
+              id="settings-sidebar-density-description"
+              style={{ color: token.colorTextDescription, fontSize: token.fontSizeSM, marginTop: 2 }}
+            >
+              {t('settings.settingsSidebarDensityDesc')}
+            </div>
+          </div>
+          <Segmented
+            aria-labelledby="settings-sidebar-density-label"
+            aria-describedby="settings-sidebar-density-description"
+            value={settings.settings_sidebar_density}
+            onChange={(val) =>
+              saveSettings({ settings_sidebar_density: val as SettingsSidebarDensity })
+            }
+            options={[
+              { label: t('settings.densityCompact'), value: 'compact' },
+              { label: t('settings.densityStandard'), value: 'standard' },
+              { label: t('settings.densitySpacious'), value: 'spacious' },
+            ]}
           />
         </div>
         <Divider style={{ margin: '4px 0' }} />

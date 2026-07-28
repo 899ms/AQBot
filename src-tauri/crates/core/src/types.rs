@@ -1296,6 +1296,15 @@ impl SelectionToolbarSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SettingsSidebarDensity {
+    Compact,
+    #[default]
+    Standard,
+    Spacious,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
@@ -1307,6 +1316,7 @@ pub struct AppSettings {
     pub show_on_start: bool,
     pub minimize_to_tray: bool,
     pub font_size: u8,
+    pub settings_sidebar_density: SettingsSidebarDensity,
     pub font_weight: u16,
     pub font_family: String,
     pub code_font_family: String,
@@ -1472,6 +1482,7 @@ impl Default for AppSettings {
             show_on_start: true,
             minimize_to_tray: true,
             font_size: 14,
+            settings_sidebar_density: SettingsSidebarDensity::Standard,
             font_weight: 400,
             font_family: String::new(),
             code_font_family: String::new(),
@@ -1605,7 +1616,7 @@ mod app_settings_tests {
         is_valid_selection_toolbar_icon, AppSettings, ModelCatalogSourcePreference,
         SelectionToolbarAiConfig, SelectionToolbarAppEntry, SelectionToolbarAppFilterMode,
         SelectionToolbarBuiltinAiKey, SelectionToolbarSettings, SelectionToolbarTool,
-        DEFAULT_TRANSLATE_PROMPT,
+        SettingsSidebarDensity, DEFAULT_TRANSLATE_PROMPT,
     };
     use serde_json::json;
 
@@ -1613,6 +1624,53 @@ mod app_settings_tests {
     fn release_webview_on_tray_defaults_to_disabled() {
         let settings = AppSettings::default();
         assert!(!settings.release_webview_on_tray);
+    }
+
+    #[test]
+    fn settings_sidebar_density_defaults_and_remains_backward_compatible() {
+        let settings = AppSettings::default();
+        assert_eq!(
+            settings.settings_sidebar_density,
+            SettingsSidebarDensity::Standard
+        );
+
+        let legacy: AppSettings =
+            serde_json::from_value(json!({})).expect("legacy settings should deserialize");
+        assert_eq!(
+            legacy.settings_sidebar_density,
+            SettingsSidebarDensity::Standard
+        );
+    }
+
+    #[test]
+    fn settings_sidebar_density_roundtrips_all_variants() {
+        for (density, serialized_name) in [
+            (SettingsSidebarDensity::Compact, "compact"),
+            (SettingsSidebarDensity::Standard, "standard"),
+            (SettingsSidebarDensity::Spacious, "spacious"),
+        ] {
+            let mut settings = AppSettings::default();
+            settings.settings_sidebar_density = density;
+
+            let serialized = serde_json::to_value(settings).expect("settings should serialize");
+            assert_eq!(
+                serialized["settings_sidebar_density"],
+                json!(serialized_name)
+            );
+
+            let roundtrip: AppSettings =
+                serde_json::from_value(serialized).expect("settings should deserialize");
+            assert_eq!(roundtrip.settings_sidebar_density, density);
+        }
+    }
+
+    #[test]
+    fn settings_sidebar_density_rejects_unknown_values() {
+        let result = serde_json::from_value::<AppSettings>(json!({
+            "settings_sidebar_density": "extra_spacious"
+        }));
+
+        assert!(result.is_err(), "unknown density must fail deserialization");
     }
 
     #[test]

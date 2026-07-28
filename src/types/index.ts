@@ -622,6 +622,7 @@ export type AgentWorkspaceNameStrategy =
   | 'created_timestamp'
   | 'created_datetime';
 export type ChatMessageAreaStyle = 'none' | 'background' | 'border';
+export type SettingsSidebarDensity = 'compact' | 'standard' | 'spacious';
 
 export interface AppSettings {
   language: string;
@@ -632,6 +633,7 @@ export interface AppSettings {
   show_on_start: boolean;
   minimize_to_tray: boolean;
   font_size: number;
+  settings_sidebar_density: SettingsSidebarDensity;
   font_weight: number;
   font_family: string;
   code_font_family: string;

@@ -29,6 +29,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   show_on_start: true,
   minimize_to_tray: true,
   font_size: 14,
+  settings_sidebar_density: 'standard',
   font_weight: 400,
   font_family: '',
   code_font_family: '',
