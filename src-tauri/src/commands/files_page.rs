@@ -433,8 +433,15 @@ pub async fn cleanup_missing_files_page_entry(
     match source_kind {
         "attachment" => {
             let file_store = aqbot_core::file_store::FileStore::new();
-            super::file_cleanup::delete_attachment_reference(&state.sea_db, &file_store, record_id)
-                .await
+            // Files-page cleanup purges missing index rows even when chat/Drawing
+            // still hold dead media IDs. Safe GC (`delete_attachment_reference`)
+            // would refuse those and leave the UI stuck on 缺失 entries.
+            super::file_cleanup::force_delete_stored_file_record(
+                &state.sea_db,
+                &file_store,
+                record_id,
+            )
+            .await
         }
         "backup_manifest" => aqbot_core::repo::backup::delete_backup(&state.sea_db, record_id)
             .await
