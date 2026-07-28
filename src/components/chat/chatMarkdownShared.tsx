@@ -124,6 +124,59 @@ export const CHAT_INFOGRAPHIC_PROPS = {
   ),
 };
 
+export interface ChatMarkdownRendererProps {
+  content?: string;
+  nodes?: readonly ChatMarkdownNode[] | null;
+  isDark: boolean;
+  final: boolean;
+  customId: string;
+  codeBlockDarkTheme: string;
+  codeBlockLightTheme: string;
+  codeBlockThemes: string[];
+  codeFontFamily?: string;
+}
+
+export function ChatMarkdownRenderer({
+  content,
+  nodes,
+  isDark,
+  final,
+  customId,
+  codeBlockDarkTheme,
+  codeBlockLightTheme,
+  codeBlockThemes,
+  codeFontFamily,
+}: ChatMarkdownRendererProps) {
+  const codeBlockProps = useMemo(
+    () => getChatCodeBlockProps(codeBlockDarkTheme, codeBlockLightTheme),
+    [codeBlockDarkTheme, codeBlockLightTheme],
+  );
+  const codeBlockMonacoOptions = useMemo(
+    () => codeFontFamily ? { fontFamily: codeFontFamily } : undefined,
+    [codeFontFamily],
+  );
+
+  return (
+    <NodeRenderer
+      content={content}
+      nodes={nodes}
+      isDark={isDark}
+      customId={customId}
+      customHtmlTags={CHAT_CUSTOM_HTML_TAGS}
+      final={final}
+      typewriter={false}
+      themes={codeBlockThemes}
+      codeBlockLightTheme={codeBlockLightTheme}
+      codeBlockDarkTheme={codeBlockDarkTheme}
+      codeBlockProps={codeBlockProps}
+      codeBlockMonacoOptions={codeBlockMonacoOptions}
+      mermaidProps={CHAT_MERMAID_PROPS}
+      infographicProps={CHAT_INFOGRAPHIC_PROPS}
+      {...CHAT_RENDER_BATCH_PROPS}
+    />
+  );
+}
+
 export function getCustomAttr(attrs: CustomNodeAttrs, name: string): string | undefined {
   if (!attrs) return undefined;
 

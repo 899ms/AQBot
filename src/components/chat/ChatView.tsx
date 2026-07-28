@@ -31,18 +31,14 @@ import { InputArea } from './InputArea';
 import { ModelSelector } from './ModelSelector';
 import { parseSearchContent } from '@/lib/searchUtils';
 import {
-  CHAT_CUSTOM_HTML_TAGS,
   safeParseChatMarkdown,
   shouldUsePlainTextChatContent,
   stripAqbotTags,
   type ChatMarkdownNode,
 } from '@/lib/chatMarkdown';
 import {
-  CHAT_INFOGRAPHIC_PROPS,
-  CHAT_MERMAID_PROPS,
-  CHAT_RENDER_BATCH_PROPS,
+  ChatMarkdownRenderer,
   ThinkNode,
-  getChatCodeBlockProps,
   getChatCodeThemes,
   getCustomAttr,
   setCodeBlockPreviewHandler,
@@ -1019,14 +1015,6 @@ const AssistantMarkdown = React.memo(function AssistantMarkdown({
   const { t } = useTranslation();
   const { message: messageApi } = App.useApp();
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const codeBlockProps = useMemo(
-    () => getChatCodeBlockProps(codeBlockDarkTheme, codeBlockLightTheme),
-    [codeBlockDarkTheme, codeBlockLightTheme],
-  );
-  const codeBlockMonacoOptions = useMemo(
-    () => codeFontFamily ? { fontFamily: codeFontFamily } : undefined,
-    [codeFontFamily],
-  );
   const renderableContent = useMemo(
     () => normalizeStoredMediaUrlsForPlatform(content),
     [content],
@@ -1157,61 +1145,43 @@ const AssistantMarkdown = React.memo(function AssistantMarkdown({
   return (
     <div className="aqbot-chat-markdown">
       {renderNodes ? (
-        <NodeRenderer
+        <ChatMarkdownRenderer
           key={rendererKey}
           nodes={renderNodes}
           isDark={isDarkMode}
           customId="chat"
-          customHtmlTags={CHAT_CUSTOM_HTML_TAGS}
           final={!isStreaming}
-          typewriter={false}
-          themes={codeBlockThemes}
+          codeBlockThemes={codeBlockThemes}
           codeBlockLightTheme={codeBlockLightTheme}
           codeBlockDarkTheme={codeBlockDarkTheme}
-          codeBlockProps={codeBlockProps}
-          codeBlockMonacoOptions={codeBlockMonacoOptions}
-          mermaidProps={CHAT_MERMAID_PROPS}
-          infographicProps={CHAT_INFOGRAPHIC_PROPS}
-          {...CHAT_RENDER_BATCH_PROPS}
+          codeFontFamily={codeFontFamily}
         />
       ) : (
         <>
           {displayPrefixNodes && (
-            <NodeRenderer
+            <ChatMarkdownRenderer
               key={`${rendererKey}:display-prefix`}
               nodes={displayPrefixNodes}
               isDark={isDarkMode}
               customId="chat"
-              customHtmlTags={CHAT_CUSTOM_HTML_TAGS}
               final
-              typewriter={false}
-              themes={codeBlockThemes}
+              codeBlockThemes={codeBlockThemes}
               codeBlockLightTheme={codeBlockLightTheme}
               codeBlockDarkTheme={codeBlockDarkTheme}
-              codeBlockProps={codeBlockProps}
-              codeBlockMonacoOptions={codeBlockMonacoOptions}
-              mermaidProps={CHAT_MERMAID_PROPS}
-              infographicProps={CHAT_INFOGRAPHIC_PROPS}
-              {...CHAT_RENDER_BATCH_PROPS}
+              codeFontFamily={codeFontFamily}
             />
           )}
           {rendererContent && (
-            <NodeRenderer
+            <ChatMarkdownRenderer
               key={rendererKey}
               content={rendererContent}
               isDark={isDarkMode}
               customId="chat"
-              customHtmlTags={CHAT_CUSTOM_HTML_TAGS}
               final={!isStreaming}
-              typewriter={false}
-              themes={codeBlockThemes}
+              codeBlockThemes={codeBlockThemes}
               codeBlockLightTheme={codeBlockLightTheme}
               codeBlockDarkTheme={codeBlockDarkTheme}
-              codeBlockProps={codeBlockProps}
-              codeBlockMonacoOptions={codeBlockMonacoOptions}
-              mermaidProps={CHAT_MERMAID_PROPS}
-              infographicProps={CHAT_INFOGRAPHIC_PROPS}
-              {...CHAT_RENDER_BATCH_PROPS}
+              codeFontFamily={codeFontFamily}
             />
           )}
         </>

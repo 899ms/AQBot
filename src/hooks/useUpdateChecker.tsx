@@ -1,7 +1,48 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { App, Progress, Button } from 'antd';
 import { useTranslation } from 'react-i18next';
+import { registerHighlight } from 'stream-markdown';
+import {
+  ChatMarkdownRenderer,
+  getChatCodeThemes,
+} from '@/components/chat/chatMarkdownShared';
 import { isTauri } from '@/lib/invoke';
+import { useResolvedDarkMode } from '@/hooks/useResolvedDarkMode';
+import { useSettingsStore } from '@/stores';
+
+export function UpdateReleaseNotes({ content }: { content: string }) {
+  const settings = useSettingsStore((state) => state.settings);
+  const isDark = useResolvedDarkMode(settings.theme_mode);
+  const { darkTheme, lightTheme, themes } = useMemo(
+    () => getChatCodeThemes(settings.code_theme, settings.code_theme_light),
+    [settings.code_theme, settings.code_theme_light],
+  );
+
+  useEffect(() => {
+    registerHighlight({ themes: themes as never }).catch((error) => {
+      console.error('Update release notes registerHighlight failed:', error);
+    });
+  }, [themes]);
+
+  return (
+    <div
+      className="aqbot-chat-markdown"
+      style={{ maxHeight: 300, overflow: 'auto', marginTop: 8 }}
+    >
+      <ChatMarkdownRenderer
+        key={`${isDark ? 'dark' : 'light'}:${darkTheme}:${lightTheme}`}
+        content={content}
+        isDark={isDark}
+        customId="chat"
+        final
+        codeBlockThemes={themes}
+        codeBlockLightTheme={lightTheme}
+        codeBlockDarkTheme={darkTheme}
+        codeFontFamily={settings.code_font_family}
+      />
+    </div>
+  );
+}
 
 /**
  * Shared hook for checking app updates.
@@ -28,9 +69,7 @@ export function useUpdateChecker() {
           <div>
             <p>{t('settings.newVersion')}: {update.version}</p>
             {update.body && (
-              <div style={{ maxHeight: 300, overflow: 'auto', marginTop: 8, whiteSpace: 'pre-wrap', fontSize: 13, opacity: 0.85 }}>
-                {update.body}
-              </div>
+              <UpdateReleaseNotes content={update.body} />
             )}
           </div>
         ),
