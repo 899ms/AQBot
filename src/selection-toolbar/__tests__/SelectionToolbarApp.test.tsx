@@ -101,9 +101,11 @@ describe('SelectionToolbarApp', () => {
         tools,
         theme: 'light',
         language: 'en-US',
+        display_mode: 'full',
       },
       run: null,
       surface: 'toolbar',
+      overflowDirection: 'below',
       copied: false,
       busy: false,
       error: null,
@@ -128,6 +130,58 @@ describe('SelectionToolbarApp', () => {
     expect(screen.getByRole('button', { name: 'Tool 5' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Tool 6' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'settings.selectionToolbar.more' })).toBeInTheDocument();
+  });
+
+  it('renders compact sessions as an icon-only narrow toolbar with tooltips', () => {
+    Object.assign(storeState, {
+      session: {
+        ...(storeState.session as Record<string, unknown>),
+        display_mode: 'compact',
+      },
+    });
+
+    const { container } = render(<SelectionToolbarApp />);
+
+    const first = screen.getByRole('button', { name: 'Tool 1' });
+    expect(first).not.toHaveTextContent('Tool 1');
+    expect(first).toHaveAttribute('title', 'Tool 1');
+    expect(container.querySelector('.selection-toolbar__bar')).toHaveStyle({ width: '230px' });
+  });
+
+  it('renders More as a dropdown anchored to the toolbar', () => {
+    Object.assign(storeState, {
+      surface: 'overflow',
+      overflowDirection: 'above',
+    });
+
+    const { container } = render(<SelectionToolbarApp />);
+
+    const dropdown = screen.getByRole('menu', {
+      name: 'settings.selectionToolbar.more',
+    });
+    expect(container.querySelector('.selection-toolbar__overflow')).toContainElement(dropdown);
+    expect(container.querySelector('.selection-toolbar__overflow'))
+      .toHaveAttribute('data-direction', 'above');
+    expect(container.querySelector('.selection-toolbar__bar'))
+      .toHaveAttribute('data-dropdown-direction', 'above');
+    expect(dropdown).toContainElement(screen.getByRole('button', { name: 'Tool 6' }));
+    expect(container.querySelector('.selection-toolbar__result')).not.toBeInTheDocument();
+  });
+
+  it('keeps the same toolbar DOM node when More opens so its entrance animation cannot replay', () => {
+    const { container, rerender } = render(<SelectionToolbarApp />);
+    const initialBar = container.querySelector('.selection-toolbar__bar');
+
+    Object.assign(storeState, {
+      surface: 'overflow',
+      overflowDirection: 'below',
+    });
+    rerender(<SelectionToolbarApp />);
+
+    expect(container.querySelector('.selection-toolbar__bar')).toBe(initialBar);
+    expect(screen.getByRole('menu', {
+      name: 'settings.selectionToolbar.more',
+    })).toBeInTheDocument();
   });
 
   it('executes the tool on the first primary pointer down', () => {
@@ -190,7 +244,7 @@ describe('SelectionToolbarApp', () => {
     expect(screen.getByRole('button', { name: 'Tool 3' })).not.toHaveAttribute('data-active');
   });
 
-  it('offers a centered danger stop below the streaming output and keeps regenerate disabled', () => {
+  it('places an icon-only danger stop beside Close without a result footer', () => {
     Object.assign(storeState, {
       surface: 'result',
       run: {
@@ -205,10 +259,14 @@ describe('SelectionToolbarApp', () => {
 
     const { container } = render(<SelectionToolbarApp />);
 
-    const footer = container.querySelector('.selection-toolbar__result-footer');
-    expect(footer).toBeInTheDocument();
-    const stopButton = screen.getByRole('button', { name: /chat\.stop/ });
-    expect(footer).toContainElement(stopButton);
+    const actions = container.querySelector('.selection-toolbar__result-actions');
+    const stopButton = screen.getByRole('button', { name: 'chat.stop' });
+    const closeButton = screen.getByRole('button', { name: 'common.close' });
+    expect(actions).toContainElement(stopButton);
+    expect(stopButton.nextElementSibling).toBe(closeButton);
+    expect(stopButton).toHaveClass('ant-btn-dangerous');
+    expect(stopButton).not.toHaveTextContent('chat.stop');
+    expect(container.querySelector('.selection-toolbar__result-footer')).not.toBeInTheDocument();
     fireEvent.click(stopButton);
     expect(stop).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('button', { name: 'chat.regenerate' })).toBeDisabled();

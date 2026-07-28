@@ -9,8 +9,8 @@ use crate::selection_toolbar::resolve_app_icons;
 use crate::selection_toolbar::{encode_app_icon_sources, resolve_app_icon_sources};
 use crate::{
     selection_toolbar::{
-        resolve_app_paths, InstalledApp, PermissionSettingsOutcome, RuntimeSnapshot, RuntimeStatus,
-        SurfaceSize, ToolRunEvent, SELECTION_TOOLBAR_WINDOW_LABEL,
+        resolve_app_paths, InstalledApp, OverflowDirection, PermissionSettingsOutcome,
+        RuntimeSnapshot, RuntimeStatus, SurfaceSize, ToolRunEvent, SELECTION_TOOLBAR_WINDOW_LABEL,
     },
     AppState,
 };
@@ -112,8 +112,24 @@ pub async fn selection_toolbar_set_surface(
     app: AppHandle,
     state: State<'_, AppState>,
     surface: SurfaceSize,
-) -> Result<(), String> {
-    state.selection_toolbar.set_surface(&app, surface).await
+    overflow_height: Option<f64>,
+) -> Result<Option<OverflowDirection>, String> {
+    state
+        .selection_toolbar
+        .set_surface(&app, surface, overflow_height)
+        .await
+}
+
+#[tauri::command]
+pub async fn selection_toolbar_prepare_overflow(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    overflow_height: f64,
+) -> Result<OverflowDirection, String> {
+    state
+        .selection_toolbar
+        .prepare_overflow(&app, overflow_height)
+        .await
 }
 
 #[tauri::command]

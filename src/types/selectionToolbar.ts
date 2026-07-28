@@ -7,6 +7,8 @@ export const SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS = 5;
 export type SelectionToolbarCustomIcon = string;
 export type SelectionToolbarBuiltinAiKey = 'translate' | 'explain' | 'polish' | 'summarize';
 export type SelectionToolbarTriggerMode = 'selection' | 'shortcut';
+export type SelectionToolbarDisplayMode = 'full' | 'compact';
+export type SelectionToolbarOverflowDirection = 'above' | 'below';
 
 export const SELECTION_TOOLBAR_DEFAULT_SHORTCUT = 'CmdOrCtrl+Shift+E';
 
@@ -54,6 +56,8 @@ export interface SelectionToolbarAppEntry {
 export interface SelectionToolbarSettings {
   enabled: boolean;
   theme_follow: boolean;
+  /** Full labels or a compact icon-only toolbar. */
+  display_mode: SelectionToolbarDisplayMode;
   /** Automatic selection or an explicit global shortcut. */
   trigger_mode: SelectionToolbarTriggerMode;
   /** Global accelerator used when `trigger_mode` is `shortcut`. */
@@ -109,6 +113,7 @@ export function createDefaultSelectionToolbarSettings(): SelectionToolbarSetting
   return {
     enabled: false,
     theme_follow: false,
+    display_mode: 'full',
     trigger_mode: 'selection',
     trigger_shortcut: SELECTION_TOOLBAR_DEFAULT_SHORTCUT,
     translate_target_language: null,
@@ -182,6 +187,7 @@ export interface SelectionToolbarSessionView {
   tools: SelectionToolbarToolView[];
   theme: 'light' | 'dark';
   language: string;
+  display_mode: SelectionToolbarDisplayMode;
   /** Configured translate target language; null follows `language`. */
   translate_target_language?: string | null;
 }

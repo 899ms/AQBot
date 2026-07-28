@@ -12,11 +12,14 @@ import NodeRenderer, { enableD2, setCustomComponents } from 'markstream-react';
 import { registerHighlight } from 'stream-markdown';
 import { useTranslation } from 'react-i18next';
 import i18n from '@/i18n';
-import { SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS, type SelectionToolbarToolView } from '@/types';
+import type { SelectionToolbarToolView } from '@/types';
 import { useSelectionToolbarStore } from '@/stores/selectionToolbarStore';
 import { useSettingsStore } from '@/stores';
-import { LucideToolIcon } from '@/components/shared/LucideToolIcon';
-import { SelectionToolbarStrip } from '@/components/shared/SelectionToolbarStrip';
+import {
+  SelectionToolbarStrip,
+  selectionToolbarOverflowSurfaceHeight,
+  type SelectionToolbarStripItem,
+} from '@/components/shared/SelectionToolbarStrip';
 import {
   SELECTION_TRANSLATE_LANGUAGES,
   normalizeTranslateLanguage,
@@ -65,7 +68,28 @@ function beginWindowDrag() {
     .catch(clear);
 }
 
-function ToolbarSurface() {
+function toolbarItems(
+  tools: SelectionToolbarToolView[],
+  activeToolId: string | undefined,
+  t: (key: string) => string,
+): SelectionToolbarStripItem[] {
+  return tools.map((tool) => ({
+    id: tool.id,
+    icon: tool.icon,
+    label: labelFor(tool, t),
+    active: activeToolId === tool.id,
+  }));
+}
+
+function ToolbarSurface({
+  expanded,
+  dropdownDirection = 'below',
+  onVisibleCountChange,
+}: {
+  expanded?: boolean;
+  dropdownDirection?: 'above' | 'below';
+  onVisibleCountChange?: (count: number) => void;
+}) {
   const { t } = useTranslation();
   const session = useSelectionToolbarStore((state) => state.session);
   const copied = useSelectionToolbarStore((state) => state.copied);
@@ -79,16 +103,17 @@ function ToolbarSurface() {
       busy={busy}
       copied={copied}
       copiedLabel={t('common.copied')}
+      displayMode={session.display_mode ?? 'full'}
       dragLabel={t('settings.selectionToolbar.drag')}
-      items={session.tools.map((tool) => ({
-        id: tool.id,
-        icon: tool.icon,
-        label: labelFor(tool, t),
-        active: activeToolId === tool.id,
-      }))}
+      dropdownDirection={dropdownDirection}
+      expanded={expanded}
+      items={toolbarItems(session.tools, activeToolId, t)}
       moreLabel={t('settings.selectionToolbar.more')}
+      onVisibleCountChange={onVisibleCountChange}
       onDragPointerDown={beginWindowDrag}
-      onMorePointerDown={() => void toggleOverflow()}
+      onMorePointerDown={(overflowCount) => void toggleOverflow(
+        selectionToolbarOverflowSurfaceHeight(overflowCount),
+      )}
       onToolPointerDown={(id) => {
         const tool = session.tools.find((item) => item.id === id);
         if (tool) void executeTool(tool);
@@ -97,38 +122,25 @@ function ToolbarSurface() {
   );
 }
 
-function OverflowSurface() {
-  const { t } = useTranslation();
+function ToolbarSurfaceHost({ expanded }: { expanded: boolean }) {
   const session = useSelectionToolbarStore((state) => state.session);
-  const busy = useSelectionToolbarStore((state) => state.busy);
-  const executeTool = useSelectionToolbarStore((state) => state.executeTool);
+  const toggleOverflow = useSelectionToolbarStore((state) => state.toggleOverflow);
+  const overflowDirection = useSelectionToolbarStore((state) => state.overflowDirection);
   if (!session) return null;
   return (
-    <div className="selection-toolbar__overflow">
-      <ToolbarSurface />
-      <div className="selection-toolbar__overflow-list">
-        {session.tools.slice(SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS).map((tool) => {
-          return (
-            <button
-              aria-label={labelFor(tool, t)}
-              className="selection-toolbar__overflow-item"
-              disabled={busy}
-              key={tool.id}
-              type="button"
-              onPointerDown={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (event.button !== 0 || busy) return;
-                // Execute directly; backend switches surface to result.
-                void executeTool(tool);
-              }}
-            >
-              <LucideToolIcon name={tool.icon} size={16} />
-              <span>{labelFor(tool, t)}</span>
-            </button>
-          );
-        })}
-      </div>
+    <div
+      className={`selection-toolbar__surface${expanded ? ' selection-toolbar__overflow' : ''}`}
+      data-direction={overflowDirection}
+    >
+      <ToolbarSurface
+        dropdownDirection={overflowDirection}
+        expanded={expanded}
+        onVisibleCountChange={expanded
+          ? (count) => {
+              if (count >= session.tools.length) void toggleOverflow();
+            }
+          : undefined}
+      />
     </div>
   );
 }
@@ -337,6 +349,17 @@ function ResultSurface() {
               type="text"
               onClick={() => void regenerate()}
             />
+            {streaming && (
+              <Button
+                aria-label={t('chat.stop')}
+                danger
+                icon={<Square size={14} />}
+                size="small"
+                title={t('chat.stop')}
+                type="text"
+                onClick={() => void stop()}
+              />
+            )}
             <Button
               aria-label={t('common.close')}
               danger
@@ -371,18 +394,6 @@ function ResultSurface() {
             <div className="selection-toolbar__waiting">{t('chat.thinkingInProgress')}</div>
           )}
         </main>
-        {streaming && (
-          <footer className="selection-toolbar__result-footer">
-            <Button
-              danger
-              icon={<Square size={12} />}
-              size="small"
-              onClick={() => void stop()}
-            >
-              {t('chat.stop')}
-            </Button>
-          </footer>
-        )}
       </section>
     </div>
   );
@@ -429,8 +440,7 @@ export function SelectionToolbarApp() {
 
   if (!session) return null;
   if (surface === 'result') return <ResultSurface />;
-  if (surface === 'overflow') return <OverflowSurface />;
-  return <ToolbarSurface />;
+  return <ToolbarSurfaceHost expanded={surface === 'overflow'} />;
 }
 
 export function SelectionToolbarRoot() {

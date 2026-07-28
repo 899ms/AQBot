@@ -1,3 +1,4 @@
+use aqbot_core::types::SelectionToolbarDisplayMode;
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -144,6 +145,8 @@ pub struct SessionView {
     pub tools: Vec<ToolbarToolView>,
     pub theme: String,
     pub language: String,
+    #[serde(default)]
+    pub display_mode: SelectionToolbarDisplayMode,
     /// Configured translate target language; `None` follows `language`.
     #[serde(default)]
     pub translate_target_language: Option<String>,
@@ -249,6 +252,7 @@ impl RuntimeStore {
         tools: Vec<ToolbarToolView>,
         theme: &str,
         language: &str,
+        display_mode: SelectionToolbarDisplayMode,
         translate_target_language: Option<&str>,
     ) -> String {
         self.cancel_active_run();
@@ -260,6 +264,7 @@ impl RuntimeStore {
                 tools,
                 theme: theme.into(),
                 language: language.into(),
+                display_mode,
                 translate_target_language: translate_target_language.map(str::to_string),
             },
             observation,
@@ -286,12 +291,14 @@ impl RuntimeStore {
         tools: Vec<ToolbarToolView>,
         theme: &str,
         language: &str,
+        display_mode: SelectionToolbarDisplayMode,
         translate_target_language: Option<&str>,
     ) {
         if let Some(selection) = self.selection.as_mut() {
             selection.view.tools = tools;
             selection.view.theme = theme.into();
             selection.view.language = language.into();
+            selection.view.display_mode = display_mode;
             selection.view.translate_target_language =
                 translate_target_language.map(str::to_string);
         }
@@ -463,10 +470,19 @@ mod tests {
             vec![ToolbarToolView::action("copy", "copy")],
             "dark",
             "zh-CN",
+            SelectionToolbarDisplayMode::Compact,
             None,
         );
 
-        let json = serde_json::to_string(&store.snapshot()).unwrap();
+        let snapshot = store.snapshot();
+        assert_eq!(
+            snapshot
+                .session
+                .as_ref()
+                .map(|session| session.display_mode),
+            Some(SelectionToolbarDisplayMode::Compact)
+        );
+        let json = serde_json::to_string(&snapshot).unwrap();
         assert!(json.contains(&selection_id));
         assert!(!json.contains("private selected text"));
         assert_eq!(
@@ -488,6 +504,7 @@ mod tests {
             )],
             "light",
             "en-US",
+            SelectionToolbarDisplayMode::Full,
             None,
         );
         let (request_id, _) = store.begin_run(&selection_id, "summarize").unwrap();
@@ -505,9 +522,23 @@ mod tests {
     #[test]
     fn a_new_selection_cancels_the_previous_run_and_resets_result_state() {
         let mut store = RuntimeStore::new(SelectionPlatform::Macos);
-        let first = store.accept_selection(selected("first"), vec![], "light", "en-US", None);
+        let first = store.accept_selection(
+            selected("first"),
+            vec![],
+            "light",
+            "en-US",
+            SelectionToolbarDisplayMode::Full,
+            None,
+        );
         let (_, cancel) = store.begin_run(&first, "summarize").unwrap();
-        let second = store.accept_selection(selected("second"), vec![], "light", "en-US", None);
+        let second = store.accept_selection(
+            selected("second"),
+            vec![],
+            "light",
+            "en-US",
+            SelectionToolbarDisplayMode::Full,
+            None,
+        );
 
         assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
         assert_ne!(first, second);

@@ -174,7 +174,7 @@ pub async fn execute_tool(
         .await?;
     if let Err(error) = state
         .selection_toolbar
-        .set_surface(app, SurfaceSize::Result)
+        .set_surface(app, SurfaceSize::Result, None)
         .await
     {
         let _ = state
@@ -223,8 +223,14 @@ pub async fn execute_tool(
         let mut stream = adapter.chat_stream(&context, request);
         while let Some(chunk) = stream.next().await {
             if cancel.load(Ordering::Relaxed) {
-                finalize_stopped(&app, &runtime, &request_id_for_task, &selection_id, &mut think)
-                    .await;
+                finalize_stopped(
+                    &app,
+                    &runtime,
+                    &request_id_for_task,
+                    &selection_id,
+                    &mut think,
+                )
+                .await;
                 return;
             }
             match chunk {
@@ -276,7 +282,14 @@ pub async fn execute_tool(
             }
         }
         if cancel.load(Ordering::Relaxed) {
-            finalize_stopped(&app, &runtime, &request_id_for_task, &selection_id, &mut think).await;
+            finalize_stopped(
+                &app,
+                &runtime,
+                &request_id_for_task,
+                &selection_id,
+                &mut think,
+            )
+            .await;
         } else {
             // Stream ended without a done marker: close any dangling think block.
             let mut delta = String::new();
@@ -347,8 +360,7 @@ async fn finalized_output(
     think: &ThinkMerge,
 ) -> Option<String> {
     let output = runtime.run_output(request_id).await?;
-    let fixed =
-        crate::commands::conversations::fixup_think_tags(&output, &think.durations);
+    let fixed = crate::commands::conversations::fixup_think_tags(&output, &think.durations);
     if fixed != output {
         runtime.replace_output(request_id, fixed.clone()).await;
     }
@@ -429,13 +441,17 @@ fn resolve_model_target(
 ) -> Result<Option<(String, String)>, String> {
     match (&ai.provider_id, &ai.model_id) {
         (Some(provider_id), Some(model_id)) => Ok(Some((provider_id.clone(), model_id.clone()))),
-        (None, None) => Ok(match (
-            settings.default_provider_id.as_ref(),
-            settings.default_model_id.as_ref(),
-        ) {
-            (Some(provider_id), Some(model_id)) => Some((provider_id.clone(), model_id.clone())),
-            _ => None,
-        }),
+        (None, None) => Ok(
+            match (
+                settings.default_provider_id.as_ref(),
+                settings.default_model_id.as_ref(),
+            ) {
+                (Some(provider_id), Some(model_id)) => {
+                    Some((provider_id.clone(), model_id.clone()))
+                }
+                _ => None,
+            },
+        ),
         _ => Err("Selection toolbar provider and model must be configured together".into()),
     }
 }
@@ -643,7 +659,11 @@ mod tests {
             app: "Simplified Chinese".into(),
         };
         assert_eq!(
-            render_prompt("Before {selection}; after {selection}", "private", &languages),
+            render_prompt(
+                "Before {selection}; after {selection}",
+                "private",
+                &languages
+            ),
             "Before private; after private"
         );
     }

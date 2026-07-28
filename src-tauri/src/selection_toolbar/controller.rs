@@ -5,18 +5,20 @@ use std::sync::{
 use std::time::Instant;
 
 use aqbot_core::types::{
-    AppSettings, SelectionToolbarBuiltinAiKey, SelectionToolbarTool, SelectionToolbarTriggerMode,
+    AppSettings, SelectionToolbarBuiltinAiKey, SelectionToolbarDisplayMode, SelectionToolbarTool,
+    SelectionToolbarTriggerMode,
 };
 use tauri::{AppHandle, Emitter, Manager, Theme};
 use tokio::sync::{mpsc, Mutex};
 
 use super::{
-    normalize_permission_status,
+    compact_toolbar_width, normalize_permission_status,
     platform::{self, DismissReason, PlatformEvent, PlatformMonitorHandle},
     runtime::SessionView,
-    window, PermissionSettingsOutcome, PermissionState, RuntimeError, RuntimeSnapshot,
-    RuntimeState, RuntimeStatus, RuntimeStore, ScreenPoint, SelectionChange, SelectionDebouncer,
-    SelectionObservation, SelectionPlatform, SurfaceSize, ToolbarToolView,
+    window, OverflowDirection, PermissionSettingsOutcome, PermissionState, RuntimeError,
+    RuntimeSnapshot, RuntimeState, RuntimeStatus, RuntimeStore, ScreenPoint, SelectionChange,
+    SelectionDebouncer, SelectionObservation, SelectionPlatform, SurfaceSize, ToolbarToolView,
+    OVERFLOW_SURFACE_MAX_HEIGHT, RESULT_WIDTH, TOOLBAR_HEIGHT, TOOLBAR_WIDTH,
 };
 
 pub struct SelectionToolbarRuntime {
@@ -27,7 +29,10 @@ pub struct SelectionToolbarRuntime {
     debounce_clock: Instant,
     debouncer: Mutex<SelectionDebouncer>,
     surface: Mutex<SurfaceSize>,
+    toolbar_width: Mutex<f64>,
+    overflow_height: Mutex<f64>,
     last_window_position: Mutex<Option<ScreenPoint>>,
+    last_toolbar_position: Mutex<Option<ScreenPoint>>,
     dragged_for_session: AtomicBool,
     /// True while a tool is running or the pointer is interacting with the toolbar.
     interaction_lock: AtomicBool,
@@ -50,7 +55,10 @@ impl SelectionToolbarRuntime {
             debounce_clock: Instant::now(),
             debouncer: Mutex::new(SelectionDebouncer::new(200)),
             surface: Mutex::new(SurfaceSize::Toolbar),
+            toolbar_width: Mutex::new(TOOLBAR_WIDTH),
+            overflow_height: Mutex::new(OVERFLOW_SURFACE_MAX_HEIGHT),
             last_window_position: Mutex::new(None),
+            last_toolbar_position: Mutex::new(None),
             dragged_for_session: AtomicBool::new(false),
             interaction_lock: AtomicBool::new(false),
             pending_selection: Mutex::new(None),
@@ -188,7 +196,37 @@ impl SelectionToolbarRuntime {
         let _ = self.hide(app, "application_exit").await;
     }
 
-    pub async fn set_surface(&self, app: &AppHandle, surface: SurfaceSize) -> Result<(), String> {
+    pub async fn prepare_overflow(
+        &self,
+        app: &AppHandle,
+        requested_height: f64,
+    ) -> Result<OverflowDirection, String> {
+        let toolbar_width = *self.toolbar_width.lock().await;
+        let current_window = window::current_screen_position(app);
+        let previous_window = *self.last_window_position.lock().await;
+        let cached_toolbar = *self.last_toolbar_position.lock().await;
+        let toolbar_position = match (cached_toolbar, current_window, previous_window) {
+            (Some(toolbar), Some(current), Some(previous)) => ScreenPoint {
+                x: toolbar.x + current.x - previous.x,
+                y: toolbar.y + current.y - previous.y,
+            },
+            (Some(toolbar), _, _) => toolbar,
+            (None, Some(current), _) => current,
+            (None, None, _) => return Err("Selection toolbar position is unavailable".into()),
+        };
+        let height = sanitize_overflow_height(Some(requested_height));
+        let (placement, _) =
+            window::overflow_placement(app, toolbar_position, toolbar_width, height)?;
+        Ok(placement.direction)
+    }
+
+    pub async fn set_surface(
+        &self,
+        app: &AppHandle,
+        surface: SurfaceSize,
+        requested_overflow_height: Option<f64>,
+    ) -> Result<Option<OverflowDirection>, String> {
+        let toolbar_width = *self.toolbar_width.lock().await;
         let anchor = {
             let store = self.store.lock().await;
             let snapshot = store.snapshot();
@@ -197,49 +235,90 @@ impl SelectionToolbarRuntime {
                 .and_then(|session| store.selection_observation(&session.selection_id).cloned())
                 .map(|observation| (observation.anchor, observation.anchor_kind))
         };
-        let previous_surface = {
-            let mut current_surface = self.surface.lock().await;
-            let previous_surface = *current_surface;
-            *current_surface = surface;
-            previous_surface
-        };
+        let previous_surface = *self.surface.lock().await;
         let current_position = window::current_screen_position(app);
         let previous_position = *self.last_window_position.lock().await;
-        if current_position
-            .zip(previous_position)
-            .is_some_and(|(current, previous)| position_changed(current, previous))
+        let mut toolbar_position = *self.last_toolbar_position.lock().await;
+        if let (Some(current), Some(previous), Some(toolbar)) =
+            (current_position, previous_position, toolbar_position)
         {
-            self.dragged_for_session.store(true, Ordering::Relaxed);
-        }
-        let preserve_current_position = self.dragged_for_session.load(Ordering::Relaxed)
-            || matches!(surface, SurfaceSize::Result);
-        let position = if preserve_current_position {
-            match current_position {
-                Some(position) => {
-                    let (previous_width, _) = previous_surface.dimensions();
-                    let (next_width, _) = surface.dimensions();
-                    let centered_position = ScreenPoint {
-                        x: position.x - (next_width - previous_width) / 2.0,
-                        y: position.y,
-                    };
-                    Some(window::show_surface_at_position(
-                        app,
-                        centered_position,
-                        surface,
-                    )?)
-                }
-                None => anchor
-                    .map(|(anchor, kind)| window::show_surface(app, anchor, kind, surface))
-                    .transpose()?,
+            if position_changed(current, previous) {
+                toolbar_position = Some(ScreenPoint {
+                    x: toolbar.x + current.x - previous.x,
+                    y: toolbar.y + current.y - previous.y,
+                });
+                self.dragged_for_session.store(true, Ordering::Relaxed);
             }
+        }
+        if toolbar_position.is_none() && previous_surface == SurfaceSize::Toolbar {
+            toolbar_position = current_position;
+        }
+
+        let overflow_height = if surface == SurfaceSize::Overflow {
+            let height = sanitize_overflow_height(requested_overflow_height);
+            *self.overflow_height.lock().await = height;
+            height
         } else {
-            anchor
-                .map(|(anchor, kind)| window::show_surface(app, anchor, kind, surface))
-                .transpose()?
+            *self.overflow_height.lock().await
+        };
+
+        let (position, next_toolbar_position, direction) = match (surface, toolbar_position) {
+            (SurfaceSize::Overflow, Some(toolbar_position)) => {
+                let placement = window::show_overflow_at_toolbar(
+                    app,
+                    toolbar_position,
+                    toolbar_width,
+                    overflow_height,
+                )?;
+                (
+                    Some(placement.window_position),
+                    Some(placement.toolbar_position),
+                    Some(placement.direction),
+                )
+            }
+            (SurfaceSize::Toolbar, Some(toolbar_position)) => {
+                let position = window::show_surface_at_position(
+                    app,
+                    toolbar_position,
+                    SurfaceSize::Toolbar,
+                    toolbar_width,
+                )?;
+                (Some(position), Some(position), None)
+            }
+            (SurfaceSize::Result, Some(toolbar_position)) => {
+                let requested = ScreenPoint {
+                    x: toolbar_position.x - (RESULT_WIDTH - toolbar_width) / 2.0,
+                    y: toolbar_position.y,
+                };
+                let position = window::show_surface_at_position(
+                    app,
+                    requested,
+                    SurfaceSize::Result,
+                    toolbar_width,
+                )?;
+                (
+                    Some(position),
+                    Some(ScreenPoint {
+                        x: position.x + (RESULT_WIDTH - toolbar_width) / 2.0,
+                        y: position.y,
+                    }),
+                    None,
+                )
+            }
+            _ => {
+                let position = anchor
+                    .map(|(anchor, kind)| {
+                        window::show_surface(app, anchor, kind, surface, toolbar_width)
+                    })
+                    .transpose()?;
+                (position, position, None)
+            }
         };
         if let Some(position) = position {
             *self.last_window_position.lock().await = Some(position);
         }
+        *self.last_toolbar_position.lock().await = next_toolbar_position;
+        *self.surface.lock().await = surface;
         if matches!(surface, SurfaceSize::Result) {
             // The result panel appears under a stationary cursor, so the
             // hover→make-key path may never fire; focus it explicitly so its
@@ -248,7 +327,7 @@ impl SelectionToolbarRuntime {
                 tracing::warn!(%error, "Could not focus the selection toolbar result surface");
             }
         }
-        Ok(())
+        Ok(direction)
     }
 
     pub async fn hide(&self, app: &AppHandle, reason: &str) -> Result<(), String> {
@@ -258,6 +337,7 @@ impl SelectionToolbarRuntime {
         self.dragged_for_session.store(false, Ordering::Relaxed);
         self.interaction_lock.store(false, Ordering::Relaxed);
         *self.last_window_position.lock().await = None;
+        *self.last_toolbar_position.lock().await = None;
         *self.pending_session.lock().await = None;
         window::hide(app)?;
         tracing::debug!(reason, "selection toolbar hide");
@@ -561,6 +641,7 @@ impl SelectionToolbarRuntime {
             let _ = self.hide(app, "no_enabled_tools").await;
             return Err("Selection toolbar has no enabled tools".into());
         }
+        let toolbar_width = toolbar_width_for(settings.selection_toolbar.display_mode, tools.len());
         let theme = toolbar_theme(app, &settings);
         let anchor = observation.anchor;
         let anchor_kind = observation.anchor_kind;
@@ -571,6 +652,7 @@ impl SelectionToolbarRuntime {
                 tools,
                 theme,
                 &settings.language,
+                settings.selection_toolbar.display_mode,
                 settings
                     .selection_toolbar
                     .translate_target_language
@@ -582,8 +664,15 @@ impl SelectionToolbarRuntime {
                 .filter(|session| session.selection_id == id)
         };
         *self.surface.lock().await = SurfaceSize::Toolbar;
+        *self.toolbar_width.lock().await = toolbar_width;
         self.dragged_for_session.store(false, Ordering::Relaxed);
-        let position = match window::show_surface(app, anchor, anchor_kind, SurfaceSize::Toolbar) {
+        let position = match window::show_surface(
+            app,
+            anchor,
+            anchor_kind,
+            SurfaceSize::Toolbar,
+            toolbar_width,
+        ) {
             Ok(position) => position,
             Err(error) => {
                 self.set_error("window_show_failed", error.clone()).await;
@@ -596,6 +685,7 @@ impl SelectionToolbarRuntime {
             "selection toolbar window shown"
         );
         *self.last_window_position.lock().await = Some(position);
+        *self.last_toolbar_position.lock().await = Some(position);
         if let Some(session) = session {
             tracing::debug!(
                 selection_id = %session.selection_id,
@@ -621,6 +711,7 @@ impl SelectionToolbarRuntime {
             let _ = self.hide(app, "no_enabled_tools").await;
             return;
         }
+        let toolbar_width = toolbar_width_for(settings.selection_toolbar.display_mode, tools.len());
         let theme = toolbar_theme(app, settings).to_string();
         let session = {
             let mut store = self.store.lock().await;
@@ -628,6 +719,7 @@ impl SelectionToolbarRuntime {
                 tools,
                 &theme,
                 &settings.language,
+                settings.selection_toolbar.display_mode,
                 settings
                     .selection_toolbar
                     .translate_target_language
@@ -635,6 +727,38 @@ impl SelectionToolbarRuntime {
             );
             store.snapshot().session
         };
+        let previous_toolbar_width = {
+            let mut current = self.toolbar_width.lock().await;
+            let previous = *current;
+            *current = toolbar_width;
+            previous
+        };
+        if session.is_some()
+            && *self.surface.lock().await == SurfaceSize::Toolbar
+            && (previous_toolbar_width - toolbar_width).abs() > f64::EPSILON
+        {
+            if let Some(position) = window::current_screen_position(app) {
+                let centered_position = ScreenPoint {
+                    x: position.x - (toolbar_width - previous_toolbar_width) / 2.0,
+                    y: position.y,
+                };
+                match window::show_surface_at_position(
+                    app,
+                    centered_position,
+                    SurfaceSize::Toolbar,
+                    toolbar_width,
+                ) {
+                    Ok(position) => {
+                        *self.last_window_position.lock().await = Some(position);
+                        *self.last_toolbar_position.lock().await = Some(position);
+                    }
+                    Err(error) => {
+                        self.set_error("window_resize_failed", error).await;
+                        return;
+                    }
+                }
+            }
+        }
         if let Some(session) = session {
             let _ = app.emit_to(
                 window::SELECTION_TOOLBAR_WINDOW_LABEL,
@@ -743,6 +867,7 @@ mod tests {
             vec![],
             "light",
             "en-US",
+            SelectionToolbarDisplayMode::Full,
             None,
         );
         runtime
@@ -823,7 +948,10 @@ mod tests {
             .await;
 
         let candidate = runtime.pending_selection.lock().await.clone();
-        assert_eq!(candidate.as_ref().map(|value| value.text.as_str()), Some("second"));
+        assert_eq!(
+            candidate.as_ref().map(|value| value.text.as_str()),
+            Some("second")
+        );
         assert_eq!(
             candidate.as_ref().map(|value| value.source_app.as_str()),
             Some("app.two")
@@ -836,13 +964,29 @@ mod tests {
     }
 
     #[test]
-    fn default_toolbar_views_include_explain_with_question_icon() {
+    fn default_toolbar_views_include_explain_with_lightbulb_icon() {
         let views = toolbar_tool_views(&AppSettings::default());
         let explain = views
             .iter()
             .find(|view| view.id == "explain")
             .expect("default toolbar should include explain");
-        assert_eq!(explain.icon, "file-question");
+        assert_eq!(explain.icon, "lightbulb");
+    }
+
+    #[test]
+    fn toolbar_width_uses_the_display_mode_and_enabled_tool_count() {
+        assert_eq!(
+            toolbar_width_for(SelectionToolbarDisplayMode::Full, 7),
+            TOOLBAR_WIDTH
+        );
+        assert_eq!(
+            toolbar_width_for(SelectionToolbarDisplayMode::Compact, 1),
+            82.0
+        );
+        assert_eq!(
+            toolbar_width_for(SelectionToolbarDisplayMode::Compact, 7),
+            230.0
+        );
     }
 }
 
@@ -859,7 +1003,7 @@ fn toolbar_tool_views(settings: &AppSettings) -> Vec<ToolbarToolView> {
                 None,
                 match builtin_key {
                     SelectionToolbarBuiltinAiKey::Translate => "languages",
-                    SelectionToolbarBuiltinAiKey::Explain => "file-question",
+                    SelectionToolbarBuiltinAiKey::Explain => "lightbulb",
                     SelectionToolbarBuiltinAiKey::Polish => "spell-check",
                     SelectionToolbarBuiltinAiKey::Summarize => "list-collapse",
                 },
@@ -872,6 +1016,20 @@ fn toolbar_tool_views(settings: &AppSettings) -> Vec<ToolbarToolView> {
             }
         })
         .collect()
+}
+
+fn toolbar_width_for(display_mode: SelectionToolbarDisplayMode, tool_count: usize) -> f64 {
+    match display_mode {
+        SelectionToolbarDisplayMode::Full => TOOLBAR_WIDTH,
+        SelectionToolbarDisplayMode::Compact => compact_toolbar_width(tool_count),
+    }
+}
+
+fn sanitize_overflow_height(requested_height: Option<f64>) -> f64 {
+    requested_height
+        .filter(|height| height.is_finite())
+        .unwrap_or(OVERFLOW_SURFACE_MAX_HEIGHT)
+        .clamp(TOOLBAR_HEIGHT, OVERFLOW_SURFACE_MAX_HEIGHT)
 }
 
 fn toolbar_theme(app: &AppHandle, settings: &AppSettings) -> &'static str {

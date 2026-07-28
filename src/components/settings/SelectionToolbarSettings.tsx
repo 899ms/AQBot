@@ -38,7 +38,10 @@ import { useProviderStore, useSettingsStore } from '@/stores';
 import { ModelParamSliders } from '@/components/common/ModelParamSliders';
 import { ModelSelect, parseModelValue } from '@/components/shared/ModelSelect';
 import { LucideToolIcon } from '@/components/shared/LucideToolIcon';
-import { SelectionToolbarStrip } from '@/components/shared/SelectionToolbarStrip';
+import {
+  SelectionToolbarStrip,
+  type SelectionToolbarStripItem,
+} from '@/components/shared/SelectionToolbarStrip';
 import {
   GLOBAL_SHORTCUT_ACTIONS,
   SHORTCUT_ACTION_LABEL_KEYS,
@@ -55,8 +58,10 @@ import {
 import {
   createDefaultSelectionToolbarSettings,
   SELECTION_TOOLBAR_DEFAULT_SHORTCUT,
+  SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS,
   type SelectionToolbarAppEntry,
   type SelectionToolbarAppFilterMode,
+  type SelectionToolbarDisplayMode,
   type SelectionToolbarInstalledApp,
   type SelectionToolbarPermissionSettingsOutcome,
   type SelectionToolbarRuntimeStatus,
@@ -79,7 +84,7 @@ function toolIconName(tool: SelectionToolbarTool): string {
   if (tool.kind === 'builtin_ai') {
     return {
       translate: 'languages',
-      explain: 'file-question',
+      explain: 'lightbulb',
       polish: 'spell-check',
       summarize: 'list-collapse',
     }[tool.builtin_key];
@@ -438,22 +443,26 @@ function SortableToolRow({
 
 function ToolEditor({
   tool,
+  translateTargetLanguage,
   onClose,
   onSave,
 }: {
   tool: SelectionToolbarTool | null;
+  translateTargetLanguage: string | null;
   onClose: () => void;
-  onSave: (tool: SelectionToolbarTool) => void;
+  onSave: (tool: SelectionToolbarTool, translateTargetLanguage: string | null) => void;
 }) {
   const { t } = useTranslation();
   const { token } = theme.useToken();
   const [draft, setDraft] = useState<SelectionToolbarTool | null>(tool);
+  const [draftTranslateTarget, setDraftTranslateTarget] = useState(translateTargetLanguage);
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
 
   useEffect(() => {
     setDraft(tool);
+    setDraftTranslateTarget(translateTargetLanguage);
     setIconPickerOpen(false);
-  }, [tool]);
+  }, [tool, translateTargetLanguage]);
   if (!draft || draft.kind === 'builtin_action') return null;
 
   const modelValue = draft.ai.provider_id && draft.ai.model_id
@@ -469,7 +478,7 @@ function ToolEditor({
       message.error(t('settings.selectionToolbar.placeholderRequired'));
       return;
     }
-    onSave(draft);
+    onSave(draft, draftTranslateTarget);
   };
 
   return (
@@ -509,6 +518,42 @@ function ToolEditor({
               />
             </Suspense>
           )}
+        </div>
+      )}
+      {draft.kind === 'builtin_ai' && draft.builtin_key === 'translate' && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+            {t('settings.selectionToolbar.translateTargetLanguage')}
+          </div>
+          <Select<string, { value: string; label: string; english: string }>
+            aria-label={t('settings.selectionToolbar.translateTargetLanguage')}
+            filterOption={(input, option) => {
+              const query = input.trim().toLowerCase();
+              if (!query || !option) return true;
+              return option.value.toLowerCase().includes(query)
+                || option.label.toLowerCase().includes(query)
+                || option.english.toLowerCase().includes(query);
+            }}
+            options={[
+              {
+                value: 'follow',
+                label: t('settings.selectionToolbar.translateFollowApp'),
+                english: 'follow application language',
+              },
+              ...SELECTION_TRANSLATE_LANGUAGES.map((language: SelectionTranslateLanguage) => ({
+                value: language.code,
+                label: language.native,
+                english: language.english,
+              })),
+            ]}
+            showSearch
+            style={{ width: '100%' }}
+            value={draftTranslateTarget ?? 'follow'}
+            onChange={(value) => setDraftTranslateTarget(value === 'follow' ? null : value)}
+          />
+          <div style={{ color: token.colorTextDescription, fontSize: 12, marginTop: 6 }}>
+            {t('settings.selectionToolbar.translateTargetHint')}
+          </div>
         </div>
       )}
       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
@@ -567,6 +612,39 @@ function ToolEditor({
   );
 }
 
+function ToolbarPreview({
+  items,
+  displayMode,
+}: {
+  items: SelectionToolbarStripItem[];
+  displayMode: SelectionToolbarDisplayMode;
+}) {
+  const { t } = useTranslation();
+  const [expanded, setExpanded] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(
+    Math.min(items.length, SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS),
+  );
+
+  useEffect(() => {
+    if (visibleCount >= items.length) setExpanded(false);
+  }, [items.length, visibleCount]);
+
+  return (
+    <SelectionToolbarStrip
+      copiedLabel={t('common.copied')}
+      displayMode={displayMode}
+      dragLabel={t('settings.selectionToolbar.drag')}
+      expanded={expanded}
+      items={items}
+      moreLabel={t('settings.selectionToolbar.more')}
+      preview
+      previewLabel={t('settings.selectionToolbar.preview')}
+      onMorePointerDown={() => setExpanded((current) => !current)}
+      onVisibleCountChange={setVisibleCount}
+    />
+  );
+}
+
 export function SelectionToolbarSettings() {
   const { t } = useTranslation();
   const { token } = theme.useToken();
@@ -593,6 +671,7 @@ export function SelectionToolbarSettings() {
   const appFilterMode: SelectionToolbarAppFilterMode = settings.app_filter_mode ?? 'off';
   const appFilter: SelectionToolbarAppEntry[] = settings.app_filter ?? [];
   const pickerPlatform: AppPickerPlatform = runtime?.platform ?? 'unsupported';
+  const displayMode: SelectionToolbarDisplayMode = settings.display_mode ?? 'full';
   const triggerMode: SelectionToolbarTriggerMode = settings.trigger_mode ?? 'selection';
   const triggerShortcut = settings.trigger_shortcut ?? SELECTION_TOOLBAR_DEFAULT_SHORTCUT;
   const shortcutAccelerator = toTauriAccelerator(triggerShortcut);
@@ -778,16 +857,6 @@ export function SelectionToolbarSettings() {
       : platform === 'linux'
         ? 'settings.selectionToolbar.permissionLinuxHint'
         : null;
-  const runtimeColor = runtime?.state === 'running'
-    ? 'success'
-    : runtime?.state === 'error'
-      ? 'error'
-      : runtime?.state === 'permission_required' || runtime?.state === 'unavailable'
-        ? 'warning'
-        : runtime?.state === 'starting'
-          ? 'processing'
-          : 'default';
-
   const openPermissionSettings = () => {
     void invoke<SelectionToolbarPermissionSettingsOutcome>(
       'selection_toolbar_open_permission_settings',
@@ -836,13 +905,22 @@ export function SelectionToolbarSettings() {
     });
   };
 
-  const saveEditor = (tool: SelectionToolbarTool) => {
+  const saveEditor = (
+    tool: SelectionToolbarTool,
+    translateTargetLanguage: string | null,
+  ) => {
     const exists = settings.tools.some((item) => toolId(item) === toolId(tool));
-    if (exists) replaceTool(tool);
-    else {
-      persist({ ...settings, tools: [...settings.tools, tool] });
-      setEditing(null);
-    }
+    const tools = exists
+      ? settings.tools.map((item) => toolId(item) === toolId(tool) ? tool : item)
+      : [...settings.tools, tool];
+    void persist({
+      ...settings,
+      tools,
+      ...(tool.kind === 'builtin_ai' && tool.builtin_key === 'translate'
+        ? { translate_target_language: translateTargetLanguage }
+        : {}),
+    });
+    setEditing(null);
   };
 
   const handleDragEnd = ({ active, over }: DragEndEvent) => {
@@ -1019,38 +1097,27 @@ export function SelectionToolbarSettings() {
         <Divider style={{ margin: 0 }} />
         <div style={{ alignItems: 'center', display: 'flex', gap: 12, justifyContent: 'space-between', padding: '12px 0 4px' }}>
           <div style={{ minWidth: 0 }}>
-            <div>{t('settings.selectionToolbar.translateTargetLanguage')}</div>
+            <div>{t('settings.selectionToolbar.displayMode')}</div>
             <div style={{ color: token.colorTextDescription, fontSize: 12 }}>
-              {t('settings.selectionToolbar.translateTargetHint')}
+              {t('settings.selectionToolbar.displayModeHint')}
             </div>
           </div>
-          <Select<string, { value: string; label: string; english: string }>
-            aria-label={t('settings.selectionToolbar.translateTargetLanguage')}
-            filterOption={(input, option) => {
-              const query = input.trim().toLowerCase();
-              if (!query || !option) return true;
-              return option.value.toLowerCase().includes(query)
-                || option.label.toLowerCase().includes(query)
-                || option.english.toLowerCase().includes(query);
-            }}
+          <Segmented
+            aria-label={t('settings.selectionToolbar.displayMode')}
             options={[
               {
-                value: 'follow',
-                label: t('settings.selectionToolbar.translateFollowApp'),
-                english: 'follow application language',
+                value: 'full',
+                label: t('settings.selectionToolbar.displayModeFull'),
               },
-              ...SELECTION_TRANSLATE_LANGUAGES.map((language: SelectionTranslateLanguage) => ({
-                value: language.code,
-                label: language.native,
-                english: language.english,
-              })),
+              {
+                value: 'compact',
+                label: t('settings.selectionToolbar.displayModeCompact'),
+              },
             ]}
-            showSearch
-            style={{ flex: '0 0 auto', width: 200 }}
-            value={settings.translate_target_language ?? 'follow'}
-            onChange={(value) => persist({
+            value={displayMode}
+            onChange={(display_mode) => persist({
               ...settings,
-              translate_target_language: value === 'follow' ? null : value,
+              display_mode: display_mode as SelectionToolbarDisplayMode,
             })}
           />
         </div>
@@ -1084,34 +1151,6 @@ export function SelectionToolbarSettings() {
           {permissionHintKey && (
             <div style={{ color: token.colorTextDescription, fontSize: 12, marginTop: 6 }}>
               {t(permissionHintKey)}
-            </div>
-          )}
-          {runtime && (
-            <div style={{ fontSize: 12, marginTop: 10 }}>
-              <div style={{ alignItems: 'center', display: 'flex', gap: 4 }}>
-                <span>{t('settings.selectionToolbar.runtimeTitle')}</span>
-                <Tag color={runtimeColor}>
-                  {t(`settings.selectionToolbar.status.${runtime.state}`)}
-                </Tag>
-                {(runtime.state === 'permission_required'
-                  || runtime.state === 'unavailable'
-                  || runtime.state === 'error') && (
-                  <Button
-                    size="small"
-                    type="link"
-                    onClick={() => void invoke('selection_toolbar_retry_monitoring')
-                      .then(refreshRuntime)
-                      .catch((error) => message.error(String(error)))}
-                  >
-                    {t('settings.selectionToolbar.retry')}
-                  </Button>
-                )}
-              </div>
-              {runtime.last_error?.message && (
-                <div style={{ color: token.colorTextDescription, marginTop: 4 }}>
-                  {runtime.last_error.message}
-                </div>
-              )}
             </div>
           )}
           {manualPermissionPath && (
@@ -1186,27 +1225,28 @@ export function SelectionToolbarSettings() {
       </Modal>
 
       <SettingsGroup
-        extra={<Button icon={<Plus size={14} />} size="small" onClick={addTool}>{t('settings.selectionToolbar.addTool')}</Button>}
-        title={t('settings.selectionToolbar.toolsTitle')}
+        style={{ position: 'relative', zIndex: 10 }}
+        title={t('settings.selectionToolbar.previewTitle')}
       >
         <div
           style={{
             display: 'flex',
             justifyContent: 'center',
-            overflowX: 'auto',
-            padding: '12px 0 16px',
+            padding: '12px 0',
+            position: 'relative',
           }}
         >
-          <SelectionToolbarStrip
-            copiedLabel={t('common.copied')}
-            dragLabel={t('settings.selectionToolbar.drag')}
+          <ToolbarPreview
+            displayMode={displayMode}
             items={previewItems}
-            moreLabel={t('settings.selectionToolbar.more')}
-            preview
-            previewLabel={t('settings.selectionToolbar.preview')}
           />
         </div>
-        <Divider style={{ margin: 0 }} />
+      </SettingsGroup>
+
+      <SettingsGroup
+        extra={<Button icon={<Plus size={14} />} size="small" onClick={addTool}>{t('settings.selectionToolbar.addTool')}</Button>}
+        title={t('settings.selectionToolbar.toolsTitle')}
+      >
         <DndContext collisionDetection={closestCenter} sensors={sensors} onDragEnd={handleDragEnd}>
           <SortableContext items={ids} strategy={verticalListSortingStrategy}>
             {settings.tools.map((tool, index) => (
@@ -1360,7 +1400,12 @@ export function SelectionToolbarSettings() {
         }}
       />
 
-      <ToolEditor tool={editing} onClose={() => setEditing(null)} onSave={saveEditor} />
+      <ToolEditor
+        tool={editing}
+        translateTargetLanguage={settings.translate_target_language ?? null}
+        onClose={() => setEditing(null)}
+        onSave={saveEditor}
+      />
     </div>
   );
 }

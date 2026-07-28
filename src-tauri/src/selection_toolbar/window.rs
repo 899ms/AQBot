@@ -7,8 +7,9 @@ use tauri::{LogicalPosition, LogicalSize};
 use tauri::{PhysicalPosition, PhysicalSize};
 
 use super::{
-    clamp_surface_position, place_surface_scaled, ScreenPoint, ScreenRect, SelectionAnchorKind,
-    SurfaceSize,
+    clamp_surface_position_with_toolbar_width, place_overflow_from_toolbar,
+    place_surface_scaled_with_toolbar_width, OverflowPlacement, ScreenPoint, ScreenRect,
+    SelectionAnchorKind, SurfaceSize, TOOLBAR_HEIGHT, TOOLBAR_WIDTH,
 };
 
 pub const SELECTION_TOOLBAR_WINDOW_LABEL: &str = "selection-toolbar";
@@ -29,7 +30,7 @@ pub fn ensure_window(app: &AppHandle) -> Result<WebviewWindow, String> {
         WebviewUrl::App("index.html".into()),
     )
     .title("AQBot Selection Toolbar")
-    .inner_size(320.0, 36.0)
+    .inner_size(TOOLBAR_WIDTH, TOOLBAR_HEIGHT)
     .visible(false)
     .focused(false)
     .focusable(false)
@@ -61,6 +62,7 @@ pub fn show_surface(
     anchor: ScreenRect,
     anchor_kind: SelectionAnchorKind,
     surface: SurfaceSize,
+    toolbar_width: f64,
 ) -> Result<ScreenPoint, String> {
     let window = ensure_window(app)?;
     let center_x = anchor.x + anchor.width / 2.0;
@@ -74,8 +76,15 @@ pub fn show_surface(
     )?;
     let monitor_rect = work_area(&monitor);
     let scale_factor = coordinate_scale_factor(&monitor);
-    let position = place_surface_scaled(anchor, anchor_kind, monitor_rect, surface, scale_factor);
-    set_window_surface(app, &window, position, surface, scale_factor)?;
+    let position = place_surface_scaled_with_toolbar_width(
+        anchor,
+        anchor_kind,
+        monitor_rect,
+        surface,
+        scale_factor,
+        toolbar_width,
+    );
+    set_window_surface(app, &window, position, surface, scale_factor, toolbar_width)?;
     Ok(position)
 }
 
@@ -83,14 +92,16 @@ pub fn show_surface_at_position(
     app: &AppHandle,
     requested_position: ScreenPoint,
     surface: SurfaceSize,
+    toolbar_width: f64,
 ) -> Result<ScreenPoint, String> {
     let window = ensure_window(app)?;
     let monitor = monitor_for_point(app, requested_position)?;
-    let position = clamp_surface_position(
+    let position = clamp_surface_position_with_toolbar_width(
         requested_position,
         work_area(&monitor),
         surface,
         coordinate_scale_factor(&monitor),
+        toolbar_width,
     );
     set_window_surface(
         app,
@@ -98,8 +109,54 @@ pub fn show_surface_at_position(
         position,
         surface,
         coordinate_scale_factor(&monitor),
+        toolbar_width,
     )?;
     Ok(position)
+}
+
+pub fn show_overflow_at_toolbar(
+    app: &AppHandle,
+    toolbar_position: ScreenPoint,
+    toolbar_width: f64,
+    overflow_height: f64,
+) -> Result<OverflowPlacement, String> {
+    let window = ensure_window(app)?;
+    let (placement, scale_factor) =
+        overflow_placement(app, toolbar_position, toolbar_width, overflow_height)?;
+    set_window_frame(
+        app,
+        &window,
+        placement.window_position,
+        SurfaceSize::Overflow,
+        scale_factor,
+        toolbar_width,
+        overflow_height,
+    )?;
+    Ok(placement)
+}
+
+pub fn overflow_placement(
+    app: &AppHandle,
+    toolbar_position: ScreenPoint,
+    toolbar_width: f64,
+    overflow_height: f64,
+) -> Result<(OverflowPlacement, f64), String> {
+    let monitor = monitor_for_point(
+        app,
+        ScreenPoint {
+            x: toolbar_position.x + toolbar_width / 2.0,
+            y: toolbar_position.y + TOOLBAR_HEIGHT / 2.0,
+        },
+    )?;
+    let scale_factor = coordinate_scale_factor(&monitor);
+    let placement = place_overflow_from_toolbar(
+        toolbar_position,
+        toolbar_width,
+        overflow_height,
+        work_area(&monitor),
+        scale_factor,
+    );
+    Ok((placement, scale_factor))
 }
 
 pub fn current_screen_position(app: &AppHandle) -> Option<ScreenPoint> {
@@ -121,8 +178,21 @@ fn set_window_surface(
     position: ScreenPoint,
     surface: SurfaceSize,
     _scale_factor: f64,
+    toolbar_width: f64,
 ) -> Result<(), String> {
-    let (width, height) = surface.dimensions();
+    let (width, height) = surface.dimensions_with_toolbar_width(toolbar_width);
+    set_window_frame(app, window, position, surface, _scale_factor, width, height)
+}
+
+fn set_window_frame(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    position: ScreenPoint,
+    _surface: SurfaceSize,
+    _scale_factor: f64,
+    width: f64,
+    height: f64,
+) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     window
         .set_size(Size::Logical(LogicalSize::new(width, height)))
@@ -151,7 +221,7 @@ fn set_window_surface(
     // The result surface hosts clickable/scrollable content and must accept
     // focus; the plain toolbar strip must never steal it from the source app.
     window
-        .set_focusable(matches!(surface, SurfaceSize::Result))
+        .set_focusable(matches!(_surface, SurfaceSize::Result))
         .map_err(|error| error.to_string())?;
     show_without_activating(app, window)
 }

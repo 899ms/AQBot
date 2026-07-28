@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SelectionToolbarSettings as SelectionToolbarConfig } from '@/types';
 import { SelectionToolbarSettings } from '../SelectionToolbarSettings';
 
 const mocks = vi.hoisted(() => {
@@ -76,13 +77,14 @@ const mocks = vi.hoisted(() => {
     value: {
       enabled: false,
       theme_follow: false,
-      trigger_mode: 'selection' as string,
+      display_mode: 'full',
+      trigger_mode: 'selection',
       trigger_shortcut: 'CmdOrCtrl+Shift+E',
       translate_target_language: null as string | null,
-      app_filter_mode: 'off' as string,
+      app_filter_mode: 'off',
       app_filter: [] as Array<{ id: string; name: string }>,
       tools: defaultTools,
-    },
+    } as SelectionToolbarConfig,
   };
   const appIcons = {
     value: {} as Record<string, string>,
@@ -139,6 +141,7 @@ beforeEach(() => {
   mocks.toolbar.value = {
     enabled: false,
     theme_follow: false,
+    display_mode: 'full',
     trigger_mode: 'selection',
     trigger_shortcut: 'CmdOrCtrl+Shift+E',
     translate_target_language: null,
@@ -201,16 +204,70 @@ vi.mock('@/components/shared/ModelSelect', () => ({
 }));
 
 describe('SelectionToolbarSettings', () => {
-  it('renders a live readonly preview with the built-in explain tool', () => {
+  it('renders the interactive preview as a separate module and opens More', async () => {
+    mocks.toolbar.value = {
+      ...mocks.toolbar.value,
+      tools: [
+        ...mocks.toolbar.value.tools,
+        {
+          kind: 'custom_ai',
+          id: '11111111-1111-4111-8111-111111111111',
+          name: 'Custom 6',
+          icon: 'sparkles',
+          enabled: true,
+          ai: {
+            prompt: 'Custom {selection}',
+            provider_id: null,
+            model_id: null,
+            temperature: null,
+            top_p: null,
+            max_tokens: null,
+          },
+        },
+      ],
+    };
     render(<SelectionToolbarSettings />);
 
-    const preview = screen.getByRole('img', {
+    expect(screen.getByText('settings.selectionToolbar.previewTitle')).toBeInTheDocument();
+    const preview = screen.getByRole('group', {
       name: 'settings.selectionToolbar.preview',
     });
-    expect(within(preview).getByText(
-      'settings.selectionToolbar.tools.explain',
-    )).toBeInTheDocument();
+    expect(within(preview).getByRole('button', {
+      name: 'settings.selectionToolbar.tools.explain',
+    })).toBeInTheDocument();
     expect(preview).toHaveAttribute('data-preview', 'true');
+    expect(preview.querySelector('.lucide-lightbulb')).toBeInTheDocument();
+
+    const translate = within(preview).getByRole('button', {
+      name: 'settings.selectionToolbar.tools.translate',
+    });
+    fireEvent.mouseEnter(translate);
+    expect(translate).toHaveAttribute('data-hover', 'true');
+
+    fireEvent.pointerDown(within(preview).getByRole('button', {
+      name: 'settings.selectionToolbar.more',
+    }), { button: 0 });
+
+    expect(await screen.findByRole('button', { name: 'Custom 6' })).toBeInTheDocument();
+    const dropdown = screen.getByRole('menu', {
+      name: 'settings.selectionToolbar.more',
+    });
+    expect(preview).toContainElement(dropdown);
+    expect(dropdown).toHaveClass('selection-toolbar__overflow-dropdown');
+    expect(screen.getByText('settings.selectionToolbar.previewTitle').parentElement?.parentElement)
+      .toHaveStyle({ position: 'relative', zIndex: '10' });
+    expect(document.querySelector('.selection-toolbar__preview-overflow')).not.toBeInTheDocument();
+  });
+
+  it('persists compact display mode', async () => {
+    const user = userEvent.setup();
+    render(<SelectionToolbarSettings />);
+
+    await user.click(screen.getByText('settings.selectionToolbar.displayModeCompact'));
+
+    await waitFor(() => expect(mocks.saveSettings).toHaveBeenCalledWith({
+      selection_toolbar: expect.objectContaining({ display_mode: 'compact' }),
+    }));
   });
 
   it('shows shortcut recording only in shortcut trigger mode and persists capture', async () => {
@@ -340,6 +397,9 @@ describe('SelectionToolbarSettings', () => {
     expect(screen.getByText(
       'settings.selectionToolbar.permissionDeniedHint',
     )).toBeInTheDocument();
+    expect(screen.queryByText(
+      'settings.selectionToolbar.runtimeTitle',
+    )).not.toBeInTheDocument();
   });
 
   it('opens a guided authorization flow and the macOS permission pane together', async () => {
@@ -388,15 +448,39 @@ describe('SelectionToolbarSettings', () => {
     const user = userEvent.setup();
     render(<SelectionToolbarSettings />);
 
+    expect(screen.queryByRole('combobox', {
+      name: 'settings.selectionToolbar.translateTargetLanguage',
+    })).not.toBeInTheDocument();
     const editButtons = await screen.findAllByRole('button', { name: 'common.edit' });
     await user.click(editButtons[0]);
 
+    expect(screen.getByRole('combobox', {
+      name: 'settings.selectionToolbar.translateTargetLanguage',
+    })).toBeInTheDocument();
     expect(await screen.findByText(
       'settings.selectionToolbar.promptHintTranslate',
     )).toBeInTheDocument();
     expect(screen.queryByText(
       'settings.selectionToolbar.promptHint',
     )).not.toBeInTheDocument();
+  });
+
+  it('persists the translate target together with the translated tool edit', async () => {
+    render(<SelectionToolbarSettings />);
+
+    const editButtons = await screen.findAllByRole('button', { name: 'common.edit' });
+    fireEvent.click(editButtons[0]);
+    fireEvent.mouseDown(screen.getByRole('combobox', {
+      name: 'settings.selectionToolbar.translateTargetLanguage',
+    }));
+    fireEvent.click(await screen.findByText('日本語'));
+    fireEvent.click(screen.getByRole('button', { name: 'common.save' }));
+
+    await waitFor(() => expect(mocks.saveSettings).toHaveBeenCalledWith({
+      selection_toolbar: expect.objectContaining({
+        translate_target_language: 'ja',
+      }),
+    }));
   });
 
   it('hides translate language placeholders for non-translate tools', async () => {
@@ -412,6 +496,9 @@ describe('SelectionToolbarSettings', () => {
     expect(screen.queryByText(
       'settings.selectionToolbar.promptHintTranslate',
     )).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', {
+      name: 'settings.selectionToolbar.translateTargetLanguage',
+    })).not.toBeInTheDocument();
   });
 
   it('shows app filter controls in allowlist mode', async () => {

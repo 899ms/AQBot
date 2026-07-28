@@ -1095,6 +1095,14 @@ pub enum SelectionToolbarTriggerMode {
     Shortcut,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SelectionToolbarDisplayMode {
+    #[default]
+    Full,
+    Compact,
+}
+
 /// A single app entry in the selection-toolbar allow/block list.
 ///
 /// `id` is the stable key matched against `SelectionObservation.source_app`
@@ -1110,6 +1118,9 @@ pub struct SelectionToolbarAppEntry {
 pub struct SelectionToolbarSettings {
     pub enabled: bool,
     pub theme_follow: bool,
+    /// Whether tool labels are displayed beside their icons.
+    #[serde(default)]
+    pub display_mode: SelectionToolbarDisplayMode,
     /// Whether selecting text shows the toolbar immediately or waits for a
     /// configured global shortcut.
     #[serde(default)]
@@ -1271,6 +1282,7 @@ impl Default for SelectionToolbarSettings {
         Self {
             enabled: false,
             theme_follow: false,
+            display_mode: SelectionToolbarDisplayMode::Full,
             trigger_mode: SelectionToolbarTriggerMode::Selection,
             trigger_shortcut: DEFAULT_SELECTION_TOOLBAR_SHORTCUT.into(),
             translate_target_language: None,
@@ -1673,9 +1685,9 @@ mod app_settings_tests {
     use super::{
         is_valid_selection_toolbar_icon, AppSettings, ModelCatalogSourcePreference,
         SelectionToolbarAiConfig, SelectionToolbarAppEntry, SelectionToolbarAppFilterMode,
-        SelectionToolbarBuiltinAiKey, SelectionToolbarSettings, SelectionToolbarTool,
-        SelectionToolbarTriggerMode, SettingsSidebarDensity, DEFAULT_EXPLAIN_PROMPT,
-        DEFAULT_SELECTION_TOOLBAR_SHORTCUT, DEFAULT_TRANSLATE_PROMPT,
+        SelectionToolbarBuiltinAiKey, SelectionToolbarDisplayMode, SelectionToolbarSettings,
+        SelectionToolbarTool, SelectionToolbarTriggerMode, SettingsSidebarDensity,
+        DEFAULT_EXPLAIN_PROMPT, DEFAULT_SELECTION_TOOLBAR_SHORTCUT, DEFAULT_TRANSLATE_PROMPT,
     };
     use serde_json::json;
 
@@ -1739,6 +1751,10 @@ mod app_settings_tests {
 
         assert!(!settings.selection_toolbar.enabled);
         assert!(!settings.selection_toolbar.theme_follow);
+        assert_eq!(
+            settings.selection_toolbar.display_mode,
+            SelectionToolbarDisplayMode::Full
+        );
         assert_eq!(
             settings.selection_toolbar.trigger_mode,
             SelectionToolbarTriggerMode::Selection
@@ -1940,7 +1956,15 @@ mod app_settings_tests {
         for icon in ["wand-sparkles", "a-arrow-down", "axis-3d", "badge-1"] {
             assert!(is_valid_selection_toolbar_icon(icon), "{icon}");
         }
-        for icon in ["", "-leading", "trailing-", "double--dash", "Upper-Case", "with space", "emoji-💡"] {
+        for icon in [
+            "",
+            "-leading",
+            "trailing-",
+            "double--dash",
+            "Upper-Case",
+            "with space",
+            "emoji-💡",
+        ] {
             assert!(!is_valid_selection_toolbar_icon(icon), "{icon}");
         }
 
@@ -1972,6 +1996,21 @@ mod app_settings_tests {
 
         settings.translate_target_language = Some("   ".into());
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn selection_toolbar_display_mode_roundtrips_and_rejects_unknown_values() {
+        let mut settings = SelectionToolbarSettings::default();
+        settings.display_mode = SelectionToolbarDisplayMode::Compact;
+        let serialized = serde_json::to_value(&settings).expect("display mode should serialize");
+        let roundtrip: SelectionToolbarSettings =
+            serde_json::from_value(serialized).expect("display mode should deserialize");
+        assert_eq!(roundtrip.display_mode, SelectionToolbarDisplayMode::Compact);
+
+        let invalid = serde_json::from_value::<SelectionToolbarSettings>(json!({
+            "display_mode": "icons_and_labels"
+        }));
+        assert!(invalid.is_err(), "unknown display modes must be rejected");
     }
 
     #[test]
@@ -2008,6 +2047,7 @@ mod app_settings_tests {
             .expect("selection toolbar settings should be an object");
         object.remove("trigger_mode");
         object.remove("trigger_shortcut");
+        object.remove("display_mode");
         let tools = object
             .get_mut("tools")
             .and_then(serde_json::Value::as_array_mut)
@@ -2022,17 +2062,17 @@ mod app_settings_tests {
         let ids: Vec<_> = legacy.tools.iter().map(SelectionToolbarTool::id).collect();
         assert_eq!(ids, ["translate", "explain", "polish", "summarize", "copy"]);
         assert_eq!(legacy.trigger_mode, SelectionToolbarTriggerMode::Selection);
-        assert_eq!(
-            legacy.trigger_shortcut,
-            DEFAULT_SELECTION_TOOLBAR_SHORTCUT
-        );
+        assert_eq!(legacy.display_mode, SelectionToolbarDisplayMode::Full);
+        assert_eq!(legacy.trigger_shortcut, DEFAULT_SELECTION_TOOLBAR_SHORTCUT);
         assert!(!legacy.tools[0].enabled());
         let SelectionToolbarTool::BuiltinAi { ai, enabled, .. } = &legacy.tools[1] else {
             panic!("explain should be a builtin AI tool");
         };
         assert!(*enabled);
         assert_eq!(ai.prompt, DEFAULT_EXPLAIN_PROMPT);
-        legacy.validate().expect("upgraded settings should validate");
+        legacy
+            .validate()
+            .expect("upgraded settings should validate");
     }
 
     #[test]

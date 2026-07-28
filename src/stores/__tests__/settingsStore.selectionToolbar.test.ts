@@ -21,6 +21,7 @@ describe('selection toolbar settings', () => {
     expect(useSettingsStore.getState().settings.selection_toolbar).toMatchObject({
       enabled: false,
       theme_follow: false,
+      display_mode: 'full',
       trigger_mode: 'selection',
       trigger_shortcut: 'CmdOrCtrl+Shift+E',
     });

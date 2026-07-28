@@ -7,6 +7,7 @@ import type {
   SelectionToolbarSessionView,
   SelectionToolbarSnapshot,
   SelectionToolbarToolView,
+  SelectionToolbarOverflowDirection,
 } from '@/types';
 
 const EMPTY_RUNTIME: SelectionToolbarRuntimeStatus = {
@@ -29,6 +30,12 @@ function cancelCopyCloseTimer() {
   }
 }
 
+function waitForOverflowLayout(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
 export interface SelectionToolbarTranslateOptions {
   sourceLanguage?: string | null;
   targetLanguage?: string | null;
@@ -39,6 +46,7 @@ interface SelectionToolbarState {
   session: SelectionToolbarSessionView | null;
   run: SelectionToolbarRunView | null;
   surface: 'toolbar' | 'overflow' | 'result';
+  overflowDirection: SelectionToolbarOverflowDirection;
   copied: boolean;
   busy: boolean;
   error: string | null;
@@ -56,7 +64,7 @@ interface SelectionToolbarState {
   copyResult: () => Promise<void>;
   regenerate: () => Promise<void>;
   close: (reason: string) => Promise<void>;
-  toggleOverflow: () => Promise<void>;
+  toggleOverflow: (overflowHeight?: number) => Promise<void>;
   dispose: () => void;
 }
 
@@ -114,6 +122,7 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
   session: null,
   run: null,
   surface: 'toolbar',
+  overflowDirection: 'below',
   copied: false,
   busy: false,
   error: null,
@@ -135,6 +144,7 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
                   session: payload,
                   run: null,
                   surface: 'toolbar',
+                  overflowDirection: 'below',
                   copied: false,
                   busy: false,
                   error: null,
@@ -150,6 +160,7 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
             session: null,
             run: null,
             surface: 'toolbar',
+            overflowDirection: 'below',
             copied: false,
             busy: false,
             error: null,
@@ -170,6 +181,7 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
           session: snapshot.session,
           run: snapshot.run,
           surface: snapshot.run ? 'result' : 'toolbar',
+          overflowDirection: 'below',
           busy: false,
           error: snapshot.run?.error ?? null,
         });
@@ -323,6 +335,7 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
       session: null,
       run: null,
       surface: 'toolbar',
+      overflowDirection: 'below',
       copied: false,
       busy: false,
       error: null,
@@ -331,11 +344,41 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
     });
   },
 
-  toggleOverflow: async () => {
+  toggleOverflow: async (overflowHeight) => {
     if (get().busy) return;
-    const surface = get().surface === 'overflow' ? 'toolbar' : 'overflow';
-    set({ surface });
-    await invoke('selection_toolbar_set_surface', { surface });
+    const opening = get().surface !== 'overflow';
+    if (!opening) {
+      await invoke('selection_toolbar_set_surface', {
+        surface: 'toolbar',
+        overflowHeight: null,
+      });
+      set({ surface: 'toolbar', overflowDirection: 'below' });
+      return;
+    }
+
+    const measuredHeight = overflowHeight ?? 214;
+    const preparedDirection = await invoke<SelectionToolbarOverflowDirection>(
+      'selection_toolbar_prepare_overflow',
+      { overflowHeight: measuredHeight },
+    );
+    set({ surface: 'overflow', overflowDirection: preparedDirection });
+    await waitForOverflowLayout();
+
+    try {
+      const appliedDirection = await invoke<SelectionToolbarOverflowDirection | null>(
+        'selection_toolbar_set_surface',
+        {
+          surface: 'overflow',
+          overflowHeight: measuredHeight,
+        },
+      );
+      if (appliedDirection && appliedDirection !== preparedDirection) {
+        set({ overflowDirection: appliedDirection });
+      }
+    } catch (error) {
+      set({ surface: 'toolbar', overflowDirection: 'below' });
+      throw error;
+    }
   },
 
   dispose: () => {

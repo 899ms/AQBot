@@ -342,4 +342,64 @@ describe('selection toolbar store', () => {
     });
     expect(useSelectionToolbarStore.getState().session).toBeNull();
   });
+
+  it('opens overflow with its measured height and keeps the backend direction', async () => {
+    let readSurface = () => 'uninitialized';
+    let surfaceWhenNativeFrameChanged = '';
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'selection_toolbar_get_snapshot') {
+        return {
+          runtime: {
+            state: 'running',
+            platform: 'macos',
+            permission: 'granted',
+            last_error: null,
+            global_dismissal_supported: true,
+          },
+          session: {
+            selection_id: 'selection-1',
+            tools: [],
+            theme: 'light',
+            language: 'en-US',
+          },
+          run: null,
+        };
+      }
+      if (command === 'selection_toolbar_prepare_overflow') return 'above';
+      if (command === 'selection_toolbar_set_surface') {
+        surfaceWhenNativeFrameChanged = readSurface();
+        return 'above';
+      }
+      return undefined;
+    });
+    const { useSelectionToolbarStore } = await import('../selectionToolbarStore');
+    readSurface = () => useSelectionToolbarStore.getState().surface;
+    await useSelectionToolbarStore.getState().initialize();
+
+    await useSelectionToolbarStore.getState().toggleOverflow(119);
+
+    expect(invokeMock).toHaveBeenCalledWith('selection_toolbar_prepare_overflow', {
+      overflowHeight: 119,
+    });
+    expect(invokeMock).toHaveBeenCalledWith('selection_toolbar_set_surface', {
+      surface: 'overflow',
+      overflowHeight: 119,
+    });
+    expect(useSelectionToolbarStore.getState()).toMatchObject({
+      surface: 'overflow',
+      overflowDirection: 'above',
+    });
+    expect(surfaceWhenNativeFrameChanged).toBe('overflow');
+
+    await useSelectionToolbarStore.getState().toggleOverflow();
+    expect(invokeMock).toHaveBeenCalledWith('selection_toolbar_set_surface', {
+      surface: 'toolbar',
+      overflowHeight: null,
+    });
+    expect(useSelectionToolbarStore.getState()).toMatchObject({
+      surface: 'toolbar',
+      overflowDirection: 'below',
+    });
+    expect(surfaceWhenNativeFrameChanged).toBe('overflow');
+  });
 });

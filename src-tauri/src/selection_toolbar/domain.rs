@@ -3,6 +3,11 @@ use serde::{Deserialize, Serialize};
 pub const TOOLBAR_WIDTH: f64 = 320.0;
 pub const TOOLBAR_HEIGHT: f64 = 36.0;
 pub const RESULT_WIDTH: f64 = 400.0;
+pub const OVERFLOW_SURFACE_MAX_HEIGHT: f64 = 214.0;
+pub const COMPACT_TOOLBAR_BASE_WIDTH: f64 = 52.0;
+pub const COMPACT_TOOLBAR_TOOL_WIDTH: f64 = 30.0;
+pub const COMPACT_TOOLBAR_MORE_WIDTH: f64 = 28.0;
+pub const MAX_VISIBLE_TOOLS: usize = 5;
 const SURFACE_GAP: f64 = 8.0;
 /// Vertical clearance below a mouse-release point so the surface does not sit
 /// under the pointer glyph (macOS/Windows arrow cursors are ~20 logical px tall).
@@ -55,6 +60,21 @@ pub enum SurfaceSize {
     Result,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OverflowDirection {
+    Above,
+    #[default]
+    Below,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct OverflowPlacement {
+    pub window_position: ScreenPoint,
+    pub toolbar_position: ScreenPoint,
+    pub direction: OverflowDirection,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PermissionSettingsOutcome {
@@ -65,11 +85,70 @@ pub enum PermissionSettingsOutcome {
 
 impl SurfaceSize {
     pub fn dimensions(self) -> (f64, f64) {
+        self.dimensions_with_toolbar_width(TOOLBAR_WIDTH)
+    }
+
+    pub fn dimensions_with_toolbar_width(self, toolbar_width: f64) -> (f64, f64) {
         match self {
-            Self::Toolbar => (TOOLBAR_WIDTH, TOOLBAR_HEIGHT),
-            Self::Overflow => (TOOLBAR_WIDTH, 268.0),
+            Self::Toolbar => (toolbar_width, TOOLBAR_HEIGHT),
+            Self::Overflow => (toolbar_width, OVERFLOW_SURFACE_MAX_HEIGHT),
             Self::Result => (RESULT_WIDTH, RESULT_HEIGHT),
         }
+    }
+}
+
+pub fn compact_toolbar_width(tool_count: usize) -> f64 {
+    let visible_count = tool_count.min(MAX_VISIBLE_TOOLS);
+    let overflow_width = if tool_count > visible_count {
+        COMPACT_TOOLBAR_MORE_WIDTH
+    } else {
+        0.0
+    };
+    COMPACT_TOOLBAR_BASE_WIDTH + COMPACT_TOOLBAR_TOOL_WIDTH * visible_count as f64 + overflow_width
+}
+
+pub fn place_overflow_from_toolbar(
+    toolbar_position: ScreenPoint,
+    toolbar_width: f64,
+    overflow_height: f64,
+    monitor_work_area: ScreenRect,
+    scale_factor: f64,
+) -> OverflowPlacement {
+    let height = overflow_height * scale_factor;
+    let toolbar_height = TOOLBAR_HEIGHT * scale_factor;
+    let extra_height = (height - toolbar_height).max(0.0);
+    let monitor_bottom = monitor_work_area.y + monitor_work_area.height;
+    let space_above = toolbar_position.y - monitor_work_area.y;
+    let space_below = monitor_bottom - (toolbar_position.y + toolbar_height);
+    let direction = if space_below >= extra_height {
+        OverflowDirection::Below
+    } else if space_above >= extra_height || space_above > space_below {
+        OverflowDirection::Above
+    } else {
+        OverflowDirection::Below
+    };
+    let requested_y = match direction {
+        OverflowDirection::Above => toolbar_position.y - extra_height,
+        OverflowDirection::Below => toolbar_position.y,
+    };
+    let max_x = (monitor_work_area.x + monitor_work_area.width - toolbar_width * scale_factor)
+        .max(monitor_work_area.x);
+    let max_y = (monitor_work_area.y + monitor_work_area.height - height).max(monitor_work_area.y);
+    let window_position = ScreenPoint {
+        x: toolbar_position.x.clamp(monitor_work_area.x, max_x),
+        y: requested_y.clamp(monitor_work_area.y, max_y),
+    };
+    let toolbar_position = ScreenPoint {
+        x: window_position.x,
+        y: match direction {
+            OverflowDirection::Above => window_position.y + extra_height,
+            OverflowDirection::Below => window_position.y,
+        },
+    };
+    OverflowPlacement {
+        window_position,
+        toolbar_position,
+        direction,
     }
 }
 
@@ -88,6 +167,7 @@ pub fn place_surface(
     )
 }
 
+#[cfg(test)]
 pub fn place_surface_scaled(
     anchor: ScreenRect,
     anchor_kind: SelectionAnchorKind,
@@ -95,7 +175,25 @@ pub fn place_surface_scaled(
     surface: SurfaceSize,
     scale_factor: f64,
 ) -> ScreenPoint {
-    let (width, height) = surface.dimensions();
+    place_surface_scaled_with_toolbar_width(
+        anchor,
+        anchor_kind,
+        monitor_work_area,
+        surface,
+        scale_factor,
+        TOOLBAR_WIDTH,
+    )
+}
+
+pub fn place_surface_scaled_with_toolbar_width(
+    anchor: ScreenRect,
+    anchor_kind: SelectionAnchorKind,
+    monitor_work_area: ScreenRect,
+    surface: SurfaceSize,
+    scale_factor: f64,
+    toolbar_width: f64,
+) -> ScreenPoint {
+    let (width, height) = surface.dimensions_with_toolbar_width(toolbar_width);
     let width = width * scale_factor;
     let height = height * scale_factor;
     let min_x = monitor_work_area.x;
@@ -127,13 +225,30 @@ pub fn place_surface_scaled(
     }
 }
 
+#[cfg(test)]
 pub fn clamp_surface_position(
     position: ScreenPoint,
     monitor_work_area: ScreenRect,
     surface: SurfaceSize,
     scale_factor: f64,
 ) -> ScreenPoint {
-    let (width, height) = surface.dimensions();
+    clamp_surface_position_with_toolbar_width(
+        position,
+        monitor_work_area,
+        surface,
+        scale_factor,
+        TOOLBAR_WIDTH,
+    )
+}
+
+pub fn clamp_surface_position_with_toolbar_width(
+    position: ScreenPoint,
+    monitor_work_area: ScreenRect,
+    surface: SurfaceSize,
+    scale_factor: f64,
+    toolbar_width: f64,
+) -> ScreenPoint {
+    let (width, height) = surface.dimensions_with_toolbar_width(toolbar_width);
     let max_x = (monitor_work_area.x + monitor_work_area.width - width * scale_factor)
         .max(monitor_work_area.x);
     let max_y = (monitor_work_area.y + monitor_work_area.height - height * scale_factor)
@@ -382,6 +497,46 @@ mod tests {
     #[test]
     fn toolbar_surface_uses_the_compact_height() {
         assert_eq!(SurfaceSize::Toolbar.dimensions(), (320.0, 36.0));
+        assert_eq!(
+            SurfaceSize::Overflow.dimensions_with_toolbar_width(230.0),
+            (230.0, OVERFLOW_SURFACE_MAX_HEIGHT)
+        );
+    }
+
+    #[test]
+    fn compact_toolbar_width_tracks_visible_tools_and_overflow() {
+        assert_eq!(compact_toolbar_width(1), 82.0);
+        assert_eq!(compact_toolbar_width(5), 202.0);
+        assert_eq!(compact_toolbar_width(6), 230.0);
+        assert_eq!(compact_toolbar_width(20), 230.0);
+    }
+
+    #[test]
+    fn compact_toolbar_placement_uses_its_session_width() {
+        let monitor = ScreenRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        };
+        let anchor = ScreenRect {
+            x: 600.0,
+            y: 500.0,
+            width: 80.0,
+            height: 20.0,
+        };
+
+        assert_eq!(
+            place_surface_scaled_with_toolbar_width(
+                anchor,
+                SelectionAnchorKind::SelectionRect,
+                monitor,
+                SurfaceSize::Toolbar,
+                1.0,
+                compact_toolbar_width(1),
+            ),
+            ScreenPoint { x: 599.0, y: 456.0 }
+        );
     }
 
     #[test]
@@ -412,6 +567,86 @@ mod tests {
                 x: -600.0,
                 y: 534.0,
             }
+        );
+    }
+
+    #[test]
+    fn overflow_opens_below_without_moving_the_toolbar() {
+        let placement = place_overflow_from_toolbar(
+            ScreenPoint { x: 500.0, y: 400.0 },
+            compact_toolbar_width(6),
+            OVERFLOW_SURFACE_MAX_HEIGHT,
+            ScreenRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+            1.0,
+        );
+
+        assert_eq!(placement.direction, OverflowDirection::Below);
+        assert_eq!(
+            placement.window_position,
+            ScreenPoint { x: 500.0, y: 400.0 }
+        );
+        assert_eq!(
+            placement.toolbar_position,
+            ScreenPoint { x: 500.0, y: 400.0 }
+        );
+    }
+
+    #[test]
+    fn overflow_opens_above_without_moving_the_toolbar() {
+        let placement = place_overflow_from_toolbar(
+            ScreenPoint {
+                x: 500.0,
+                y: 1000.0,
+            },
+            compact_toolbar_width(6),
+            OVERFLOW_SURFACE_MAX_HEIGHT,
+            ScreenRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+            1.0,
+        );
+
+        assert_eq!(placement.direction, OverflowDirection::Above);
+        assert_eq!(
+            placement.window_position,
+            ScreenPoint { x: 500.0, y: 822.0 }
+        );
+        assert_eq!(
+            placement.toolbar_position,
+            ScreenPoint {
+                x: 500.0,
+                y: 1000.0
+            }
+        );
+    }
+
+    #[test]
+    fn short_overflow_stays_below_when_its_content_fits() {
+        let placement = place_overflow_from_toolbar(
+            ScreenPoint { x: 500.0, y: 900.0 },
+            compact_toolbar_width(6),
+            119.0,
+            ScreenRect {
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+            },
+            1.0,
+        );
+
+        assert_eq!(placement.direction, OverflowDirection::Below);
+        assert_eq!(
+            placement.toolbar_position,
+            ScreenPoint { x: 500.0, y: 900.0 }
         );
     }
 

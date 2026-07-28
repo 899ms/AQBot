@@ -530,13 +530,16 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
         run: null,
       } as T;
     case 'selection_toolbar_frontend_ready':
-    case 'selection_toolbar_set_surface':
     case 'selection_toolbar_set_translate_target':
     case 'selection_toolbar_stop_generation':
     case 'selection_toolbar_copy_selection':
     case 'selection_toolbar_copy_result':
     case 'selection_toolbar_close':
       return undefined as T;
+    case 'selection_toolbar_set_surface':
+      return (args?.surface === 'overflow' ? 'below' : null) as T;
+    case 'selection_toolbar_prepare_overflow':
+      return 'below' as T;
     case 'selection_toolbar_open_permission_settings':
     case 'selection_toolbar_request_permission':
     case 'selection_toolbar_trigger':
