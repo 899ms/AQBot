@@ -1,11 +1,8 @@
 import {
-  cloneElement,
-  isValidElement,
   useCallback,
   useEffect,
   useMemo,
   useState,
-  type MouseEventHandler,
   type RefObject,
 } from 'react'
 import { EllipsisOutlined, RightOutlined } from '@ant-design/icons'
@@ -27,13 +24,6 @@ import {
 
 type ConversationContentRow = Exclude<ConversationListRow, { type: 'groupHeader' }>
 
-const DEFERRED_MENU_ITEMS: NonNullable<MenuProps['items']> = [{
-  key: '__aqbot_deferred_menu__',
-  label: null,
-  disabled: true,
-  style: { display: 'none' },
-}]
-
 export type ConversationMenuConfig = MenuProps & {
   trigger?: React.ReactNode | ((conversation: ConversationItemType, info: {
     originNode: React.ReactNode
@@ -41,6 +31,15 @@ export type ConversationMenuConfig = MenuProps & {
   getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement
 }
 
+/**
+ * Factory for per-row conversation menus.
+ *
+ * `includeItems` is true once the row is armed (hovered). Menus are not built
+ * for every row — only the armed row — so callers can always return full items
+ * when includeItems is true. Do not defer items until open: the ellipsis uses
+ * stopPropagation and ChatSidebar wraps the trigger in Tooltip, so click-time
+ * item swaps are unreliable with uncontrolled antd Dropdown.
+ */
 export type ConversationMenuFactory = (
   item: ConversationItemType,
   options?: { includeItems: boolean },
@@ -129,12 +128,10 @@ function VirtualConversationItem({
   style,
 }: VirtualConversationItemProps) {
   const [menuArmed, setMenuArmed] = useState(false)
-  const [menuOpen, setMenuOpen] = useState(false)
-  const menuConfig = menuArmed ? menu?.(info, { includeItems: menuOpen }) : undefined
+  // Arm on hover, then build full items immediately. Deferring until open races
+  // with Tooltip + stopPropagation on the ellipsis and leaves an empty menu.
+  const menuConfig = menuArmed ? menu?.(info, { includeItems: true }) : undefined
   const { trigger, getPopupContainer, ...dropdownMenu } = menuConfig ?? {}
-  const renderedDropdownMenu = menuConfig && !menuOpen
-    ? { ...dropdownMenu, items: DEFERRED_MENU_ITEMS }
-    : dropdownMenu
   const {
     key: _key,
     label,
@@ -174,11 +171,10 @@ function VirtualConversationItem({
       {!disabled && menuConfig && (
         <div onClick={stopPropagation}>
           <Dropdown
-            menu={renderedDropdownMenu}
+            menu={dropdownMenu}
             placement={direction === 'rtl' ? 'bottomLeft' : 'bottomRight'}
             trigger={['click']}
             getPopupContainer={getPopupContainer}
-            onOpenChange={setMenuOpen}
           >
             {renderedTrigger}
           </Dropdown>
@@ -328,8 +324,10 @@ function NativeConversationList({
   groupable,
   menu,
 }: NativeConversationListProps) {
+  // Only the hovered row mounts a Dropdown + full menu. Arm on pointerover from
+  // the list root so the trigger exists before the user's click (mounting the
+  // menu during the same pointerdown cancels Ant's open gesture).
   const [armedMenuKey, setArmedMenuKey] = useState<string | null>(null)
-  const [openMenuKey, setOpenMenuKey] = useState<string | null>(null)
   const armMenuForPointerTarget = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const target = event.target
     if (!(target instanceof Element)) return
@@ -346,7 +344,6 @@ function NativeConversationList({
     const clearArmedMenuOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setArmedMenuKey(null)
-        setOpenMenuKey(null)
       }
     }
     document.addEventListener('keydown', clearArmedMenuOnEscape, true)
@@ -355,68 +352,28 @@ function NativeConversationList({
     }
   }, [armedMenuKey])
 
-  useEffect(() => {
-    if (openMenuKey === null) return
-    const clearClosedMenu = (event: PointerEvent) => {
-      const target = event.target
-      if (!(target instanceof Element)) return
-      if (target.closest('.ant-dropdown')) return
-      if (target.closest<HTMLElement>('[data-conv-id]')?.dataset.convId === openMenuKey) return
-      setOpenMenuKey(null)
-    }
-    document.addEventListener('pointerdown', clearClosedMenu, true)
-    return () => document.removeEventListener('pointerdown', clearClosedMenu, true)
-  }, [openMenuKey])
-
   const nativeMenu = useMemo(() => {
     if (!menu) return undefined
 
     return (item: ConversationItemType): ConversationMenuConfig | undefined => {
       const itemKey = String(item.key)
       if (armedMenuKey !== itemKey) return undefined
-      const menuConfig = menu(item, { includeItems: openMenuKey === itemKey })
-      const originalTrigger = menuConfig.trigger
+      const menuConfig = menu(item, { includeItems: true })
       const originalMenuClick = menuConfig.onClick
 
       return {
         ...menuConfig,
-        items: openMenuKey === itemKey
-          ? menuConfig.items
-          : DEFERRED_MENU_ITEMS,
         onClick: (info) => {
           originalMenuClick?.(info)
           setArmedMenuKey(null)
-          setOpenMenuKey(null)
-        },
-        trigger: (conversation, info) => {
-          const renderedTrigger = typeof originalTrigger === 'function'
-            ? originalTrigger(conversation, info)
-            : originalTrigger ?? info.originNode
-          const openDeferredMenu = () => {
-            queueMicrotask(() => {
-              setOpenMenuKey((current) => current === itemKey ? null : itemKey)
-            })
-          }
-          if (!isValidElement<{ onClickCapture?: MouseEventHandler }>(renderedTrigger)) {
-            return <span onClickCapture={openDeferredMenu}>{renderedTrigger}</span>
-          }
-          const originalClickCapture = renderedTrigger.props.onClickCapture
-          return cloneElement(renderedTrigger, {
-            onClickCapture: (event) => {
-              originalClickCapture?.(event)
-              openDeferredMenu()
-            },
-          })
         },
       }
     }
-  }, [armedMenuKey, menu, openMenuKey])
+  }, [armedMenuKey, menu])
 
   return (
     <div
       style={{ display: 'contents' }}
-      // Arm from the stable list root before Dropdown receives pointerdown.
-      // Replacing a trigger during pointerdown cancels Ant's opening click.
       onPointerOverCapture={armMenuForPointerTarget}
     >
       <Conversations

@@ -198,7 +198,7 @@ describe('ConversationList threshold behavior', () => {
     expect(virtualizerOptions.current).toBeNull()
   })
 
-  it('opens a deferred native row menu on the first user click', async () => {
+  it('arms full native row menu items on hover so the first click can open them', async () => {
     const user = userEvent.setup()
     const menu = vi.fn((_item, options) => ({
       items: options?.includeItems ? [{ key: 'delete', label: 'delete' }] : [],
@@ -208,11 +208,32 @@ describe('ConversationList threshold behavior', () => {
     expect(menu).not.toHaveBeenCalled()
 
     await user.hover(screen.getByText('Conversation 0').closest('li')!)
-    expect(menu.mock.calls.some(([, options]) => options?.includeItems === false)).toBe(true)
-    expect(menu.mock.calls.some(([, options]) => options?.includeItems === true)).toBe(false)
+    expect(menu.mock.calls.some(([, options]) => options?.includeItems === true)).toBe(true)
 
     await user.click(screen.getByRole('button', { name: 'native-row-menu-conv-0' }))
+    expect(screen.getByRole('button', { name: 'menu-action-delete' })).toBeVisible()
+  })
+
+  it('opens a native menu when the custom trigger is a non-DOM component (e.g. Tooltip)', async () => {
+    // Mirrors ChatSidebar wrapping the origin node in antd Tooltip.
+    function OpaqueTrigger({ children }: { children: React.ReactNode }) {
+      return <span data-testid="opaque-trigger">{children}</span>
+    }
+
+    const user = userEvent.setup()
+    const menu = vi.fn((_item, options) => ({
+      items: options?.includeItems ? [{ key: 'delete', label: 'delete' }] : [],
+      trigger: (_conversation: ConversationItemType, info: { originNode: React.ReactNode }) => (
+        <OpaqueTrigger>{info.originNode}</OpaqueTrigger>
+      ),
+    }))
+    renderList(rows(159), { menu })
+
+    await user.hover(screen.getByText('Conversation 0').closest('li')!)
+    expect(screen.getByTestId('opaque-trigger')).toBeInTheDocument()
     expect(menu.mock.calls.some(([, options]) => options?.includeItems === true)).toBe(true)
+
+    await user.click(screen.getByRole('button', { name: 'native-row-menu-conv-0' }))
     expect(screen.getByRole('button', { name: 'menu-action-delete' })).toBeVisible()
   })
 
@@ -256,7 +277,7 @@ describe('ConversationList threshold behavior', () => {
     expect(onGroupToggle).toHaveBeenCalledWith('cat:work')
   })
 
-  it('only constructs visible items and opens a deferred virtual menu on the first click', async () => {
+  it('only constructs visible items and arms full virtual menu items on hover', async () => {
     const user = userEvent.setup()
     const getItem = vi.fn(toItem)
     const menu = vi.fn((_item, options) => ({
@@ -268,9 +289,8 @@ describe('ConversationList threshold behavior', () => {
     expect(menu).not.toHaveBeenCalled()
 
     await user.hover(screen.getByText('Conversation 0').closest('li')!)
-    expect(menu.mock.calls.some(([, options]) => options?.includeItems === false)).toBe(true)
-    await user.click(screen.getAllByRole('button', { name: 'open-row-menu' })[0])
     expect(menu.mock.calls.some(([, options]) => options?.includeItems === true)).toBe(true)
+    await user.click(screen.getAllByRole('button', { name: 'open-row-menu' })[0])
     expect(screen.getByRole('button', { name: 'menu-action-delete' })).toBeVisible()
   })
 
