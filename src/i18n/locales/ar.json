@@ -724,6 +724,7 @@
     "checkUpdateFailed": "فشل التحقق من التحديثات، يرجى المحاولة لاحقاً",
     "updateFailed": "فشل التحديث",
     "updating": "جارٍ التحديث...",
+    "autoCheckUpdate": "التحقق التلقائي من التحديثات",
     "updateCheckInterval": "فترة الفحص التلقائي (دقائق)",
     "developerTools": "أدوات المطوّر",
     "openDevTools": "فتح",

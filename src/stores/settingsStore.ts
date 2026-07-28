@@ -113,6 +113,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   notify_errors: true,
   last_selected_conversation_id: null,
   documents_root_override: null,
+  auto_check_update: true,
   update_check_interval: 60,
   default_system_prompt: null,
   chat_minimap_enabled: false,

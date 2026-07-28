@@ -735,6 +735,7 @@
     "checkUpdateFailed": "Failed to check for updates, please try again later",
     "updateFailed": "Update failed",
     "updating": "Updating...",
+    "autoCheckUpdate": "Auto-check for Updates",
     "updateCheckInterval": "Auto-check interval (minutes)",
     "developerTools": "Developer Tools",
     "openDevTools": "Open",

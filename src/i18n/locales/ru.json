@@ -724,6 +724,7 @@
     "checkUpdateFailed": "Не удалось проверить обновления, попробуйте позже",
     "updateFailed": "Обновление не удалось",
     "updating": "Обновление...",
+    "autoCheckUpdate": "Автоматически проверять обновления",
     "updateCheckInterval": "Интервал автопроверки (мин)",
     "developerTools": "Инструменты разработчика",
     "openDevTools": "Открыть",

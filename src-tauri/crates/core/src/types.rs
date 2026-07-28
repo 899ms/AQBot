@@ -1504,6 +1504,8 @@ pub struct AppSettings {
     pub last_selected_conversation_id: Option<String>,
     /// Custom documents root directory (overrides ~/Documents/aqbot/).
     pub documents_root_override: Option<String>,
+    /// Whether to automatically check for app updates (startup + periodic). Default: true.
+    pub auto_check_update: bool,
     /// Auto update check interval in minutes (default 60, min 1).
     pub update_check_interval: u32,
     /// Global system prompt fallback — used when a conversation has no custom system prompt.
@@ -1658,6 +1660,7 @@ impl Default for AppSettings {
             s3_include_documents: false,
             last_selected_conversation_id: None,
             documents_root_override: None,
+            auto_check_update: true,
             update_check_interval: 60,
             default_system_prompt: None,
             chat_minimap_enabled: false,

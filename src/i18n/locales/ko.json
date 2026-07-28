@@ -724,6 +724,7 @@
     "checkUpdateFailed": "업데이트 확인에 실패했습니다. 나중에 다시 시도하세요",
     "updateFailed": "업데이트에 실패했습니다",
     "updating": "업데이트 중...",
+    "autoCheckUpdate": "업데이트 자동 확인",
     "updateCheckInterval": "자동 확인 간격(분)",
     "developerTools": "개발자 도구",
     "openDevTools": "열기",

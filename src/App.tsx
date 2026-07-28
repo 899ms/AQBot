@@ -96,28 +96,28 @@ function AppInner() {
 
   useEffect(() => setupAgentEventListeners(), []);
 
-  // Auto-check for updates on startup and periodically
+  // Auto-check for updates on startup and periodically (gated by auto_check_update)
   const { checkForUpdate } = useUpdateChecker();
+  const autoCheckUpdate = useSettingsStore((s) => s.settings.auto_check_update ?? true);
   const updateCheckInterval = useSettingsStore((s) => s.settings.update_check_interval ?? 60);
   const updateIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (!isTauri()) return;
+    if (!isTauri() || !autoCheckUpdate) return;
     // Initial check after 3s delay
     const timer = setTimeout(() => checkForUpdate({ silent: true }), 3000);
     return () => clearTimeout(timer);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [autoCheckUpdate, checkForUpdate]);
 
   useEffect(() => {
-    if (!isTauri() || !updateCheckInterval) return;
+    if (!isTauri() || !autoCheckUpdate || !updateCheckInterval) return;
     if (updateIntervalRef.current) clearInterval(updateIntervalRef.current);
     const intervalMs = Math.max(updateCheckInterval, 1) * 60 * 1000;
     updateIntervalRef.current = setInterval(() => checkForUpdate({ silent: true }), intervalMs);
     return () => {
       if (updateIntervalRef.current) clearInterval(updateIntervalRef.current);
     };
-  }, [updateCheckInterval, checkForUpdate]);
+  }, [autoCheckUpdate, updateCheckInterval, checkForUpdate]);
 
   return (
     <div

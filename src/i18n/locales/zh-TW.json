@@ -735,6 +735,7 @@
     "checkUpdateFailed": "檢查更新失敗，請稍後再試",
     "updateFailed": "更新失敗",
     "updating": "正在更新...",
+    "autoCheckUpdate": "自動檢查更新",
     "updateCheckInterval": "自動檢查更新間隔（分鐘）",
     "developerTools": "開發者工具",
     "openDevTools": "開啟",

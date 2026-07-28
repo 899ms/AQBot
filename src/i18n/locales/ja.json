@@ -724,6 +724,7 @@
     "checkUpdateFailed": "アップデートの確認に失敗しました。後でもう一度お試しください",
     "updateFailed": "アップデートに失敗しました",
     "updating": "アップデート中...",
+    "autoCheckUpdate": "自動でアップデートを確認",
     "updateCheckInterval": "自動確認間隔（分）",
     "developerTools": "開発者ツール",
     "openDevTools": "開く",

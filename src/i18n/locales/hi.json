@@ -724,6 +724,7 @@
     "checkUpdateFailed": "अपडेट जांच विफल, कृपया बाद में पुनः प्रयास करें",
     "updateFailed": "अपडेट विफल",
     "updating": "अपडेट हो रहा है...",
+    "autoCheckUpdate": "अपडेट स्वतः जांचें",
     "updateCheckInterval": "स्वतः-जांच अंतराल (मिनट)",
     "developerTools": "डेवलपर टूल",
     "openDevTools": "खोलें",

@@ -1,4 +1,4 @@
-import { Button, Divider, Typography, InputNumber } from 'antd';
+import { Button, Divider, Typography, InputNumber, Switch } from 'antd';
 import { Github, Globe, RefreshCw, Terminal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useState, useEffect, useCallback } from 'react';
@@ -20,6 +20,7 @@ export function AboutPage() {
   const [appVersion, setAppVersion] = useState('...');
   const [devtoolsEnabled, setDevtoolsEnabled] = useState(import.meta.env.DEV);
   const { checkForUpdate } = useUpdateChecker();
+  const autoCheckUpdate = useSettingsStore((s) => s.settings.auto_check_update ?? true);
   const updateCheckInterval = useSettingsStore((s) => s.settings.update_check_interval ?? 60);
   const saveSettings = useSettingsStore((s) => s.saveSettings);
 
@@ -118,11 +119,20 @@ export function AboutPage() {
         </div>
         <Divider style={{ margin: '4px 0' }} />
         <div style={rowStyle} className="flex items-center justify-between">
+          <span>{t('settings.autoCheckUpdate')}</span>
+          <Switch
+            checked={autoCheckUpdate}
+            onChange={(checked) => saveSettings({ auto_check_update: checked })}
+          />
+        </div>
+        <Divider style={{ margin: '4px 0' }} />
+        <div style={rowStyle} className="flex items-center justify-between">
           <span>{t('settings.updateCheckInterval')}</span>
           <InputNumber
             min={1}
             max={1440}
             value={updateCheckInterval}
+            disabled={!autoCheckUpdate}
             onChange={(val) => val != null && saveSettings({ update_check_interval: val })}
             style={{ width: 100 }}
             addonAfter={t('settings.minutes')}

@@ -724,6 +724,7 @@
     "checkUpdateFailed": "Error al buscar actualizaciones, inténtelo más tarde",
     "updateFailed": "Error al actualizar",
     "updating": "Actualizando...",
+    "autoCheckUpdate": "Comprobar actualizaciones automáticamente",
     "updateCheckInterval": "Intervalo de comprobación automática (minutos)",
     "developerTools": "Herramientas de desarrollador",
     "openDevTools": "Abrir",

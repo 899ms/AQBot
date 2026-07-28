@@ -724,6 +724,7 @@
     "checkUpdateFailed": "Update-Prüfung fehlgeschlagen, bitte später erneut versuchen",
     "updateFailed": "Update fehlgeschlagen",
     "updating": "Wird aktualisiert…",
+    "autoCheckUpdate": "Automatisch nach Updates suchen",
     "updateCheckInterval": "Automatisches Prüfintervall (Minuten)",
     "developerTools": "Entwicklerwerkzeuge",
     "openDevTools": "Öffnen",
