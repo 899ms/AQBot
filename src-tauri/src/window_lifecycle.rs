@@ -80,9 +80,14 @@ pub fn release_main_window_to_tray(window: &tauri::Window) -> Result<(), String>
             mark_main_window_released(&app, false);
             return Err(err.to_string());
         }
+        set_app_dock_visibility(&app, false);
         Ok(())
     } else {
-        window.hide().map_err(|err| err.to_string())
+        // Hide from taskbar before hide so Windows doesn't keep a ghost button.
+        set_skip_taskbar(window, true);
+        window.hide().map_err(|err| err.to_string())?;
+        set_app_dock_visibility(&app, false);
+        Ok(())
     }
 }
 
@@ -94,9 +99,13 @@ pub fn release_webview_window_to_tray(window: &WebviewWindow) -> Result<(), Stri
             mark_main_window_released(&app, false);
             return Err(err.to_string());
         }
+        set_app_dock_visibility(&app, false);
         Ok(())
     } else {
-        window.hide().map_err(|err| err.to_string())
+        set_skip_taskbar(window, true);
+        window.hide().map_err(|err| err.to_string())?;
+        set_app_dock_visibility(&app, false);
+        Ok(())
     }
 }
 
@@ -110,11 +119,15 @@ pub fn minimize_main_window(window: tauri::Window) -> Result<(), String> {
 }
 
 pub fn restore_main_window(app: &tauri::AppHandle) {
+    // Restore Dock presence before showing so the window is findable again.
+    set_app_dock_visibility(app, true);
+
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         let state = app.state::<AppState>();
         state
             .main_window_released_to_tray
             .store(false, Ordering::Relaxed);
+        set_skip_taskbar(&window, false);
         let _ = window.show();
         let _ = window.set_focus();
         return;
@@ -138,6 +151,72 @@ pub fn restore_main_window(app: &tauri::AppHandle) {
         }
         state.main_window_restoring.store(false, Ordering::Relaxed);
     });
+}
+
+/// Hide or show the app in the macOS Dock when tray-hiding.
+///
+/// On macOS, a hidden window still keeps a Dock icon under the default
+/// `Regular` activation policy. Switching to `Accessory` removes the Dock
+/// icon while the process keeps running via the system tray.
+fn set_app_dock_visibility(app: &tauri::AppHandle, visible: bool) {
+    #[cfg(target_os = "macos")]
+    {
+        let policy = if visible {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        };
+        if let Err(err) = app.set_activation_policy(policy) {
+            tracing::warn!(
+                visible,
+                error = %err,
+                "Failed to update macOS activation policy for tray lifecycle"
+            );
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, visible);
+    }
+}
+
+fn set_skip_taskbar(window: &impl SetSkipTaskbar, skip: bool) {
+    window.apply_skip_taskbar(skip);
+}
+
+/// Thin wrapper so both `Window` and `WebviewWindow` can update taskbar visibility.
+trait SetSkipTaskbar {
+    fn apply_skip_taskbar(&self, skip: bool);
+}
+
+impl SetSkipTaskbar for tauri::Window {
+    fn apply_skip_taskbar(&self, skip: bool) {
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        if let Err(err) = self.set_skip_taskbar(skip) {
+            tracing::warn!(
+                skip,
+                error = %err,
+                "Failed to update taskbar visibility for tray lifecycle"
+            );
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        let _ = skip;
+    }
+}
+
+impl SetSkipTaskbar for WebviewWindow {
+    fn apply_skip_taskbar(&self, skip: bool) {
+        #[cfg(any(target_os = "windows", target_os = "linux"))]
+        if let Err(err) = self.set_skip_taskbar(skip) {
+            tracing::warn!(
+                skip,
+                error = %err,
+                "Failed to update taskbar visibility for tray lifecycle"
+            );
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+        let _ = skip;
+    }
 }
 
 fn restore_main_window_inner(app: &tauri::AppHandle) -> Result<(), String> {
