@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Modal, theme } from 'antd';
 import { useConversationStore, useProviderStore, useSettingsStore } from '@/stores';
 import { ChatSidebar } from '@/components/chat/ChatSidebar';
 import { ChatView } from '@/components/chat/ChatView';
+import { ConversationSearchModal } from '@/components/chat/ConversationSearchModal';
 import { usePageSuspendCleanup } from '@/components/layout/PageLifecycle';
 
 export function ChatPage() {
@@ -11,8 +12,12 @@ export function ChatPage() {
   const ensureProvidersLoaded = useProviderStore((s) => s.ensureProvidersLoaded);
   const chatSidebarCollapsed = useSettingsStore((s) => s.settings.chat_sidebar_collapsed ?? false);
   const saveSettings = useSettingsStore((s) => s.saveSettings);
+  const [searchOpen, setSearchOpen] = useState(false);
 
-  usePageSuspendCleanup(() => Modal.destroyAll());
+  usePageSuspendCleanup(() => {
+    Modal.destroyAll();
+    setSearchOpen(false);
+  });
 
   useEffect(() => {
     void ensureConversationsLoaded();
@@ -24,12 +29,28 @@ export function ChatPage() {
       const current = useSettingsStore.getState().settings.chat_sidebar_collapsed ?? false;
       void saveSettings({ chat_sidebar_collapsed: !current });
     };
+    const handleOpenSearch = () => setSearchOpen(true);
 
     window.addEventListener('aqbot:toggle-chat-sidebar', handleToggleChatSidebar);
+    window.addEventListener('aqbot:open-conversation-search', handleOpenSearch);
     return () => {
       window.removeEventListener('aqbot:toggle-chat-sidebar', handleToggleChatSidebar);
+      window.removeEventListener('aqbot:open-conversation-search', handleOpenSearch);
     };
   }, [saveSettings]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  const closeSearch = useCallback(() => setSearchOpen(false), []);
 
   return (
     <div
@@ -76,6 +97,7 @@ export function ChatPage() {
       >
         <ChatView />
       </div>
+      <ConversationSearchModal open={searchOpen} onClose={closeSearch} />
     </div>
   );
 }

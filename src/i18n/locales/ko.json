@@ -284,7 +284,14 @@
       "userMessages": "사용자 메시지",
       "assistantMessages": "AI 메시지",
       "avgSpeed": "평균 속도"
-    }
+    },
+    "batchMovedSuccess": "Moved {{count}} conversations",
+    "globalSearchPlaceholder": "Search by name or content…",
+    "searchNavigateHint": "to navigate",
+    "searchSelectHint": "to select",
+    "searchCloseHint": "to close",
+    "searchNoResults": "No matching conversations",
+    "searchingConversations": "Searching conversations…"
   },
   "gateway": {
     "title": "게이트웨이",

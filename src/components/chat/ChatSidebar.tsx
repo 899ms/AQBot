@@ -1,7 +1,6 @@
 import { useState, useMemo, useCallback, useEffect, useRef, memo } from 'react'
-import { Button, Input, App, theme, Tooltip, Avatar, Checkbox, Dropdown, Empty } from 'antd'
+import { Button, Input, App, theme, Tooltip, Checkbox, Dropdown, Empty } from 'antd'
 import { MessageSquarePlus, Search, Archive, ListTodo, Trash2, Pencil, Share, Pin, PinOff, Loader, X, Undo2, ArrowLeft, FileImage, FileCode, FileType, FileText, FolderPlus, FolderOpen, GripVertical, ChevronRight, MessageSquareText, Sparkles } from 'lucide-react'
-import { getConvIcon } from '@/lib/convIcon'
 import { exportAsMarkdown, exportAsText, exportAsPNG, exportAsJSON } from '@/lib/exportChat'
 import { invoke } from '@/lib/invoke'
 import type { ConversationItemType } from '@ant-design/x/es/conversations/interface'
@@ -13,13 +12,11 @@ import type { Conversation, Message, ConversationCategory } from '@/types'
 import { useResolvedAvatarSrc } from '@/hooks/useResolvedAvatarSrc'
 import type { AvatarType } from '@/stores/userProfileStore'
 import { CategoryEditModal, type CategoryEditFormData } from './CategoryEditModal'
-import { ConversationModelIcon } from './ConversationModelIcon'
+import { ConversationIcon } from './ConversationIcon'
 import { ConversationList, type ConversationMenuFactory } from './ConversationList'
 import { ArchivedConversationList } from './ArchivedConversationList'
 import {
   buildConversationRows,
-  filterConversationsWithParents,
-  getSearchExpandedParentIds,
   type ConversationListRow,
 } from './conversationListModel'
 import { usePageSuspendCleanup } from '@/components/layout/PageLifecycle'
@@ -84,92 +81,6 @@ const CategoryIcon = memo(function CategoryIcon({ cat, size = 14 }: { cat: Conve
     if (src) return <img src={src} alt="" style={{ width: size, height: size, borderRadius: 2, objectFit: 'cover' }} />
   }
   return <FolderOpen size={size - 1} />
-})
-
-const ConversationIcon = memo(function ConversationIcon({
-  conv,
-  isStreaming,
-}: {
-  conv: Conversation
-  isStreaming: boolean
-}) {
-  const { token } = theme.useToken()
-  const { t } = useTranslation()
-  const customIcon = getConvIcon(conv.id)
-  const resolvedSrc = useResolvedAvatarSrc((customIcon?.type as AvatarType) ?? 'icon', customIcon?.value ?? '')
-  let icon: React.ReactNode
-
-  if (customIcon) {
-    if (customIcon.type === 'emoji') {
-      icon = <Avatar size={20} style={{ fontSize: 12, backgroundColor: token.colorPrimaryBg }}>{customIcon.value}</Avatar>
-    } else {
-      const src = customIcon.type === 'file'
-        ? (resolvedSrc ?? (customIcon.value.startsWith('data:') ? customIcon.value : undefined))
-        : customIcon.value
-      icon = <Avatar size={20} src={src} />
-    }
-  } else if (conv.model_id) {
-    icon = <ConversationModelIcon model={conv.model_id} size={20} />
-  } else {
-    icon = <Avatar size={20} style={{ fontSize: 12, backgroundColor: token.colorPrimaryBg, color: token.colorPrimary }}>{(conv.title || '对')[0]}</Avatar>
-  }
-
-  const modeBadge = conv.mode === 'agent' ? t('common.agentMode') : conv.mode === 'role' ? t('nav.roles') : null
-  if (modeBadge) {
-    icon = (
-      <span style={{ position: 'relative', display: 'inline-flex', width: 20, height: 20 }}>
-        {icon}
-        <span
-          style={{
-            position: 'absolute',
-            top: -5,
-            right: -11,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxSizing: 'border-box',
-            padding: '0 3px',
-            height: 10,
-            lineHeight: 1,
-            borderRadius: 5,
-            fontSize: 7,
-            fontWeight: 600,
-            whiteSpace: 'nowrap',
-            color: token.colorPrimary,
-            background: token.colorPrimaryBg,
-            border: `1px solid ${token.colorBgContainer}`,
-            pointerEvents: 'none',
-            transform: 'scale(0.9)',
-            transformOrigin: 'right top',
-          }}
-        >
-          {modeBadge}
-        </span>
-      </span>
-    )
-  }
-
-  if (isStreaming) {
-    icon = (
-      <span style={{ position: 'relative', display: 'inline-flex' }}>
-        {icon}
-        <Loader
-          size={10}
-          style={{
-            position: 'absolute',
-            bottom: -3,
-            right: -3,
-            color: token.colorPrimary,
-            background: token.colorBgContainer,
-            borderRadius: '50%',
-            animation: 'spin 1s linear infinite',
-          }}
-        />
-      </span>
-    )
-  }
-
-  return icon
 })
 
 function SortableCategoryLabel({
@@ -257,6 +168,7 @@ export function ChatSidebar() {
   const fetchArchivedConversations = useConversationStore((s) => s.fetchArchivedConversations)
   const batchDelete = useConversationStore((s) => s.batchDelete)
   const batchArchive = useConversationStore((s) => s.batchArchive)
+  const batchMoveToCategory = useConversationStore((s) => s.batchMoveToCategory)
   const streamingConversationId = useConversationStore((s) => s.streamingConversationId)
   const titleGeneratingConversationId = useConversationStore((s) => s.titleGeneratingConversationId)
   const regenerateTitle = useConversationStore((s) => s.regenerateTitle)
@@ -342,8 +254,6 @@ export function ChatSidebar() {
     return `${label} (${formatShortcutForDisplay(binding)})`
   }, [settings])
 
-  const [searchText, setSearchText] = useState('')
-  const [searchVisible, setSearchVisible] = useState(false)
   const [multiSelectMode, setMultiSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showArchived, setShowArchived] = useState(false)
@@ -522,18 +432,14 @@ export function ChatSidebar() {
     };
   }, [handleNewConversation]);
 
-  const handleSearch = useCallback(
-    (value: string) => {
-      setSearchText(value)
-    },
-    [],
-  )
+  const openGlobalSearch = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('aqbot:open-conversation-search'))
+  }, [])
 
   const filteredConversations = useMemo(() => {
-    const filtered = filterConversationsWithParents(conversations, searchText)
     // Categorized conversations first (by category sort_order), then uncategorized
-    const categorized = filtered.filter((c) => c.category_id)
-    const uncategorized = filtered.filter((c) => !c.category_id)
+    const categorized = conversations.filter((c) => c.category_id)
+    const uncategorized = conversations.filter((c) => !c.category_id)
     const catOrderMap = new Map(categories.map((cat) => [cat.id, cat.sort_order]))
     categorized.sort((a, b) => {
       const oa = catOrderMap.get(a.category_id!) ?? 0
@@ -546,7 +452,7 @@ export function ChatSidebar() {
       return b.updated_at - a.updated_at
     })
     return [...categorized, ...uncategorized]
-  }, [conversations, searchText, categories])
+  }, [conversations, categories])
 
   const toggleSelect = useCallback((id: string) => {
     setSelectedIds((prev) => {
@@ -610,6 +516,16 @@ export function ChatSidebar() {
     exitMultiSelect()
     messageApi.success(t('chat.archivedSuccess', { count: ids.length }))
   }, [selectedIds, batchArchive, exitMultiSelect, messageApi, t])
+
+  const handleBatchMoveToCategory = useCallback(async (categoryId: string | null) => {
+    const ids = Array.from(selectedIds)
+    if (ids.length === 0) return
+    const moved = await batchMoveToCategory(ids, categoryId)
+    exitMultiSelect()
+    if (moved > 0) {
+      messageApi.success(t('chat.batchMovedSuccess', { count: moved }))
+    }
+  }, [selectedIds, batchMoveToCategory, exitMultiSelect, messageApi, t])
 
   const handleShowArchived = useCallback(async () => {
     await fetchArchivedConversations()
@@ -699,30 +615,14 @@ export function ChatSidebar() {
   }, [])
 
   const expandedGroupKeySet = useMemo(() => new Set(expandedKeys), [expandedKeys])
-  const rowExpandedParentIds = useMemo(() => {
-    if (!searchText.trim()) return expandedParentIds
-    const next = new Set(expandedParentIds)
-    for (const parentId of getSearchExpandedParentIds(conversations, searchText)) {
-      next.add(parentId)
-    }
-    return next
-  }, [conversations, expandedParentIds, searchText])
-  const rowExpandedGroupKeySet = useMemo(() => {
-    if (!searchText.trim()) return expandedGroupKeySet
-    const next = new Set(expandedGroupKeySet)
-    for (const conversation of filteredConversations) {
-      if (conversation.category_id) next.add(`cat:${conversation.category_id}`)
-    }
-    return next
-  }, [expandedGroupKeySet, filteredConversations, searchText])
   const conversationRows = useMemo(
     () => buildConversationRows({
       conversations: filteredConversations,
       categories,
-      expandedParentIds: rowExpandedParentIds,
-      expandedGroupKeys: rowExpandedGroupKeySet,
+      expandedParentIds,
+      expandedGroupKeys: expandedGroupKeySet,
     }),
-    [categories, filteredConversations, rowExpandedGroupKeySet, rowExpandedParentIds],
+    [categories, filteredConversations, expandedParentIds, expandedGroupKeySet],
   )
 
   const getConversationItem = useCallback(
@@ -1353,8 +1253,7 @@ export function ChatSidebar() {
                   icon={<Search size={16} />}
                   size="small"
                   aria-label={t('chat.searchPlaceholder')}
-                  onClick={() => setSearchVisible((v) => !v)}
-                  style={{ color: searchVisible ? token.colorPrimary : undefined }}
+                  onClick={openGlobalSearch}
                 />
               </Tooltip>
               <Tooltip title={t('chat.archived')}>
@@ -1428,6 +1327,49 @@ export function ChatSidebar() {
             )
           ) : multiSelectMode ? (
             <div className="flex items-center gap-1">
+              <Dropdown
+                disabled={selectedIds.size === 0}
+                menu={{
+                  items: [
+                    ...categories.map((cat) => ({
+                      key: `move-to-cat:${cat.id}`,
+                      label: (
+                        <span className="flex items-center gap-1.5">
+                          <CategoryIcon cat={cat} size={14} />
+                          <span>{cat.name}</span>
+                        </span>
+                      ),
+                    })),
+                    ...(categories.length > 0 ? [{ type: 'divider' as const }] : []),
+                    {
+                      key: 'remove-from-category',
+                      label: (
+                        <span className="flex items-center gap-1.5">
+                          <X size={13} />
+                          <span>{t('chat.removeFromCategory')}</span>
+                        </span>
+                      ),
+                    },
+                  ],
+                  onClick: ({ key }) => {
+                    if (key === 'remove-from-category') {
+                      void handleBatchMoveToCategory(null)
+                      return
+                    }
+                    if (key.startsWith('move-to-cat:')) {
+                      void handleBatchMoveToCategory(key.slice('move-to-cat:'.length))
+                    }
+                  },
+                }}
+              >
+                <Button
+                  type="text"
+                  icon={<FolderOpen size={16} />}
+                  size="small"
+                  aria-label={t('chat.moveToCategory')}
+                  disabled={selectedIds.size === 0}
+                />
+              </Dropdown>
               <Tooltip title={t('chat.archive')}>
                 <Button type="text" icon={<Archive size={16} />} size="small" aria-label={t('chat.archive')} disabled={selectedIds.size === 0} onClick={handleBatchArchive} />
               </Tooltip>
@@ -1448,21 +1390,6 @@ export function ChatSidebar() {
           )}
         </div>
       </div>
-
-      {/* Collapsible search */}
-      {!showArchived && searchVisible && !multiSelectMode && (
-        <div className="chat-sidebar-search" style={{ padding: '4px 12px 8px' }}>
-          <Input
-            prefix={<Search size={14} />}
-            placeholder={t('chat.searchPlaceholder')}
-            allowClear
-            value={searchText}
-            onChange={(e) => handleSearch(e.target.value)}
-            size="small"
-            autoFocus
-          />
-        </div>
-      )}
 
       {showArchived ? (
         archivedConversations.length > 0 ? (

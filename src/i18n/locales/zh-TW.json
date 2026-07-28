@@ -284,7 +284,14 @@
       "userMessages": "使用者訊息",
       "assistantMessages": "AI 訊息",
       "avgSpeed": "平均速度"
-    }
+    },
+    "batchMovedSuccess": "已移動 {{count}} 個對話",
+    "globalSearchPlaceholder": "搜尋對話名稱或內容…",
+    "searchNavigateHint": "導航",
+    "searchSelectHint": "選擇",
+    "searchCloseHint": "關閉",
+    "searchNoResults": "未找到匹配的對話",
+    "searchingConversations": "正在搜尋對話…"
   },
   "gateway": {
     "title": "閘道",

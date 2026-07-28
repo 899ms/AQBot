@@ -68,6 +68,12 @@ vi.mock('@/components/chat/ChatView', () => ({
   ChatView: () => <div>chat-view</div>,
 }));
 
+vi.mock('@/components/chat/ConversationSearchModal', () => ({
+  ConversationSearchModal: ({ open }: { open: boolean }) => (
+    open ? <div data-testid="conversation-search-modal">search-open</div> : null
+  ),
+}));
+
 describe('ChatPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();

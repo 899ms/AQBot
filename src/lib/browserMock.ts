@@ -1148,10 +1148,49 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
       } as T;
     case 'search_conversations': {
       const { query } = args as any;
-      const convs = getStore<any[]>('conversations', []);
-      const results = convs
-        .filter((c: any) => c.title.toLowerCase().includes(query.toLowerCase()))
-        .map((c: any) => ({ conversation_id: c.id, title: c.title, snippet: '' }));
+      const q = String(query ?? '').trim().toLowerCase();
+      if (!q) return [] as T;
+      const convs = getStore<any[]>('conversations', []).filter((c: any) => !c.is_archived);
+      const messages = getStore<any[]>('messages', []);
+      const seen = new Set<string>();
+      const results: any[] = [];
+
+      for (const c of convs) {
+        if (String(c.title ?? '').toLowerCase().includes(q)) {
+          seen.add(c.id);
+          results.push({ conversation: c, matched_message_preview: null });
+        }
+      }
+      for (const m of messages) {
+        if (seen.has(m.conversation_id)) {
+          // Enrich title-only hits with a content preview when available
+          if (String(m.content ?? '').toLowerCase().includes(q)) {
+            const hit = results.find((r) => r.conversation.id === m.conversation_id);
+            if (hit && !hit.matched_message_preview) {
+              const content = String(m.content ?? '');
+              const idx = content.toLowerCase().indexOf(q);
+              const start = Math.max(0, idx - 24);
+              const end = Math.min(content.length, idx + q.length + 48);
+              hit.matched_message_preview =
+                (start > 0 ? '...' : '') + content.slice(start, end) + (end < content.length ? '...' : '');
+            }
+          }
+          continue;
+        }
+        if (!String(m.content ?? '').toLowerCase().includes(q)) continue;
+        const conv = convs.find((c: any) => c.id === m.conversation_id);
+        if (!conv) continue;
+        seen.add(conv.id);
+        const content = String(m.content ?? '');
+        const idx = content.toLowerCase().indexOf(q);
+        const start = Math.max(0, idx - 24);
+        const end = Math.min(content.length, idx + q.length + 48);
+        results.push({
+          conversation: conv,
+          matched_message_preview:
+            (start > 0 ? '...' : '') + content.slice(start, end) + (end < content.length ? '...' : ''),
+        });
+      }
       return results as T;
     }
     case 'regenerate_message': {

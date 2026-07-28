@@ -284,7 +284,14 @@
       "userMessages": "उपयोगकर्ता संदेश",
       "assistantMessages": "AI संदेश",
       "avgSpeed": "औसत गति"
-    }
+    },
+    "batchMovedSuccess": "Moved {{count}} conversations",
+    "globalSearchPlaceholder": "Search by name or content…",
+    "searchNavigateHint": "to navigate",
+    "searchSelectHint": "to select",
+    "searchCloseHint": "to close",
+    "searchNoResults": "No matching conversations",
+    "searchingConversations": "Searching conversations…"
   },
   "gateway": {
     "title": "गेटवे",

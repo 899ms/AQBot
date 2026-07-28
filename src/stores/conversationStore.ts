@@ -1313,6 +1313,7 @@ interface ConversationState {
   fetchArchivedConversations: () => Promise<void>;
   batchDelete: (ids: string[]) => Promise<void>;
   batchArchive: (ids: string[]) => Promise<void>;
+  batchMoveToCategory: (ids: string[], categoryId: string | null) => Promise<number>;
   sendMessage: (content: string, attachments?: AttachmentInput[], searchProviderId?: string | null) => Promise<void>;
   /** Send a message in agent mode (non-streaming MVP) */
   sendAgentMessage: (content: string, attachments?: AttachmentInput[]) => Promise<void>;
@@ -2328,6 +2329,32 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       messages: ids.includes(s.activeConversationId ?? '') ? [] : s.messages,
       error: null,
     }));
+  },
+
+  batchMoveToCategory: async (ids, categoryId) => {
+    const updatedList: Conversation[] = [];
+    for (const id of ids) {
+      try {
+        const updated = await invoke<Conversation>('update_conversation', {
+          id,
+          input: { category_id: categoryId },
+        });
+        updatedList.push(updated);
+      } catch (_) { /* skip failed items */ }
+    }
+    if (updatedList.length > 0) {
+      const byId = new Map(updatedList.map((c) => [c.id, c]));
+      set((s) => ({
+        conversations: s.conversations.map((c) => byId.get(c.id) ?? c),
+        archivedConversations: s.archivedConversations.map((c) => byId.get(c.id) ?? c),
+        conversationsMeta: mutateConversationsMeta(s.conversationsMeta),
+        ...(s.activeConversationId && byId.has(s.activeConversationId)
+          ? conversationPreferenceStateFromConversation(byId.get(s.activeConversationId)!)
+          : {}),
+        error: null,
+      }));
+    }
+    return updatedList.length;
   },
 
   sendMessage: async (content, attachments = [], searchProviderId = null) => {

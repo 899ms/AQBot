@@ -154,6 +154,13 @@
     "deleteCategoryConfirm": "Delete this category? Conversations in it will be moved back to the default list.",
     "moveToCategory": "Move to Category",
     "removeFromCategory": "Remove from Category",
+    "batchMovedSuccess": "Moved {{count}} conversations",
+    "globalSearchPlaceholder": "Search by name or content…",
+    "searchNavigateHint": "to navigate",
+    "searchSelectHint": "to select",
+    "searchCloseHint": "to close",
+    "searchNoResults": "No matching conversations",
+    "searchingConversations": "Searching conversations…",
     "categoryNamePlaceholder": "Category name",
     "inspector": {
       "title": "Inspector",

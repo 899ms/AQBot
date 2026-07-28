@@ -95,7 +95,14 @@ export default function CommandPalette({ open, onClose }: CommandPaletteProps) {
         icon: <Search size={16} />,
         shortcut: searchConversationsShortcut,
         category: actions,
-        action: () => { setActivePage('chat'); onClose(); },
+        action: () => {
+          setActivePage('chat');
+          onClose();
+          // Defer so ChatPage is mounted and listening after page switch
+          window.setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('aqbot:open-conversation-search'));
+          }, 0);
+        },
       },
       {
         id: 'settings-search',

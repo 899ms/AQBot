@@ -3722,3 +3722,75 @@ describe('conversationStore pagination', () => {
     expect(conversation.max_tokens).toBe(8192);
   });
 });
+
+describe('conversationStore batchMoveToCategory', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    vi.resetModules();
+    tauriAvailable = false;
+    listenMock.mockResolvedValue(() => {});
+    const { useConversationStore } = await import('../conversationStore');
+    useConversationStore.setState({
+      conversations: [
+        makeConversation('c1', { category_id: null }),
+        makeConversation('c2', { category_id: 'cat-a' }),
+        makeConversation('c3', { category_id: 'cat-a' }),
+      ] as never[],
+      activeConversationId: 'c1',
+      messages: [],
+      loading: false,
+      loadingOlder: false,
+      loadingNewer: false,
+      hasOlderMessages: false,
+      hasNewerMessages: false,
+      totalActiveCount: 0,
+      oldestLoadedMessageId: null,
+      newestLoadedMessageId: null,
+      streaming: false,
+      streamingMessageId: null,
+      streamingConversationId: null,
+      activeStreamId: null,
+      streamActivityByMessageId: {},
+      thinkingActiveMessageIds: new Set<string>(),
+      error: null,
+      archivedConversations: [],
+    });
+  });
+
+  it('moves selected conversations to the target category', async () => {
+    invokeMock.mockImplementation(async (cmd: string, args?: { id?: string; input?: { category_id?: string | null } }) => {
+      if (cmd === 'update_conversation') {
+        return makeConversation(args!.id!, { category_id: args!.input!.category_id });
+      }
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+
+    const { useConversationStore } = await import('../conversationStore');
+    const moved = await useConversationStore.getState().batchMoveToCategory(['c1', 'c2'], 'cat-b');
+
+    expect(moved).toBe(2);
+    const byId = new Map(useConversationStore.getState().conversations.map((c) => [c.id, c]));
+    expect(byId.get('c1')?.category_id).toBe('cat-b');
+    expect(byId.get('c2')?.category_id).toBe('cat-b');
+    expect(byId.get('c3')?.category_id).toBe('cat-a');
+  });
+
+  it('removes category when categoryId is null and skips failed items', async () => {
+    invokeMock.mockImplementation(async (cmd: string, args?: { id?: string; input?: { category_id?: string | null } }) => {
+      if (cmd === 'update_conversation') {
+        if (args!.id === 'c2') throw new Error('boom');
+        return makeConversation(args!.id!, { category_id: args!.input!.category_id });
+      }
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+
+    const { useConversationStore } = await import('../conversationStore');
+    const moved = await useConversationStore.getState().batchMoveToCategory(['c1', 'c2', 'c3'], null);
+
+    expect(moved).toBe(2);
+    const byId = new Map(useConversationStore.getState().conversations.map((c) => [c.id, c]));
+    expect(byId.get('c1')?.category_id).toBeNull();
+    expect(byId.get('c2')?.category_id).toBe('cat-a');
+    expect(byId.get('c3')?.category_id).toBeNull();
+  });
+});

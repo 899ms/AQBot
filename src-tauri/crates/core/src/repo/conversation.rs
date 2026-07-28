@@ -557,10 +557,29 @@ pub async fn branch_conversation(
     get_conversation(db, &new_id).await
 }
 
+/// Escape user input for FTS5 MATCH so special operators cannot break the query.
+/// Uses a quoted phrase so multi-word and CJK queries work as substring-like search.
+fn sanitize_fts_query(query: &str) -> Option<String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // FTS5 phrase: double-quote wrapping; internal " doubled
+    let escaped = trimmed.replace('"', "\"\"");
+    Some(format!("\"{escaped}\""))
+}
+
+const SEARCH_RESULT_LIMIT: usize = 50;
+
 pub async fn search_conversations(
     db: &DatabaseConnection,
     query: &str,
 ) -> Result<Vec<ConversationSearchResult>> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Ok(vec![]);
+    }
+
     #[derive(Debug, FromQueryResult)]
     struct FtsRow {
         message_id: String,
@@ -568,37 +587,89 @@ pub async fn search_conversations(
         preview: String,
     }
 
-    let fts_rows = FtsRow::find_by_statement(Statement::from_sql_and_values(
-        DatabaseBackend::Sqlite,
-        "SELECT m.id as message_id, m.conversation_id, snippet(messages_fts, 0, '', '', '...', 32) as preview \
-         FROM messages_fts \
-         JOIN messages m ON m.rowid = messages_fts.rowid \
-         WHERE messages_fts MATCH ? \
-         ORDER BY rank",
-        [query.into()],
-    ))
-    .all(db)
-    .await?;
-
-    let mut results = Vec::with_capacity(fts_rows.len());
+    let mut results: Vec<ConversationSearchResult> = Vec::new();
     let mut seen_conversations = HashSet::new();
-    for fts in fts_rows {
-        if crate::inline_media::contains_inline_image_data(&fts.preview) {
-            return Err(AQBotError::Validation(format!(
-                "Message {} cannot be returned in search results: unresolved inline media remains in preview",
-                fts.message_id
-            )));
-        }
-        if !seen_conversations.insert(fts.conversation_id.clone()) {
+
+    // 1) Title matches (non-archived)
+    let like_pattern = format!("%{}%", trimmed.to_lowercase());
+    let title_rows = conversations::Entity::find()
+        .filter(conversations::Column::IsArchived.eq(0))
+        .filter(Expr::cust_with_values(
+            "LOWER(title) LIKE ?",
+            [like_pattern.clone()],
+        ))
+        .order_by_desc(conversations::Column::UpdatedAt)
+        .limit(SEARCH_RESULT_LIMIT as u64)
+        .all(db)
+        .await?;
+
+    for row in title_rows {
+        if !seen_conversations.insert(row.id.clone()) {
             continue;
         }
-        if let Ok(conv) = get_conversation(db, &fts.conversation_id).await {
-            results.push(ConversationSearchResult {
-                conversation: conv,
-                matched_message_preview: Some(fts.preview),
-            });
+        results.push(ConversationSearchResult {
+            conversation: conversation_from_entity(row),
+            matched_message_preview: None,
+        });
+    }
+
+    // 2) Content matches via FTS (prefer preview when conversation already title-matched)
+    if let Some(fts_query) = sanitize_fts_query(trimmed) {
+        let fts_rows = match FtsRow::find_by_statement(Statement::from_sql_and_values(
+            DatabaseBackend::Sqlite,
+            "SELECT m.id as message_id, m.conversation_id, \
+                    snippet(messages_fts, 0, '', '', '...', 32) as preview \
+             FROM messages_fts \
+             JOIN messages m ON m.rowid = messages_fts.rowid \
+             JOIN conversations c ON c.id = m.conversation_id \
+             WHERE messages_fts MATCH ? AND c.is_archived = 0 \
+             ORDER BY rank \
+             LIMIT ?",
+            [fts_query.into(), (SEARCH_RESULT_LIMIT as i64).into()],
+        ))
+        .all(db)
+        .await
+        {
+            Ok(rows) => rows,
+            // Malformed FTS input after sanitize should be rare; treat as no content hits
+            Err(_) => Vec::new(),
+        };
+
+        for fts in fts_rows {
+            if crate::inline_media::contains_inline_image_data(&fts.preview) {
+                return Err(AQBotError::Validation(format!(
+                    "Message {} cannot be returned in search results: unresolved inline media remains in preview",
+                    fts.message_id
+                )));
+            }
+            if let Some(existing) = results
+                .iter_mut()
+                .find(|r| r.conversation.id == fts.conversation_id)
+            {
+                // Enrich title-only hit with content preview
+                if existing.matched_message_preview.is_none() {
+                    existing.matched_message_preview = Some(fts.preview);
+                }
+                continue;
+            }
+            if !seen_conversations.insert(fts.conversation_id.clone()) {
+                continue;
+            }
+            if let Ok(conv) = get_conversation(db, &fts.conversation_id).await {
+                if conv.is_archived {
+                    continue;
+                }
+                results.push(ConversationSearchResult {
+                    conversation: conv,
+                    matched_message_preview: Some(fts.preview),
+                });
+                if results.len() >= SEARCH_RESULT_LIMIT {
+                    break;
+                }
+            }
         }
     }
+
     Ok(results)
 }
 

@@ -154,6 +154,13 @@
     "deleteCategoryConfirm": "确定删除此分类？分类中的对话将被移回默认列表。",
     "moveToCategory": "移动到分类",
     "removeFromCategory": "移出分类",
+    "batchMovedSuccess": "已移动 {{count}} 个对话",
+    "globalSearchPlaceholder": "搜索对话名称或内容…",
+    "searchNavigateHint": "导航",
+    "searchSelectHint": "选择",
+    "searchCloseHint": "关闭",
+    "searchNoResults": "未找到匹配的对话",
+    "searchingConversations": "正在搜索对话…",
     "categoryNamePlaceholder": "分类名称",
     "inspector": {
       "title": "检查器",

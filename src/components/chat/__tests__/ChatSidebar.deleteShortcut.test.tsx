@@ -392,18 +392,15 @@ describe('ChatSidebar direct delete shortcut', () => {
     expect(mocks.setActiveConversation).toHaveBeenCalledWith('conv-2');
   });
 
-  it('filters rendered conversation rows by title', () => {
-    conversationState.conversations = [
-      { ...conversationState.conversations[0], id: 'conv-1', title: 'Alpha 规划', updated_at: 2 },
-      { ...conversationState.conversations[0], id: 'conv-2', title: 'Beta 记录', updated_at: 1 },
-    ];
+  it('opens global conversation search when the search button is clicked', () => {
+    const openSearch = vi.fn();
+    window.addEventListener('aqbot:open-conversation-search', openSearch);
 
     render(<ChatSidebar />);
     fireEvent.click(within(screen.getByTitle('搜索对话...')).getByRole('button'));
-    fireEvent.change(screen.getByPlaceholderText('搜索对话...'), { target: { value: 'beta' } });
 
-    expect(screen.queryByText('Alpha 规划')).not.toBeInTheDocument();
-    expect(screen.getByText('Beta 记录')).toBeInTheDocument();
+    expect(openSearch).toHaveBeenCalledTimes(1);
+    window.removeEventListener('aqbot:open-conversation-search', openSearch);
   });
 
   it('reveals a child conversation only after its parent toggle is clicked', () => {
