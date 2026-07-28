@@ -6,7 +6,16 @@ import { useTranslation } from 'react-i18next';
 import { loadStoredMediaSource } from '@/lib/storedMedia';
 import { useDrawingStore } from '@/stores/drawingStore';
 import { usePageTransientOpenState } from '@/components/layout/PageLifecycle';
-import type { DrawingImage, DrawingSettings, ImageOperation } from '@/types';
+import type {
+  DrawingBackground,
+  DrawingGenerateInput,
+  DrawingImage,
+  DrawingOutputFormat,
+  DrawingQuality,
+  DrawingSettings,
+  ImageModelDescriptor,
+  ImageOperation,
+} from '@/types';
 
 interface Props {
   settings: DrawingSettings;
@@ -14,12 +23,31 @@ interface Props {
   onPromptChange: (value: string) => void;
   onHeightChange?: (height: number) => void;
   supportedOperations?: ImageOperation[];
+  targetDescriptor?: ImageModelDescriptor;
   targetAvailable?: boolean;
 }
 
 const TEXTAREA_MIN_HEIGHT = 72;
 const TEXTAREA_MAX_HEIGHT = 260;
 const PASTED_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/webp']);
+const DRAWING_QUALITIES = new Set<DrawingQuality>([
+  'low',
+  'medium',
+  'high',
+  'standard',
+  'hd',
+  'auto',
+]);
+const DRAWING_OUTPUT_FORMATS = new Set<DrawingOutputFormat>(['png', 'jpeg', 'webp']);
+const DRAWING_BACKGROUNDS = new Set<DrawingBackground>(['auto', 'opaque', 'transparent']);
+
+function normalizedDrawingValue<T extends string>(
+  value: unknown,
+  allowed: Set<T>,
+  fallback: T,
+): T {
+  return typeof value === 'string' && allowed.has(value as T) ? value as T : fallback;
+}
 
 function clampTextareaHeight(value: number) {
   return Math.min(TEXTAREA_MAX_HEIGHT, Math.max(TEXTAREA_MIN_HEIGHT, value));
@@ -112,6 +140,7 @@ export function DrawingComposer({
   onPromptChange,
   onHeightChange,
   supportedOperations,
+  targetDescriptor,
   targetAvailable = true,
 }: Props) {
   const { t } = useTranslation();
@@ -208,23 +237,91 @@ export function DrawingComposer({
       return;
     }
     try {
-      const base = {
+      const targetKey = `${settings.providerId}::${settings.modelId}`;
+      const storedParameters =
+        settings.parametersByTarget?.[targetKey] ?? settings.parameters ?? {};
+      const descriptorParameters = new Map(
+        targetDescriptor?.parameters.map((parameter) => [parameter.key, parameter]) ?? [],
+      );
+      const parameterValue = (key: string, legacy: unknown, fallback: unknown) => {
+        const descriptor = descriptorParameters.get(key);
+        const candidate = storedParameters[key] ?? legacy ?? descriptor?.default ?? fallback;
+        if (descriptor?.options.length && !descriptor.options.includes(candidate)) {
+          return descriptor.default;
+        }
+        if (descriptor?.kind === 'number') {
+          const number = Number(candidate);
+          if (
+            !Number.isFinite(number)
+            || (descriptor.min !== null && number < descriptor.min)
+            || (descriptor.max !== null && number > descriptor.max)
+          ) {
+            return descriptor.default;
+          }
+        }
+        return candidate;
+      };
+      const supportsParameter = (key: string) =>
+        targetDescriptor === undefined || descriptorParameters.has(key);
+      const outputFormat = supportsParameter('output_format')
+        ? normalizedDrawingValue(
+          parameterValue('output_format', settings.outputFormat, 'png'),
+          DRAWING_OUTPUT_FORMATS,
+          'png',
+        )
+        : 'png';
+      const storedCompression =
+        storedParameters.output_compression ?? settings.outputCompression;
+      const parameters = Object.fromEntries(
+        Object.entries(storedParameters).filter(([key]) =>
+          descriptorParameters.has(key)
+          && ![
+            'size',
+            'quality',
+            'output_format',
+            'background',
+            'output_compression',
+            'n',
+          ].includes(key),
+        ),
+      );
+      const base: DrawingGenerateInput = {
         provider_id: settings.providerId,
         model_id: settings.modelId,
         prompt: promptText,
-        size: settings.size,
-        quality: settings.quality,
-        output_format: settings.outputFormat,
-        background: settings.background,
-        output_compression: settings.outputCompression,
+        size: supportsParameter('size')
+          ? String(parameterValue('size', settings.size, 'auto'))
+          : 'auto',
+        quality: supportsParameter('quality')
+          ? normalizedDrawingValue(
+            parameterValue('quality', settings.quality, 'auto'),
+            DRAWING_QUALITIES,
+            'auto',
+          )
+          : 'auto',
+        output_format: outputFormat,
+        background: supportsParameter('background')
+          ? normalizedDrawingValue(
+            parameterValue('background', settings.background, 'auto'),
+            DRAWING_BACKGROUNDS,
+            'auto',
+          )
+          : 'auto',
+        output_compression: supportsParameter('output_compression')
+          && storedCompression !== undefined
+          && storedCompression !== null
+          ? Number(parameterValue('output_compression', storedCompression, 90))
+          : undefined,
         reference_image_mode: settings.referenceImageMode,
         reference_image_format: settings.referenceImageFormat,
         reference_image_param_name: settings.referenceImageParamName,
-        n: settings.n,
+        n: supportsParameter('n')
+          ? Number(parameterValue('n', settings.n, 1))
+          : 1,
         reference_file_ids: references.map((item) => item.id),
         generation_api_path: settings.generationApiPath,
         edit_api_path: settings.editApiPath,
-        parameters: settings.parameters,
+        parameters,
       };
       onPromptChange('');
       if (editSourceImage && editMaskFileId) {

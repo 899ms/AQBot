@@ -338,6 +338,7 @@ export function DrawingPage() {
           onPromptChange={setPrompt}
           onHeightChange={setComposerHeight}
           supportedOperations={selectedTarget?.descriptor.operations}
+          targetDescriptor={selectedTarget?.descriptor}
           targetAvailable={targetCatalog === null || Boolean(selectedTarget)}
         />
       </main>

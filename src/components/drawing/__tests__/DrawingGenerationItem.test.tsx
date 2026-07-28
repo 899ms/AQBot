@@ -260,6 +260,44 @@ describe('DrawingGenerationItem', () => {
     expect(screen.getByText('4')).toBeDefined();
   });
 
+  it('shows the persisted image format for a succeeded generation', () => {
+    invokeMock.mockImplementation(() => new Promise(() => {}));
+
+    render(
+      <DrawingGenerationItem
+        generation={generationFixture({
+          status: 'succeeded',
+          parameters_json: JSON.stringify({
+            n: 1,
+            size: '1024x1024',
+            quality: 'auto',
+            output_format: 'png',
+            background: 'auto',
+          }),
+          images: [{
+            id: 'image-1',
+            generation_id: 'generation-1',
+            stored_file_id: 'file-1',
+            storage_path: 'images/drawing.jpg',
+            mime_type: 'image/jpeg',
+            width: 1024,
+            height: 1024,
+            revised_prompt: null,
+            created_at: 1,
+          }],
+        })}
+        onEdit={() => {}}
+        onMaskEdit={() => {}}
+        onRetry={() => {}}
+        onDelete={() => {}}
+        onUsePrompt={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('JPEG')).toBeDefined();
+    expect(screen.queryByText('PNG')).toBeNull();
+  });
+
   it('localizes the automatic size value in generation metadata', () => {
     render(
       <DrawingGenerationItem

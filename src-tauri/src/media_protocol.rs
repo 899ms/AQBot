@@ -336,6 +336,7 @@ mod tests {
         assert_eq!(head_response.status(), StatusCode::OK);
         assert!(head_response.body().is_empty());
         assert_eq!(head_response.headers()[header::CONTENT_LENGTH], "8");
+        assert_eq!(head_response.headers()[header::CONTENT_TYPE], "image/png");
         let etag = head_response.headers()[header::ETAG].clone();
         let cached = Request::builder()
             .uri("aqbot-media://stored/cached")

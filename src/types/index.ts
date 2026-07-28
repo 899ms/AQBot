@@ -227,6 +227,14 @@ export interface ImageModelDescriptor {
   parameters: ImageParameterDescriptor[];
   max_batch_size: number;
   max_reference_images: number;
+  warnings: ImageModelWarning[];
+}
+
+export interface ImageModelWarning {
+  code: string;
+  message: string;
+  deadline: string | null;
+  replacement_model_id: string | null;
 }
 
 export interface ImageAdapterConfig {
@@ -242,6 +250,8 @@ export interface ImageAdapterConfig {
   poll_interval_secs?: number;
   timeout_secs?: number;
   operation_overrides?: ImageOperation[] | null;
+  gemini_api_mode?: 'auto' | 'interactions' | 'generate_content' | 'predict';
+  descriptor_override?: ImageModelDescriptor | null;
 }
 
 export type ModelCatalogSourcePreference = 'builtin' | 'online';

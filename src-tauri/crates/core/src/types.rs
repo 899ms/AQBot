@@ -250,6 +250,13 @@ mod model_type_tests {
             ModelType::Embedding
         );
         assert_eq!(ModelType::detect("gpt-image-1"), ModelType::Image);
+        assert_eq!(ModelType::detect("grok-imagine-image"), ModelType::Image);
+        assert_eq!(ModelType::detect("cogview-4"), ModelType::Image);
+        assert_eq!(ModelType::detect("Kolors"), ModelType::Image);
+        assert_eq!(
+            ModelType::detect("Qwen/Qwen-Image-Edit-2509"),
+            ModelType::Image
+        );
         assert_eq!(ModelType::detect("speech-to-text"), ModelType::Voice);
         assert_eq!(ModelType::detect("imagination-chat"), ModelType::Chat);
         assert_eq!(ModelType::detect("audiofile-chat"), ModelType::Chat);
@@ -369,9 +376,10 @@ pub fn infer_model_type_and_capabilities(
         ModelType::Rerank
     } else if has(&["embed", "embedding"]) {
         ModelType::Embedding
-    } else if has(&["image", "imagen", "flux"])
+    } else if has(&["image", "imagen", "flux", "cogview", "kolors"])
         || has_pair("gpt", "image")
         || has_pair("dall", "e")
+        || has_pair("grok", "imagine")
         || has_pair("stable", "diffusion")
     {
         ModelType::Image

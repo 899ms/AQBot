@@ -102,7 +102,14 @@ export function DrawingSettingsPanel({
     && isDescriptorFieldVisible(field, selectedTarget),
   );
   const dynamicFields = selectedTarget?.descriptor.parameters.filter(
-    (parameter) => !['size', 'quality', 'output_format', 'background', 'n'].includes(parameter.key),
+    (parameter) => ![
+      'size',
+      'quality',
+      'output_format',
+      'background',
+      'output_compression',
+      'n',
+    ].includes(parameter.key),
   ) ?? [];
   const targetKey = `${settings.providerId}::${settings.modelId}`;
   const targetParameters = settings.parametersByTarget?.[targetKey] ?? settings.parameters ?? {};
@@ -111,13 +118,49 @@ export function DrawingSettingsPanel({
     const providerId = next.providerId ?? settings.providerId;
     const modelId = next.modelId ?? settings.modelId;
     const selectionChanged = providerId !== settings.providerId || modelId !== settings.modelId;
-    const nextParameters = selectionChanged
-      ? settings.parametersByTarget?.[`${providerId}::${modelId}`] ?? {}
-      : next.parameters ?? settings.parameters;
+    const currentTargetParameters = {
+      ...targetParameters,
+      ...drawingSettingsToProtocolParameters(settings),
+    };
+    const parametersByTarget = {
+      ...settings.parametersByTarget,
+      [targetKey]: currentTargetParameters,
+      ...next.parametersByTarget,
+    };
+    const nextTarget = targets?.find((target) =>
+      target.provider_id === providerId && target.model_id === modelId,
+    );
+    const storedNextParameters: Record<string, unknown> = selectionChanged
+      ? { ...(parametersByTarget[`${providerId}::${modelId}`] ?? {}) }
+      : {
+        ...currentTargetParameters,
+        ...drawingSettingsToProtocolParameters({ ...settings, ...next }),
+        ...next.parameters,
+      };
+    const nextOutputFormat = storedNextParameters.output_format;
+    if (
+      ('outputCompression' in next && next.outputCompression === undefined)
+      || (typeof nextOutputFormat === 'string'
+        && !['jpeg', 'webp'].includes(nextOutputFormat))
+    ) {
+      delete storedNextParameters.output_compression;
+    }
+    const targetSettings = selectionChanged
+      ? drawingSettingsFromTarget(nextTarget, storedNextParameters)
+      : {};
+    if (selectionChanged) {
+      Object.assign(
+        storedNextParameters,
+        drawingSettingsToProtocolParameters(targetSettings),
+      );
+    }
+    parametersByTarget[`${providerId}::${modelId}`] = storedNextParameters;
     onChange(normalizeDrawingSettingsByConfig({
       ...settings,
       ...next,
-      parameters: nextParameters,
+      ...targetSettings,
+      parameters: storedNextParameters,
+      parametersByTarget,
     }));
   };
 
@@ -211,6 +254,21 @@ export function DrawingSettingsPanel({
             )}
           />
         )}
+        {selectedTarget?.descriptor.warnings.map((warning) => (
+          <Alert
+            key={warning.code}
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            title={warning.message}
+            description={[
+              warning.deadline ? `截止日期：${warning.deadline}` : null,
+              warning.replacement_model_id
+                ? `建议模型：${warning.replacement_model_id}`
+                : null,
+            ].filter(Boolean).join('；') || undefined}
+          />
+        ))}
         {visibleBasicFields.map(renderField)}
         <DrawingDynamicParameters
           parameters={dynamicFields}
@@ -282,7 +340,62 @@ function isDescriptorFieldVisible(
     outputFormat: 'output_format',
     background: 'background',
     batchCount: 'n',
+    compression: 'output_compression',
   };
   const descriptorKey = descriptorKeys[field.id];
   return descriptorKey ? keys.has(descriptorKey) : true;
+}
+
+function drawingSettingsToProtocolParameters(
+  settings: Partial<DrawingSettings>,
+): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
+  if (settings.size !== undefined) values.size = settings.size;
+  if (settings.quality !== undefined) values.quality = settings.quality;
+  if (settings.outputFormat !== undefined) values.output_format = settings.outputFormat;
+  if (settings.background !== undefined) values.background = settings.background;
+  if (settings.outputCompression !== undefined) {
+    values.output_compression = settings.outputCompression;
+  }
+  if (settings.n !== undefined) values.n = settings.n;
+  return values;
+}
+
+function drawingSettingsFromTarget(
+  target: DrawingTarget | undefined,
+  values: Record<string, unknown>,
+): Partial<DrawingSettings> {
+  const value = (key: string, fallback: unknown) => {
+    const descriptor = target?.descriptor.parameters.find((parameter) => parameter.key === key);
+    const candidate = values[key] ?? descriptor?.default ?? fallback;
+    if (descriptor?.options.length && !descriptor.options.includes(candidate)) {
+      return descriptor.default;
+    }
+    if (descriptor?.kind === 'number') {
+      const number = Number(candidate);
+      if (
+        !Number.isFinite(number)
+        || (descriptor.min !== null && number < descriptor.min)
+        || (descriptor.max !== null && number > descriptor.max)
+      ) {
+        return descriptor.default;
+      }
+      return number;
+    }
+    return candidate;
+  };
+  const supports = (key: string) =>
+    target?.descriptor.parameters.some((parameter) => parameter.key === key) ?? false;
+  const compression = values.output_compression;
+  return {
+    size: String(value('size', 'auto')),
+    quality: String(value('quality', 'auto')) as DrawingSettings['quality'],
+    outputFormat: String(value('output_format', 'png')) as DrawingSettings['outputFormat'],
+    background: String(value('background', 'auto')) as DrawingSettings['background'],
+    outputCompression: supports('output_compression')
+      && typeof compression === 'number'
+      ? compression
+      : undefined,
+    n: Number(value('n', 1)),
+  };
 }

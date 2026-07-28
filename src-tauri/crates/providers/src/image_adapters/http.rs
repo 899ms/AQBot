@@ -1,6 +1,7 @@
 use super::transport::{authorize, endpoint_url, parse_http_response, submit_url};
 use super::{
-    build_request_body, ImageAdapterConfig, ImageAdapterRequest, ImagePollResult, ImageSubmission,
+    build_request_body, image_model_profile, validate_profile_request, ImageAdapterConfig,
+    ImageAdapterRequest, ImageModelFamily, ImagePollResult, ImageSubmission,
     PendingImageSubmission,
 };
 use crate::openai_images::{
@@ -16,6 +17,7 @@ pub async fn submit_profile(
     request: ImageAdapterRequest,
     config: &ImageAdapterConfig,
 ) -> Result<ImageSubmission> {
+    validate_profile_request(adapter_id, &request, request.images.len(), config)?;
     if adapter_id == "openai_images" {
         return redact_result(submit_openai(ctx, request, config).await, &ctx.api_key);
     }
@@ -111,9 +113,22 @@ pub async fn cancel_profile(
 
 async fn submit_openai(
     ctx: &ProviderRequestContext,
-    request: ImageAdapterRequest,
+    mut request: ImageAdapterRequest,
     config: &ImageAdapterConfig,
 ) -> Result<ImageSubmission> {
+    let family = image_model_profile("openai_images", &request.model, config).family;
+    if matches!(
+        family,
+        ImageModelFamily::DallE2 | ImageModelFamily::DallE3 | ImageModelFamily::Unknown
+    ) {
+        request.output_format.clear();
+        request.background = None;
+        request.output_compression = None;
+    }
+    if matches!(family, ImageModelFamily::Unknown) {
+        request.size.clear();
+        request.quality.clear();
+    }
     let client = OpenAIImagesClient::new();
     let output = match request.operation {
         super::ImageOperation::Generate => {
@@ -135,13 +150,23 @@ async fn submit_openai(
                 .await?
         }
         super::ImageOperation::Edit | super::ImageOperation::MaskEdit => {
-            let transfer_mode = match request
-                .parameters
-                .get("_aqbot_reference_mode")
-                .and_then(serde_json::Value::as_str)
-            {
-                Some("multipart") => ImageEditTransferMode::Multipart,
-                _ => ImageEditTransferMode::Base64,
+            let official_family = matches!(
+                family,
+                ImageModelFamily::OpenAiGpt2
+                    | ImageModelFamily::OpenAiGptLegacy
+                    | ImageModelFamily::DallE2
+            );
+            let transfer_mode = if official_family {
+                ImageEditTransferMode::Multipart
+            } else {
+                match request
+                    .parameters
+                    .get("_aqbot_reference_mode")
+                    .and_then(serde_json::Value::as_str)
+                {
+                    Some("multipart") => ImageEditTransferMode::Multipart,
+                    _ => ImageEditTransferMode::Base64,
+                }
             };
             let image_format = match request
                 .parameters
@@ -151,12 +176,18 @@ async fn submit_openai(
                 Some("string") => ImageEditImageFormat::String,
                 _ => ImageEditImageFormat::Object,
             };
-            let image_param_name = request
-                .parameters
-                .get("_aqbot_reference_param")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("images")
-                .to_string();
+            let image_param_name = match family {
+                ImageModelFamily::DallE2 => "image".to_string(),
+                ImageModelFamily::OpenAiGpt2 | ImageModelFamily::OpenAiGptLegacy => {
+                    "image[]".to_string()
+                }
+                _ => request
+                    .parameters
+                    .get("_aqbot_reference_param")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("images")
+                    .to_string(),
+            };
             client
                 .edit(
                     ctx,

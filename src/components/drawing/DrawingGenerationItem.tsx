@@ -44,6 +44,13 @@ function describeSize(value: string | undefined, t: (key: string, fallback: stri
   return describeDrawingSize(value);
 }
 
+function outputFormatFromMimeType(mimeType: string | undefined): string | undefined {
+  if (mimeType === 'image/png') return 'png';
+  if (mimeType === 'image/jpeg' || mimeType === 'image/jpg') return 'jpeg';
+  if (mimeType === 'image/webp') return 'webp';
+  return undefined;
+}
+
 const CONTEXT_THUMBNAIL_SIZE = 32;
 
 function DrawingContextThumbnail({
@@ -156,6 +163,9 @@ export function DrawingGenerationItem({
   const hasGeneratedImages = generation.images.length > 0;
   const isRunning = generation.status === 'running';
   const isStopped = generation.status === 'stopped' || generation.status === 'cancelled';
+  const actualOutputFormat = generation.status === 'succeeded'
+    ? outputFormatFromMimeType(firstImage?.mime_type)
+    : undefined;
   const placeholderCount = Number(params.n || generation.images.length || 1);
   const hasMultipleImages = generation.images.length > 1;
   const imageMenuItems = useMemo(() => generation.images.map((image, index) => ({
@@ -197,7 +207,11 @@ export function DrawingGenerationItem({
     },
     {
       label: t('drawing.meta.format', '格式'),
-      value: getDrawingParameterValueLabel('output_format', params.output_format ?? 'png', t),
+      value: getDrawingParameterValueLabel(
+        'output_format',
+        actualOutputFormat ?? params.output_format ?? 'png',
+        t,
+      ),
     },
     {
       label: t('drawing.meta.background', '背景'),

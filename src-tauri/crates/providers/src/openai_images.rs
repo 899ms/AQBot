@@ -14,14 +14,26 @@ const MAX_IMAGE_DOWNLOAD_BYTES: usize = 50 * 1024 * 1024;
 pub struct ImageGenerateRequest {
     pub model: String,
     pub prompt: String,
+    #[serde(skip_serializing_if = "is_one")]
     pub n: u8,
+    #[serde(skip_serializing_if = "empty_or_auto")]
     pub size: String,
+    #[serde(skip_serializing_if = "empty_or_auto")]
     pub quality: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub output_format: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub background: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_compression: Option<u8>,
+}
+
+fn empty_or_auto(value: &String) -> bool {
+    value.is_empty() || value == "auto"
+}
+
+fn is_one(value: &u8) -> bool {
+    *value == 1
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +82,7 @@ pub struct ImageApiOutput {
 #[derive(Debug, Clone)]
 pub struct ImageApiImage {
     pub bytes: Vec<u8>,
+    pub declared_mime_type: Option<String>,
     pub revised_prompt: Option<String>,
 }
 
@@ -184,11 +197,19 @@ fn build_edit_multipart_form(request: ImageEditRequest) -> Result<reqwest::multi
     let image_param_name = multipart_image_param_name(&request.image_param_name).to_string();
     let mut form = reqwest::multipart::Form::new()
         .text("model", request.model)
-        .text("prompt", request.prompt)
-        .text("n", request.n.to_string())
-        .text("size", request.size)
-        .text("quality", request.quality)
-        .text("output_format", request.output_format);
+        .text("prompt", request.prompt);
+    if request.n != 1 {
+        form = form.text("n", request.n.to_string());
+    }
+    if !request.size.is_empty() && request.size != "auto" {
+        form = form.text("size", request.size);
+    }
+    if !request.quality.is_empty() && request.quality != "auto" {
+        form = form.text("quality", request.quality);
+    }
+    if !request.output_format.is_empty() {
+        form = form.text("output_format", request.output_format);
+    }
 
     if let Some(background) = request.background {
         form = form.text("background", background);
@@ -250,16 +271,24 @@ fn build_edit_json_request(request: ImageEditRequest) -> Result<Vec<u8>> {
         "prompt".to_string(),
         serde_json::Value::String(request.prompt),
     );
-    map.insert("n".to_string(), serde_json::Value::Number(request.n.into()));
-    map.insert("size".to_string(), serde_json::Value::String(request.size));
-    map.insert(
-        "quality".to_string(),
-        serde_json::Value::String(request.quality),
-    );
-    map.insert(
-        "output_format".to_string(),
-        serde_json::Value::String(request.output_format),
-    );
+    if request.n != 1 {
+        map.insert("n".to_string(), serde_json::Value::Number(request.n.into()));
+    }
+    if !request.size.is_empty() && request.size != "auto" {
+        map.insert("size".to_string(), serde_json::Value::String(request.size));
+    }
+    if !request.quality.is_empty() && request.quality != "auto" {
+        map.insert(
+            "quality".to_string(),
+            serde_json::Value::String(request.quality),
+        );
+    }
+    if !request.output_format.is_empty() {
+        map.insert(
+            "output_format".to_string(),
+            serde_json::Value::String(request.output_format),
+        );
+    }
 
     if let Some(background) = request.background {
         map.insert(
@@ -302,9 +331,7 @@ fn build_edit_json_request(request: ImageEditRequest) -> Result<Vec<u8>> {
     if let Some(mask) = request.mask {
         let mask_value = match request.image_format {
             ImageEditImageFormat::Object => image_upload_to_image_url_object(mask),
-            ImageEditImageFormat::String => {
-                serde_json::Value::String(image_upload_to_string(mask))
-            }
+            ImageEditImageFormat::String => serde_json::Value::String(image_upload_to_string(mask)),
         };
         map.insert("mask".to_string(), mask_value);
     }
@@ -314,7 +341,12 @@ fn build_edit_json_request(request: ImageEditRequest) -> Result<Vec<u8>> {
         .map_err(|e| AQBotError::Provider(format!("Failed to serialize edit request: {}", e)))
 }
 
-async fn fetch_image_url(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
+struct DownloadedImage {
+    bytes: Vec<u8>,
+    declared_mime_type: Option<String>,
+}
+
+async fn fetch_image_url(client: &reqwest::Client, url: &str) -> Result<DownloadedImage> {
     let response = client
         .get(url)
         .send()
@@ -335,6 +367,13 @@ async fn fetch_image_url(client: &reqwest::Client, url: &str) -> Result<Vec<u8>>
             )));
         }
     }
+    let declared_mime_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(normalize_image_content_type)
+        .transpose()?
+        .flatten();
 
     let mut bytes = Vec::new();
     let mut stream = response.bytes_stream();
@@ -357,7 +396,32 @@ async fn fetch_image_url(client: &reqwest::Client, url: &str) -> Result<Vec<u8>>
     image::load_from_memory(&bytes).map_err(|e| {
         AQBotError::Provider(format!("Image URL response is not a valid image: {}", e))
     })?;
-    Ok(bytes)
+    Ok(DownloadedImage {
+        bytes,
+        declared_mime_type,
+    })
+}
+
+fn normalize_image_content_type(value: &str) -> Result<Option<String>> {
+    let mime_type = value
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if mime_type.is_empty() || mime_type == "application/octet-stream" {
+        return Ok(None);
+    }
+    if !mime_type.starts_with("image/") {
+        return Err(AQBotError::Provider(format!(
+            "Image URL returned non-image Content-Type {mime_type}"
+        )));
+    }
+    Ok(Some(if mime_type == "image/jpg" {
+        "image/jpeg".into()
+    } else {
+        mime_type
+    }))
 }
 
 async fn parse_response(
@@ -379,10 +443,14 @@ async fn parse_response(
 
     let mut images = Vec::with_capacity(body.data.len());
     for item in body.data {
-        let bytes = if let Some(encoded) = item.b64_json {
-            base64::engine::general_purpose::STANDARD
+        let downloaded = if let Some(encoded) = item.b64_json {
+            let bytes = base64::engine::general_purpose::STANDARD
                 .decode(encoded)
-                .map_err(|e| AQBotError::Provider(format!("Invalid image b64_json: {}", e)))?
+                .map_err(|e| AQBotError::Provider(format!("Invalid image b64_json: {}", e)))?;
+            DownloadedImage {
+                bytes,
+                declared_mime_type: None,
+            }
         } else if let Some(url) = item.url {
             fetch_image_url(client, &url).await?
         } else {
@@ -391,9 +459,15 @@ async fn parse_response(
             ));
         };
         images.push(ImageApiImage {
-            bytes,
+            bytes: downloaded.bytes,
+            declared_mime_type: downloaded.declared_mime_type,
             revised_prompt: item.revised_prompt,
         });
+    }
+    if images.is_empty() {
+        return Err(AQBotError::Provider(
+            "Image API response contained no images".into(),
+        ));
     }
 
     Ok(ImageApiOutput {
@@ -802,7 +876,7 @@ mod tests {
 
         assert!(err
             .to_string()
-            .contains("Image URL response is not a valid image"));
+            .contains("Image URL returned non-image Content-Type text/plain"));
         api_server.await.expect("api server request");
         image_server.await.expect("image server request");
     }

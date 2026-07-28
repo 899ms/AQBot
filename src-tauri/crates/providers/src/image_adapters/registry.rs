@@ -1,10 +1,7 @@
-use super::types::{
-    ImageAdapter, ImageAdapterConfig, ImageModelDescriptor, ImageOperation,
-    ImageParameterDescriptor, ImageParameterKind,
-};
+use super::types::{ImageAdapter, ImageAdapterConfig, ImageModelDescriptor};
 use super::{
-    cancel_profile, poll_profile, submit_profile, ImageAdapterRequest, ImagePollResult,
-    ImageSubmission, PendingImageSubmission,
+    cancel_profile, image_model_profile, poll_profile, submit_profile, validate_profile_request,
+    ImageAdapterRequest, ImagePollResult, ImageSubmission, PendingImageSubmission,
 };
 use crate::ProviderRequestContext;
 use aqbot_core::error::Result;
@@ -57,13 +54,20 @@ impl Default for ImageAdapterRegistry {
 }
 
 fn infer_adapter_id(provider_type: &ProviderType, model_id: &str) -> &'static str {
+    let normalized = model_id.to_ascii_lowercase();
     match provider_type {
         ProviderType::XAI => "xai_images",
         ProviderType::GLM => "glm_images",
         ProviderType::SiliconFlow => "siliconflow_images",
         ProviderType::Gemini => "gemini_images",
-        ProviderType::Custom if model_id.to_lowercase().starts_with("grok-imagine") => "xai_images",
-        ProviderType::Custom | ProviderType::OpenAI => "openai_images",
+        ProviderType::Custom if normalized.starts_with("grok-imagine") => "xai_images",
+        ProviderType::Custom
+            if normalized.starts_with("gpt-image-") || normalized.starts_with("dall-e-") =>
+        {
+            "openai_images"
+        }
+        ProviderType::Custom => "generic_json",
+        ProviderType::OpenAI => "openai_images",
         _ => "generic_json",
     }
 }
@@ -78,38 +82,17 @@ impl ImageAdapter for ProfileImageAdapter {
         self.id
     }
 
-    fn descriptor(&self, _model_id: &str, config: &ImageAdapterConfig) -> ImageModelDescriptor {
-        let profile_operations = profile_operations(self.id);
-        let operations = config
-            .operation_overrides
-            .clone()
-            .map(|overrides| {
-                overrides
-                    .into_iter()
-                    .filter(|operation| profile_operations.contains(operation))
-                    .collect()
-            })
-            .unwrap_or(profile_operations);
-        let max_reference_images = if supports_edits(self.id)
-            && operations
-                .iter()
-                .any(|operation| *operation != ImageOperation::Generate)
-        {
-            16
-        } else {
-            0
-        };
-        ImageModelDescriptor {
-            adapter_id: self.id.to_string(),
-            operations,
-            parameters: profile_parameters(self.id),
-            max_batch_size: match self.id {
-                "xai_images" | "glm_images" | "gemini_images" => 1,
-                "siliconflow_images" => 4,
-                _ => 10,
-            },
-            max_reference_images,
-        }
+    fn descriptor(&self, model_id: &str, config: &ImageAdapterConfig) -> ImageModelDescriptor {
+        image_model_profile(self.id, model_id, config).descriptor
+    }
+
+    fn validate_request(
+        &self,
+        request: &ImageAdapterRequest,
+        reference_count: usize,
+        config: &ImageAdapterConfig,
+    ) -> Result<()> {
+        validate_profile_request(self.id, request, reference_count, config)
     }
 
     async fn submit(
@@ -140,99 +123,6 @@ impl ImageAdapter for ProfileImageAdapter {
     }
 }
 
-fn supports_edits(id: &str) -> bool {
-    matches!(
-        id,
-        "openai_images" | "xai_images" | "gemini_images" | "generic_json"
-    )
-}
-
-fn profile_operations(id: &str) -> Vec<ImageOperation> {
-    match id {
-        "glm_images" | "siliconflow_images" => vec![ImageOperation::Generate],
-        "xai_images" | "gemini_images" => {
-            vec![ImageOperation::Generate, ImageOperation::Edit]
-        }
-        _ => vec![
-            ImageOperation::Generate,
-            ImageOperation::Edit,
-            ImageOperation::MaskEdit,
-        ],
-    }
-}
-
-fn profile_parameters(id: &str) -> Vec<ImageParameterDescriptor> {
-    if id == "xai_images" {
-        return vec![select_parameter(
-            "aspect_ratio",
-            "1:1",
-            &["1:1", "16:9", "9:16", "4:3", "3:4"],
-        )];
-    }
-    if id == "gemini_images" {
-        return vec![select_parameter(
-            "aspect_ratio",
-            "1:1",
-            &["1:1", "16:9", "9:16", "4:3", "3:4"],
-        )];
-    }
-    let mut parameters = vec![select_parameter(
-        "size",
-        "auto",
-        &["auto", "1024x1024", "1536x1024", "1024x1536"],
-    )];
-    if matches!(id, "openai_images" | "glm_images") {
-        parameters.push(select_parameter(
-            "quality",
-            "auto",
-            &["auto", "standard", "hd", "high"],
-        ));
-    }
-    if id == "openai_images" {
-        parameters.push(select_parameter(
-            "output_format",
-            "png",
-            &["png", "jpeg", "webp"],
-        ));
-        parameters.push(select_parameter(
-            "background",
-            "auto",
-            &["auto", "opaque", "transparent"],
-        ));
-    }
-    parameters.push(number_parameter(
-        "n",
-        if id == "siliconflow_images" {
-            4.0
-        } else {
-            10.0
-        },
-    ));
-    parameters
-}
-
-fn select_parameter(key: &str, default: &str, options: &[&str]) -> ImageParameterDescriptor {
-    ImageParameterDescriptor {
-        key: key.into(),
-        kind: ImageParameterKind::Select,
-        default: default.into(),
-        options: options.iter().map(|value| (*value).into()).collect(),
-        min: None,
-        max: None,
-    }
-}
-
-fn number_parameter(key: &str, max: f64) -> ImageParameterDescriptor {
-    ImageParameterDescriptor {
-        key: key.into(),
-        kind: ImageParameterKind::Number,
-        default: 1.into(),
-        options: Vec::new(),
-        min: Some(1.0),
-        max: Some(max),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,9 +141,7 @@ mod tests {
         assert!(parameters
             .iter()
             .all(|parameter| parameter.get("label").is_none()));
-        assert_eq!(
-            parameters[0]["options"],
-            serde_json::json!(["auto", "1024x1024", "1536x1024", "1024x1536"])
-        );
+        assert_eq!(parameters[0]["kind"], "string");
+        assert!(serialized["warnings"].is_array());
     }
 }

@@ -183,6 +183,7 @@ vi.mock('@/stores', () => ({
 describe('ProviderDetail', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     provider = createProviderFixture();
     mocks.saveModels.mockResolvedValue(undefined);
     mocks.applyModelSync.mockResolvedValue(undefined);
@@ -1158,6 +1159,40 @@ describe('ProviderDetail', () => {
 
     await waitFor(() => {
       expect(mocks.applyModelSync).toHaveBeenCalledWith('provider-1', provider.models);
+    });
+  });
+
+  it('keeps existing models and exposes stale discovery details after a sync failure', async () => {
+    const lastSuccessAt = 1_700_000_000_000;
+    const existingModels = [...provider.models];
+    window.localStorage.setItem(
+      'aqbot:model-discovery:provider-1',
+      JSON.stringify({
+        state: 'fresh',
+        lastSuccessAt,
+        error: null,
+      }),
+    );
+    mocks.fetchRemoteModels.mockRejectedValue(new Error('image discovery offline'));
+
+    render(
+      <App>
+        <ProviderDetail providerId="provider-1" />
+      </App>,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'settings.syncModels' }));
+
+    expect((await screen.findAllByText(/image discovery offline/)).length).toBeGreaterThan(0);
+    expect(mocks.applyModelSync).not.toHaveBeenCalled();
+    expect(mocks.saveModels).not.toHaveBeenCalled();
+    expect(provider.models).toEqual(existingModels);
+    expect(JSON.parse(
+      window.localStorage.getItem('aqbot:model-discovery:provider-1') ?? '{}',
+    )).toMatchObject({
+      state: 'stale',
+      lastSuccessAt,
+      error: 'Error: image discovery offline',
     });
   });
 

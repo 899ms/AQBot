@@ -2,7 +2,6 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import {
   DRAWING_REFERENCE_IMAGE_MODES,
-  DRAWING_SIZE_OPTIONS,
   normalizeDrawingSettingsByConfig,
 } from '@/lib/drawingModels';
 import type {
@@ -110,8 +109,8 @@ export function normalizeDrawingSettings(settings: Partial<DrawingSettings> = {}
       ? settings.providerId
       : DEFAULT_DRAWING_SETTINGS.providerId,
     modelId,
-    size: typeof settings.size === 'string' && DRAWING_SIZE_OPTIONS.includes(settings.size)
-      ? settings.size
+    size: typeof settings.size === 'string' && settings.size.trim()
+      ? settings.size.trim()
       : DEFAULT_DRAWING_SETTINGS.size,
     quality: isDrawingQuality(settings.quality)
       ? settings.quality

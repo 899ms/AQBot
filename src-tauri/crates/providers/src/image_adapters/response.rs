@@ -11,6 +11,7 @@ pub enum ParsedImageSource {
 #[derive(Debug, Clone)]
 pub struct ParsedImage {
     pub source: ParsedImageSource,
+    pub declared_mime_type: Option<String>,
     pub revised_prompt: Option<String>,
 }
 
@@ -34,13 +35,19 @@ pub fn parse_response_payload(
 ) -> Result<ParsedResponsePayload> {
     match adapter_id {
         "gemini_images" => completed(gemini_images(value), value),
-        "siliconflow_images" => {
-            completed(array_images(value, "/images", "/url", "/b64_json"), value)
-        }
+        "siliconflow_images" => completed(
+            array_images(value, "/images", "/url", "/b64_json", None),
+            value,
+        ),
         "generic_json" => parse_generic(value, config),
-        "openai_images" | "xai_images" | "glm_images" => {
-            completed(array_images(value, "/data", "/url", "/b64_json"), value)
-        }
+        "xai_images" => completed(
+            array_images(value, "/data", "/url", "/b64_json", Some("/mime_type")),
+            value,
+        ),
+        "openai_images" | "glm_images" => completed(
+            array_images(value, "/data", "/url", "/b64_json", None),
+            value,
+        ),
         other => Err(AQBotError::Validation(format!(
             "Unknown image adapter: {other}"
         ))),
@@ -66,7 +73,13 @@ fn parse_generic(value: &Value, config: &ImageAdapterConfig) -> Result<ParsedRes
     let images_path = mapping.images_path.as_deref().unwrap_or("/data");
     let url_path = mapping.image_url_path.as_deref().unwrap_or("/url");
     let base64_path = mapping.image_base64_path.as_deref().unwrap_or("/b64_json");
-    let images = array_images(value, images_path, url_path, base64_path);
+    let images = array_images(
+        value,
+        images_path,
+        url_path,
+        base64_path,
+        mapping.image_mime_type_path.as_deref(),
+    );
     let is_success = status
         .as_ref()
         .is_some_and(|status| mapping.success_statuses.iter().any(|item| item == status));
@@ -122,6 +135,7 @@ fn array_images(
     images_path: &str,
     url_path: &str,
     base64_path: &str,
+    mime_type_path: Option<&str>,
 ) -> Vec<ParsedImage> {
     value
         .pointer(images_path)
@@ -136,8 +150,10 @@ fn array_images(
                 .get("revised_prompt")
                 .and_then(Value::as_str)
                 .map(str::to_string);
+            let declared_mime_type = mime_type_path.and_then(|path| pointer_string(item, path));
             Some(ParsedImage {
                 source,
+                declared_mime_type,
                 revised_prompt,
             })
         })
@@ -145,7 +161,7 @@ fn array_images(
 }
 
 fn gemini_images(value: &Value) -> Vec<ParsedImage> {
-    value
+    let mut images = value
         .get("candidates")
         .and_then(Value::as_array)
         .into_iter()
@@ -162,8 +178,90 @@ fn gemini_images(value: &Value) -> Vec<ParsedImage> {
                 .pointer("/inlineData/data")
                 .or_else(|| part.pointer("/inline_data/data"))
                 .and_then(Value::as_str)?;
+            let declared_mime_type = part
+                .pointer("/inlineData/mimeType")
+                .or_else(|| part.pointer("/inline_data/mime_type"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
             Some(ParsedImage {
                 source: ParsedImageSource::Base64(data.to_string()),
+                declared_mime_type,
+                revised_prompt: None,
+            })
+        })
+        .collect::<Vec<_>>();
+    images.extend(interaction_images(value));
+    images.extend(imagen_images(value));
+    images
+}
+
+fn interaction_images(value: &Value) -> Vec<ParsedImage> {
+    let step_images = value
+        .get("steps")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|step| step.get("type").and_then(Value::as_str) == Some("model_output"))
+        .flat_map(|step| {
+            step.get("content")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        });
+    let output_images = value
+        .get("outputs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten();
+    step_images
+        .chain(output_images)
+        .filter_map(content_image)
+        .collect()
+}
+
+fn content_image(content: &Value) -> Option<ParsedImage> {
+    if content.get("type").and_then(Value::as_str) != Some("image") {
+        return None;
+    }
+    let source = content
+        .get("data")
+        .and_then(Value::as_str)
+        .map(|data| ParsedImageSource::Base64(data.to_string()))
+        .or_else(|| {
+            content
+                .get("uri")
+                .and_then(Value::as_str)
+                .map(|uri| ParsedImageSource::Url(uri.to_string()))
+        })?;
+    Some(ParsedImage {
+        source,
+        declared_mime_type: content
+            .get("mime_type")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        revised_prompt: None,
+    })
+}
+
+fn imagen_images(value: &Value) -> Vec<ParsedImage> {
+    value
+        .get("predictions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|prediction| {
+            let data = prediction
+                .get("bytesBase64Encoded")
+                .or_else(|| prediction.get("bytes_base64_encoded"))
+                .and_then(Value::as_str)?;
+            let declared_mime_type = prediction
+                .get("mimeType")
+                .or_else(|| prediction.get("mime_type"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            Some(ParsedImage {
+                source: ParsedImageSource::Base64(data.to_string()),
+                declared_mime_type,
                 revised_prompt: None,
             })
         })

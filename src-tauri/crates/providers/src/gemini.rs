@@ -145,6 +145,8 @@ struct GeminiModelsResponse {
 struct GeminiModel {
     name: String,
     display_name: Option<String>,
+    #[serde(default)]
+    supported_generation_methods: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -754,6 +756,24 @@ impl ProviderAdapter for GeminiAdapter {
                 let name = m.display_name.unwrap_or_else(|| model_id.clone());
                 let (model_type, capabilities) =
                     infer_model_type_and_capabilities(&model_id, &name);
+                let image_config = (model_type == ModelType::Image).then(|| {
+                    let normalized = model_id.to_ascii_lowercase();
+                    let mode = if normalized.starts_with("imagen-")
+                        || m.supported_generation_methods
+                            .iter()
+                            .any(|method| method.eq_ignore_ascii_case("predict"))
+                    {
+                        "predict"
+                    } else if normalized.contains("3.1-flash-image")
+                        || normalized.contains("3.1-flash-lite-image")
+                        || normalized.contains("3-pro-image")
+                    {
+                        "interactions"
+                    } else {
+                        "generate_content"
+                    };
+                    serde_json::json!({ "gemini_api_mode": mode })
+                });
                 Model {
                     provider_id: ctx.provider_id.clone(),
                     model_id: model_id.clone(),
@@ -765,7 +785,7 @@ impl ProviderAdapter for GeminiAdapter {
                     max_output_tokens: None,
                     enabled: true,
                     param_overrides: None,
-                    image_config: None,
+                    image_config,
                     metadata_state: None,
                 }
             })

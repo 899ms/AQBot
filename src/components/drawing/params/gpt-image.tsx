@@ -70,7 +70,7 @@ export function isGptImageOutputCompressionSupported(
   modelId: DrawingModelId,
   outputFormat: DrawingOutputFormat,
 ): boolean {
-  return modelId !== 'gpt-image-2' && (outputFormat === 'jpeg' || outputFormat === 'webp');
+  return modelId.startsWith('gpt-image-') && (outputFormat === 'jpeg' || outputFormat === 'webp');
 }
 
 export function getGptImageSizeOptions(t: DrawingTranslate): DrawingParamOption[] {

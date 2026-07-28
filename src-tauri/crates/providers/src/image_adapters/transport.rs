@@ -1,6 +1,6 @@
 use super::{
-    parse_response_payload, ImageAdapterConfig, ImageAdapterRequest, ImageAuthMode,
-    ImageSubmission, ParsedImageSource, ParsedResponsePayload,
+    parse_response_payload, resolved_gemini_api_mode, ImageAdapterConfig, ImageAdapterRequest,
+    ImageApiMode, ImageAuthMode, ImageSubmission, ParsedImageSource, ParsedResponsePayload,
 };
 use crate::openai_images::{ImageApiImage, ImageApiOutput};
 use crate::{resolve_chat_url, ProviderRequestContext};
@@ -35,9 +35,14 @@ pub(super) async fn parse_http_response(
         ParsedResponsePayload::Completed(completed) => {
             let mut images = Vec::with_capacity(completed.images.len());
             for image in completed.images {
-                let bytes = materialize_image(client, image.source).await?;
+                let materialized = materialize_image(client, image.source).await?;
+                let declared_mime_type = merge_declared_mime_types(
+                    image.declared_mime_type,
+                    materialized.declared_mime_type,
+                )?;
                 images.push(ImageApiImage {
-                    bytes,
+                    bytes: materialized.bytes,
+                    declared_mime_type,
                     revised_prompt: image.revised_prompt,
                 });
             }
@@ -50,16 +55,28 @@ pub(super) async fn parse_http_response(
     }
 }
 
-async fn materialize_image(client: &reqwest::Client, source: ParsedImageSource) -> Result<Vec<u8>> {
+struct MaterializedImage {
+    bytes: Vec<u8>,
+    declared_mime_type: Option<String>,
+}
+
+async fn materialize_image(
+    client: &reqwest::Client,
+    source: ParsedImageSource,
+) -> Result<MaterializedImage> {
     match source {
         ParsedImageSource::Base64(data) => base64::engine::general_purpose::STANDARD
             .decode(data)
+            .map(|bytes| MaterializedImage {
+                bytes,
+                declared_mime_type: None,
+            })
             .map_err(|error| AQBotError::Provider(format!("Invalid image base64: {error}"))),
         ParsedImageSource::Url(url) => download_image(client, &url).await,
     }
 }
 
-async fn download_image(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
+async fn download_image(client: &reqwest::Client, url: &str) -> Result<MaterializedImage> {
     let response = client
         .get(url)
         .send()
@@ -68,6 +85,13 @@ async fn download_image(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> 
         .map_err(|error| {
             AQBotError::Provider(format!("Failed to download generated image: {error}"))
         })?;
+    let declared_mime_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(normalize_http_content_type)
+        .transpose()?
+        .flatten();
     let mut stream = response.bytes_stream();
     let mut bytes = Vec::new();
     while let Some(chunk) = stream.next().await {
@@ -79,7 +103,54 @@ async fn download_image(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> 
         }
         bytes.extend_from_slice(&chunk);
     }
-    Ok(bytes)
+    Ok(MaterializedImage {
+        bytes,
+        declared_mime_type,
+    })
+}
+
+fn normalize_http_content_type(value: &str) -> Result<Option<String>> {
+    let mime_type = value
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if mime_type.is_empty() || mime_type == "application/octet-stream" {
+        return Ok(None);
+    }
+    if !mime_type.starts_with("image/") {
+        return Err(AQBotError::Provider(format!(
+            "Generated image URL returned non-image Content-Type {mime_type}"
+        )));
+    }
+    Ok(Some(if mime_type == "image/jpg" {
+        "image/jpeg".into()
+    } else {
+        mime_type
+    }))
+}
+
+fn merge_declared_mime_types(
+    response_mime_type: Option<String>,
+    http_mime_type: Option<String>,
+) -> Result<Option<String>> {
+    let response_mime_type = response_mime_type.map(|value| {
+        let normalized = value.trim().to_ascii_lowercase();
+        if normalized == "image/jpg" {
+            "image/jpeg".into()
+        } else {
+            normalized
+        }
+    });
+    if let (Some(response), Some(http)) = (&response_mime_type, &http_mime_type) {
+        if response != http {
+            return Err(AQBotError::Provider(format!(
+                "Image response MIME type {response} does not match downloaded Content-Type {http}"
+            )));
+        }
+    }
+    Ok(response_mime_type.or(http_mime_type))
 }
 
 pub(super) fn authorize(
@@ -125,7 +196,13 @@ pub(super) fn submit_url(
         ));
     }
     let suffix = match adapter_id {
-        "gemini_images" => format!("/models/{}:generateContent", request.model),
+        "gemini_images" => match resolved_gemini_api_mode(&request.model, config) {
+            ImageApiMode::Interactions => "/interactions".to_string(),
+            ImageApiMode::Predict => format!("/models/{}:predict", request.model),
+            ImageApiMode::Auto | ImageApiMode::GenerateContent => {
+                format!("/models/{}:generateContent", request.model)
+            }
+        },
         "xai_images" if request.operation != super::ImageOperation::Generate => {
             "/images/edits".to_string()
         }
@@ -252,6 +329,26 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_and_reconciles_downloaded_image_content_types() {
+        assert_eq!(
+            normalize_http_content_type("image/jpg; charset=binary").unwrap(),
+            Some("image/jpeg".into())
+        );
+        assert_eq!(
+            normalize_http_content_type("application/octet-stream").unwrap(),
+            None
+        );
+        assert!(normalize_http_content_type("text/html").is_err());
+        assert_eq!(
+            merge_declared_mime_types(Some("image/jpg".into()), Some("image/jpeg".into())).unwrap(),
+            Some("image/jpeg".into())
+        );
+        assert!(
+            merge_declared_mime_types(Some("image/png".into()), Some("image/webp".into())).is_err()
+        );
+    }
+
+    #[test]
     fn resolves_builtin_and_custom_profile_endpoints() {
         let ctx = context();
         let config = ImageAdapterConfig::default();
@@ -268,6 +365,23 @@ mod tests {
         assert_eq!(
             submit_url("xai_images", &ctx, &request(ImageOperation::Edit), &config,).unwrap(),
             "https://example.com/v1/images/edits"
+        );
+
+        let mut gemini = request(ImageOperation::Generate);
+        gemini.model = "gemini-3.1-flash-image".into();
+        assert_eq!(
+            submit_url("gemini_images", &ctx, &gemini, &config).unwrap(),
+            "https://example.com/v1/interactions"
+        );
+        gemini.model = "gemini-2.5-flash-image".into();
+        assert_eq!(
+            submit_url("gemini_images", &ctx, &gemini, &config).unwrap(),
+            "https://example.com/v1/models/gemini-2.5-flash-image:generateContent"
+        );
+        gemini.model = "imagen-4.0-generate-001".into();
+        assert_eq!(
+            submit_url("gemini_images", &ctx, &gemini, &config).unwrap(),
+            "https://example.com/v1/models/imagen-4.0-generate-001:predict"
         );
 
         let generic = ImageAdapterConfig {

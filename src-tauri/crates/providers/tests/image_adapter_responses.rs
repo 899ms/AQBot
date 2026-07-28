@@ -60,7 +60,114 @@ fn parses_gemini_inline_image_output() {
 
     assert!(matches!(
         parsed,
-        ParsedResponsePayload::Completed(ref value) if value.images.len() == 1
+        ParsedResponsePayload::Completed(ref value)
+            if value.images.len() == 1
+                && value.images[0].declared_mime_type.as_deref() == Some("image/png")
+    ));
+}
+
+#[test]
+fn parses_gemini_snake_case_inline_image_mime_type() {
+    let parsed = parse_response_payload(
+        "gemini_images",
+        &serde_json::json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{"inline_data":{"mime_type":"image/webp","data":"aGVsbG8="}}]
+                }
+            }]
+        }),
+        &ImageAdapterConfig::default(),
+    )
+    .expect("parse gemini");
+
+    assert!(matches!(
+        parsed,
+        ParsedResponsePayload::Completed(ref value)
+            if value.images[0].declared_mime_type.as_deref() == Some("image/webp")
+    ));
+}
+
+#[test]
+fn parses_gemini_interactions_and_imagen_mime_types() {
+    let interactions = parse_response_payload(
+        "gemini_images",
+        &serde_json::json!({
+            "steps": [{
+                "type": "model_output",
+                "content": [{
+                    "type": "image",
+                    "mime_type": "image/jpeg",
+                    "data": "aGVsbG8="
+                }]
+            }]
+        }),
+        &ImageAdapterConfig::default(),
+    )
+    .expect("parse Gemini Interactions image");
+    assert!(matches!(
+        interactions,
+        ParsedResponsePayload::Completed(ref value)
+            if value.images[0].declared_mime_type.as_deref() == Some("image/jpeg")
+    ));
+
+    let imagen = parse_response_payload(
+        "gemini_images",
+        &serde_json::json!({
+            "predictions": [{
+                "bytesBase64Encoded": "aGVsbG8=",
+                "mimeType": "image/png"
+            }]
+        }),
+        &ImageAdapterConfig::default(),
+    )
+    .expect("parse Imagen response");
+    assert!(matches!(
+        imagen,
+        ParsedResponsePayload::Completed(ref value)
+            if value.images[0].declared_mime_type.as_deref() == Some("image/png")
+    ));
+}
+
+#[test]
+fn parses_xai_and_generic_declared_mime_types() {
+    let xai = parse_response_payload(
+        "xai_images",
+        &serde_json::json!({
+            "data": [{
+                "b64_json": "aGVsbG8=",
+                "mime_type": "image/webp"
+            }]
+        }),
+        &ImageAdapterConfig::default(),
+    )
+    .expect("parse xAI response");
+    assert!(matches!(
+        xai,
+        ParsedResponsePayload::Completed(ref value)
+            if value.images[0].declared_mime_type.as_deref() == Some("image/webp")
+    ));
+
+    let mut config = ImageAdapterConfig::default();
+    config.mapping = GenericImageMapping {
+        image_mime_type_path: Some("/content_type".into()),
+        ..GenericImageMapping::default()
+    };
+    let generic = parse_response_payload(
+        "generic_json",
+        &serde_json::json!({
+            "data": [{
+                "b64_json": "aGVsbG8=",
+                "content_type": "image/png"
+            }]
+        }),
+        &config,
+    )
+    .expect("parse generic MIME mapping");
+    assert!(matches!(
+        generic,
+        ParsedResponsePayload::Completed(ref value)
+            if value.images[0].declared_mime_type.as_deref() == Some("image/png")
     ));
 }
 

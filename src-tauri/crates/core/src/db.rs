@@ -239,9 +239,11 @@ pub fn get_builtin_providers() -> Vec<BuiltinProvider> {
                 )
                 .with_param_overrides(openai_reasoning_profile()),
                 BuiltinModel::image("gpt-image-2", "gpt-image-2"),
-                BuiltinModel::image("gpt-image-1.5", "gpt-image-1.5"),
+                BuiltinModel::image("gpt-image-1.5", "gpt-image-1.5").disabled(),
                 BuiltinModel::image("gpt-image-1", "gpt-image-1").disabled(),
                 BuiltinModel::image("gpt-image-1-mini", "gpt-image-1-mini").disabled(),
+                BuiltinModel::image("dall-e-3", "DALL·E 3").disabled(),
+                BuiltinModel::image("dall-e-2", "DALL·E 2").disabled(),
             ],
         },
         BuiltinProvider {
@@ -333,6 +335,13 @@ pub fn get_builtin_providers() -> Vec<BuiltinProvider> {
                     vec![TextChat, Vision, FunctionCalling],
                 )
                 .disabled(),
+                BuiltinModel::image("gemini-3.1-flash-image", "Gemini 3.1 Flash Image"),
+                BuiltinModel::image("gemini-3.1-flash-lite-image", "Gemini 3.1 Flash Lite Image"),
+                BuiltinModel::image("gemini-3-pro-image", "Gemini 3 Pro Image"),
+                BuiltinModel::image("gemini-2.5-flash-image", "Gemini 2.5 Flash Image").disabled(),
+                BuiltinModel::image("imagen-4.0-generate-001", "Imagen 4 Standard").disabled(),
+                BuiltinModel::image("imagen-4.0-ultra-generate-001", "Imagen 4 Ultra").disabled(),
+                BuiltinModel::image("imagen-4.0-fast-generate-001", "Imagen 4 Fast").disabled(),
             ],
         },
         BuiltinProvider {
@@ -415,6 +424,9 @@ pub fn get_builtin_providers() -> Vec<BuiltinProvider> {
                 )
                 .with_param_overrides(reasoning_profile("none"))
                 .disabled(),
+                BuiltinModel::image("grok-imagine-image", "Grok Imagine Image"),
+                BuiltinModel::image("grok-imagine-image-quality", "Grok Imagine Image Quality")
+                    .disabled(),
             ],
         },
         BuiltinProvider {
@@ -442,6 +454,10 @@ pub fn get_builtin_providers() -> Vec<BuiltinProvider> {
                 )
                 .with_param_overrides(reasoning_profile("glm_thinking"))
                 .disabled(),
+                BuiltinModel::image("glm-image", "GLM-Image"),
+                BuiltinModel::image("cogview-4-250304", "CogView 4 250304"),
+                BuiltinModel::image("cogview-4", "CogView 4").disabled(),
+                BuiltinModel::image("cogview-3-flash", "CogView 3 Flash").disabled(),
             ],
         },
         BuiltinProvider {

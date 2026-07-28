@@ -1,4 +1,13 @@
-import { Form, Input, InputNumber, Select, Slider, Switch, Typography } from 'antd';
+import {
+  AutoComplete,
+  Form,
+  Input,
+  InputNumber,
+  Select,
+  Slider,
+  Switch,
+  Typography,
+} from 'antd';
 import type { ReactNode } from 'react';
 import type {
   DrawingSettings,
@@ -40,6 +49,7 @@ export function DrawingParameterField({
   onProviderChange,
 }: FieldProps) {
   const label = translate(field.labelKey, field.fallbackLabel);
+  const descriptor = getDescriptorParameter(field, target);
   switch (field.type) {
     case 'modelSelect':
       return (
@@ -65,6 +75,20 @@ export function DrawingParameterField({
         </Form.Item>
       );
     case 'select':
+      if (descriptor?.kind === 'string') {
+        return (
+          <Form.Item label={label}>
+            <AutoComplete
+              value={field.key ? String(settings[field.key] ?? descriptor.default ?? '') : ''}
+              options={descriptor.options.map((value) => ({
+                label: String(value),
+                value: String(value),
+              }))}
+              onChange={(value) => onChange(field, value)}
+            />
+          </Form.Item>
+        );
+      }
       return (
         <Form.Item label={label}>
           <Select
@@ -81,11 +105,14 @@ export function DrawingParameterField({
       return (
         <Form.Item label={label}>
           <InputNumber
-            min={field.min}
-            max={field.max}
+            min={descriptor?.min ?? field.min}
+            max={descriptor?.max ?? field.max}
             value={field.key ? Number(settings[field.key]) : field.defaultValue}
             style={{ width: '100%' }}
-            onChange={(value) => onChange(field, value ?? field.defaultValue ?? field.min ?? 0)}
+            onChange={(value) => onChange(
+              field,
+              value ?? descriptor?.default ?? field.defaultValue ?? field.min ?? 0,
+            )}
           />
         </Form.Item>
       );
@@ -113,8 +140,8 @@ export function DrawingParameterField({
               onChange={(checked) => onChange(field, checked ? field.defaultValue ?? 90 : undefined)}
             />
             <Slider
-              min={field.min ?? 0}
-              max={field.max ?? 100}
+              min={descriptor?.min ?? field.min ?? 0}
+              max={descriptor?.max ?? field.max ?? 100}
               disabled={settings.outputCompression === undefined}
               value={settings.outputCompression ?? field.defaultValue ?? 90}
               onChange={(value) => onChange(field, value)}
@@ -179,9 +206,13 @@ export function DrawingDynamicParameters({
           onChange={(value) => onChange(parameter.key, value)}
         />
       ) : (
-        <Input
+        <AutoComplete
           value={String(values[parameter.key] ?? parameter.default ?? '')}
-          onChange={(event) => onChange(parameter.key, event.target.value)}
+          options={parameter.options.map((value) => ({
+            label: String(value),
+            value: String(value),
+          }))}
+          onChange={(value) => onChange(parameter.key, value)}
         />
       )}
     </Form.Item>
@@ -193,20 +224,29 @@ function getDescriptorOptions(
   target: DrawingTarget | undefined,
   translate: (key: string, fallback: string) => string,
 ): Array<{ label: string; value: unknown }> | undefined {
+  const parameter = getDescriptorParameter(field, target);
+  if (!parameter || parameter.options.length === 0) return undefined;
+  return parameter.options.map((value) => (
+    getDrawingParameterOption(parameter.key, value, translate)
+  ));
+}
+
+function getDescriptorParameter(
+  field: DrawingParamField,
+  target: DrawingTarget | undefined,
+): ImageParameterDescriptor | undefined {
   if (!target) return undefined;
   const keys: Partial<Record<string, string>> = {
     size: 'size',
     quality: 'quality',
     outputFormat: 'output_format',
     background: 'background',
+    batchCount: 'n',
+    compression: 'output_compression',
   };
   const key = keys[field.id];
   if (!key) return undefined;
-  const parameter = target.descriptor.parameters.find((item) => item.key === key);
-  if (!parameter || parameter.options.length === 0) return undefined;
-  return parameter.options.map((value) => (
-    getDrawingParameterOption(parameter.key, value, translate)
-  ));
+  return target.descriptor.parameters.find((item) => item.key === key);
 }
 
 function resolveOptions(

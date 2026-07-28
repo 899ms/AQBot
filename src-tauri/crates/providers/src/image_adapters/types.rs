@@ -40,6 +40,26 @@ pub struct ImageModelDescriptor {
     pub parameters: Vec<ImageParameterDescriptor>,
     pub max_batch_size: u8,
     pub max_reference_images: u8,
+    #[serde(default)]
+    pub warnings: Vec<ImageModelWarning>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImageModelWarning {
+    pub code: String,
+    pub message: String,
+    pub deadline: Option<String>,
+    pub replacement_model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ImageApiMode {
+    #[default]
+    Auto,
+    Interactions,
+    GenerateContent,
+    Predict,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -59,6 +79,7 @@ pub struct GenericImageMapping {
     pub images_path: Option<String>,
     pub image_url_path: Option<String>,
     pub image_base64_path: Option<String>,
+    pub image_mime_type_path: Option<String>,
     pub task_id_path: Option<String>,
     pub status_path: Option<String>,
     #[serde(default)]
@@ -89,6 +110,9 @@ pub struct ImageAdapterConfig {
     pub timeout_secs: u64,
     #[serde(default)]
     pub operation_overrides: Option<Vec<ImageOperation>>,
+    #[serde(default)]
+    pub gemini_api_mode: ImageApiMode,
+    pub descriptor_override: Option<ImageModelDescriptor>,
 }
 
 impl Default for ImageAdapterConfig {
@@ -106,6 +130,8 @@ impl Default for ImageAdapterConfig {
             poll_interval_secs: default_poll_interval(),
             timeout_secs: default_timeout(),
             operation_overrides: None,
+            gemini_api_mode: ImageApiMode::Auto,
+            descriptor_override: None,
         }
     }
 }
@@ -168,6 +194,15 @@ pub enum ImagePollResult {
 pub trait ImageAdapter: Send + Sync {
     fn id(&self) -> &'static str;
     fn descriptor(&self, model_id: &str, config: &ImageAdapterConfig) -> ImageModelDescriptor;
+
+    fn validate_request(
+        &self,
+        _request: &ImageAdapterRequest,
+        _reference_count: usize,
+        _config: &ImageAdapterConfig,
+    ) -> Result<()> {
+        Ok(())
+    }
 
     async fn submit(
         &self,

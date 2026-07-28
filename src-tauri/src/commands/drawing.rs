@@ -4,7 +4,7 @@ use aqbot_core::repo::drawing::{DrawingGeneration, DrawingImage, NewDrawingGener
 use aqbot_core::repo::stored_file::StoredFile;
 use aqbot_core::types::{Model, ModelType, ProviderConfig, ProviderProxyConfig, ProviderType};
 use aqbot_providers::image_adapters::{
-    ImageAdapter, ImageAdapterConfig, ImageAdapterRegistry, ImageAdapterRequest,
+    ImageAdapter, ImageAdapterConfig, ImageAdapterRegistry, ImageAdapterRequest, ImageApiMode,
     ImageModelDescriptor, ImageOperation, ImagePollResult, ImageSubmission, PendingImageSubmission,
 };
 use aqbot_providers::openai_images::ImageUpload;
@@ -532,12 +532,13 @@ pub async fn generate_drawing_images(
     };
     let mut target =
         build_image_context(&state, &input.provider_id, &input.model_id, operation).await?;
-    validate_target_limits(&target, input.n, input.reference_file_ids.len())?;
     apply_legacy_image_paths(
         &mut target,
         &input.generation_api_path,
         &input.edit_api_path,
     );
+    let validation_request = adapter_request_from_generate(&input, operation, Vec::new());
+    validate_target_request(&target, &validation_request, input.reference_file_ids.len())?;
     let action = if input.reference_file_ids.is_empty() {
         "generate"
     } else {
@@ -611,12 +612,18 @@ pub async fn edit_drawing_image(
         ImageOperation::Edit,
     )
     .await?;
-    validate_target_limits(&target, input.n, input.reference_file_ids.len() + 1)?;
     apply_legacy_image_paths(
         &mut target,
         &input.generation_api_path,
         &input.edit_api_path,
     );
+    let validation_request =
+        adapter_request_from_edit(&input, ImageOperation::Edit, Vec::new(), None);
+    validate_target_request(
+        &target,
+        &validation_request,
+        input.reference_file_ids.len() + 1,
+    )?;
     let source = aqbot_core::repo::drawing::get_image(&state.sea_db, &input.source_image_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -684,12 +691,17 @@ pub async fn edit_drawing_image_with_mask(
         ImageOperation::MaskEdit,
     )
     .await?;
-    validate_target_limits(&target, input.n, input.reference_file_ids.len() + 1)?;
     apply_legacy_image_paths(
         &mut target,
         &input.generation_api_path,
         &input.edit_api_path,
     );
+    let validation_request = adapter_request_from_mask_edit(&input, Vec::new(), None);
+    validate_target_request(
+        &target,
+        &validation_request,
+        input.reference_file_ids.len() + 1,
+    )?;
     let source = aqbot_core::repo::drawing::get_image(&state.sea_db, &input.source_image_id)
         .await
         .map_err(|e| e.to_string())?;
@@ -933,6 +945,8 @@ struct ResolvedImageTarget {
     key_id: String,
     adapter: Arc<dyn ImageAdapter>,
     config: ImageAdapterConfig,
+    model_id: String,
+    descriptor: ImageModelDescriptor,
 }
 
 struct AdapterExecution {
@@ -957,6 +971,11 @@ async fn build_image_context(
     let (provider, model, ctx, key_id) =
         load_image_target_base(state, provider_id, model_id).await?;
     let mut config = parse_image_adapter_config(&model)?;
+    prefer_generate_content_for_custom_gemini_host(
+        &provider.provider_type,
+        &provider.api_host,
+        &mut config,
+    );
     if config.endpoint.is_none()
         && provider
             .api_path
@@ -977,14 +996,34 @@ async fn build_image_context_from_snapshot(
     model_id: &str,
     operation: ImageOperation,
     adapter_id: &str,
-    config: ImageAdapterConfig,
+    mut config: ImageAdapterConfig,
 ) -> Result<ResolvedImageTarget, String> {
     let (provider, model, ctx, key_id) =
         load_image_target_base(state, provider_id, model_id).await?;
+    prefer_generate_content_for_custom_gemini_host(
+        &provider.provider_type,
+        &provider.api_host,
+        &mut config,
+    );
     let adapter = ImageAdapterRegistry::new()
         .get(adapter_id)
         .ok_or_else(|| "The saved image adapter is no longer available".to_string())?;
     build_resolved_image_target(provider, model, ctx, key_id, adapter, config, operation)
+}
+
+fn prefer_generate_content_for_custom_gemini_host(
+    provider_type: &ProviderType,
+    api_host: &str,
+    config: &mut ImageAdapterConfig,
+) {
+    let uses_gemini_adapter = *provider_type == ProviderType::Gemini
+        || config.adapter_id.as_deref() == Some("gemini_images");
+    let uses_official_host = api_host
+        .to_ascii_lowercase()
+        .contains("generativelanguage.googleapis.com");
+    if uses_gemini_adapter && !uses_official_host && config.gemini_api_mode == ImageApiMode::Auto {
+        config.gemini_api_mode = ImageApiMode::GenerateContent;
+    }
 }
 
 async fn load_image_target_base(
@@ -1061,6 +1100,8 @@ fn build_resolved_image_target(
         key_id,
         adapter,
         config,
+        model_id: model.model_id,
+        descriptor,
     })
 }
 
@@ -1100,27 +1141,39 @@ fn apply_legacy_image_paths(
     }
 }
 
-fn validate_target_limits(
+fn validate_target_request(
     target: &ResolvedImageTarget,
-    batch_size: u8,
+    request: &ImageAdapterRequest,
     reference_count: usize,
 ) -> Result<(), String> {
-    let descriptor = target.adapter.descriptor("", &target.config);
-    if batch_size > descriptor.max_batch_size {
+    if request.model != target.model_id {
         return Err(format!(
-            "{} supports at most {} image(s) per request",
-            target.adapter.id(),
-            descriptor.max_batch_size
+            "Image request model {} does not match resolved target {}",
+            request.model, target.model_id
         ));
     }
-    if reference_count > descriptor.max_reference_images as usize {
+    if !target.descriptor.operations.contains(&request.operation) {
         return Err(format!(
-            "{} supports at most {} reference image(s)",
-            target.adapter.id(),
-            descriptor.max_reference_images
+            "Image model {} does not support operation {:?}",
+            target.model_id, request.operation
         ));
     }
-    Ok(())
+    if request.n == 0 || request.n > target.descriptor.max_batch_size {
+        return Err(format!(
+            "Image model {} field n has value {}; allowed range is 1..={}",
+            target.model_id, request.n, target.descriptor.max_batch_size
+        ));
+    }
+    if reference_count > target.descriptor.max_reference_images as usize {
+        return Err(format!(
+            "Image model {} field reference_images has value {}; allowed range is 0..={}",
+            target.model_id, reference_count, target.descriptor.max_reference_images
+        ));
+    }
+    target
+        .adapter
+        .validate_request(request, reference_count, &target.config)
+        .map_err(|error| error.to_string())
 }
 
 fn adapter_request_from_generate(
@@ -1342,16 +1395,40 @@ async fn persist_api_result(
     output_format: &str,
     provider: &ProviderConfig,
 ) -> Result<DrawingGeneration, String> {
+    let file_store = FileStore::new();
+    persist_api_result_using(
+        &state.sea_db,
+        &file_store,
+        generation,
+        result,
+        output_format,
+        provider,
+    )
+    .await
+}
+
+async fn persist_api_result_using(
+    db: &sea_orm::DatabaseConnection,
+    file_store: &FileStore,
+    generation: DrawingGeneration,
+    result: aqbot_core::error::Result<aqbot_providers::openai_images::ImageApiOutput>,
+    output_format: &str,
+    provider: &ProviderConfig,
+) -> Result<DrawingGeneration, String> {
     match result {
         Ok(output) => {
             let _file_reference_guard = aqbot_core::repo::stored_file::lock_file_references().await;
-            let mime_type = output_format_to_mime(output_format);
-            let file_store = FileStore::new();
-            let txn = state.sea_db.begin().await.map_err(|e| e.to_string())?;
+            let requested_mime_type = output_format_to_mime(output_format);
+            let txn = db.begin().await.map_err(|e| e.to_string())?;
             let mut created_paths = Vec::new();
             let response_id = output.response_id;
             let usage_json = output.usage_json;
             let operation = async {
+                if output.images.is_empty() {
+                    return Err(aqbot_core::error::AQBotError::Validation(
+                        "Image API response contained no images".into(),
+                    ));
+                }
                 let generation_row =
                     aqbot_core::entity::drawing_generations::Entity::find_by_id(&generation.id)
                         .one(&txn)
@@ -1369,9 +1446,27 @@ async fn persist_api_result(
                 }
                 let mut persisted_images = Vec::with_capacity(output.images.len());
                 for (index, image) in output.images.into_iter().enumerate() {
-                    let ext = output_format_to_extension(output_format);
-                    let file_name = format!("drawing-{}-{}.{}", generation.id, index + 1, ext);
-                    let saved = file_store.save_file(&image.bytes, &file_name, mime_type)?;
+                    let metadata =
+                        inspect_generated_image(&image.bytes, image.declared_mime_type.as_deref())
+                            .map_err(aqbot_core::error::AQBotError::Validation)?;
+                    if requested_mime_type != metadata.mime_type {
+                        tracing::warn!(
+                            generation_id = %generation.id,
+                            adapter_id = generation.adapter_id.as_deref().unwrap_or("unknown"),
+                            model_id = %generation.model_id,
+                            requested = requested_mime_type,
+                            actual = metadata.mime_type,
+                            "Generated image format differed from the requested output format"
+                        );
+                    }
+                    let file_name = format!(
+                        "drawing-{}-{}.{}",
+                        generation.id,
+                        index + 1,
+                        metadata.extension,
+                    );
+                    let saved =
+                        file_store.save_file(&image.bytes, &file_name, metadata.mime_type)?;
                     if saved.created {
                         created_paths.push(saved.storage_path.clone());
                     }
@@ -1380,7 +1475,7 @@ async fn persist_api_result(
                         id: Set(stored_file_id.clone()),
                         hash: Set(saved.hash),
                         original_name: Set(file_name.clone()),
-                        mime_type: Set(mime_type.to_string()),
+                        mime_type: Set(metadata.mime_type.to_string()),
                         size_bytes: Set(saved.size_bytes),
                         storage_path: Set(saved.storage_path.clone()),
                         conversation_id: Set(None),
@@ -1388,7 +1483,6 @@ async fn persist_api_result(
                     }
                     .insert(&txn)
                     .await?;
-                    let dimensions = image_dimensions(&image.bytes).ok();
                     let image_id = aqbot_core::utils::gen_id();
                     let created_at = aqbot_core::utils::now_ts();
                     aqbot_core::entity::drawing_images::ActiveModel {
@@ -1396,9 +1490,9 @@ async fn persist_api_result(
                         generation_id: Set(generation.id.clone()),
                         stored_file_id: Set(stored_file_id.clone()),
                         storage_path: Set(saved.storage_path.clone()),
-                        mime_type: Set(mime_type.to_string()),
-                        width: Set(dimensions.map(|d| d.0 as i32)),
-                        height: Set(dimensions.map(|d| d.1 as i32)),
+                        mime_type: Set(metadata.mime_type.to_string()),
+                        width: Set(Some(metadata.width as i32)),
+                        height: Set(Some(metadata.height as i32)),
                         revised_prompt: Set(image.revised_prompt.clone()),
                         created_at: Set(created_at),
                     }
@@ -1409,9 +1503,9 @@ async fn persist_api_result(
                         generation_id: generation.id.clone(),
                         stored_file_id,
                         storage_path: saved.storage_path,
-                        mime_type: mime_type.to_string(),
-                        width: dimensions.map(|d| d.0 as i32),
-                        height: dimensions.map(|d| d.1 as i32),
+                        mime_type: metadata.mime_type.to_string(),
+                        width: Some(metadata.width as i32),
+                        height: Some(metadata.height as i32),
                         revised_prompt: image.revised_prompt,
                         created_at,
                     });
@@ -1465,8 +1559,7 @@ async fn persist_api_result(
                 Err(error) => {
                     let rollback_error = txn.rollback().await.err();
                     let cleanup_errors =
-                        cleanup_created_drawing_paths(&state.sea_db, &file_store, &created_paths)
-                            .await;
+                        cleanup_created_drawing_paths(db, file_store, &created_paths).await;
                     let failure = format!(
                         "Failed to persist drawing generation {}: {error}; rollback error: {}; cleanup errors: {}",
                         generation.id,
@@ -1480,7 +1573,7 @@ async fn persist_api_result(
                         }
                     );
                     let _ = aqbot_core::repo::drawing::mark_generation_failed(
-                        &state.sea_db,
+                        db,
                         &generation.id,
                         failure.clone(),
                     )
@@ -1490,7 +1583,7 @@ async fn persist_api_result(
             };
             if let Err(error) = txn.commit().await {
                 let cleanup_errors =
-                    cleanup_created_drawing_paths(&state.sea_db, &file_store, &created_paths).await;
+                    cleanup_created_drawing_paths(db, file_store, &created_paths).await;
                 return Err(format!(
                     "Failed to commit drawing generation {}: {error}; cleanup errors: {}",
                     generation.id,
@@ -1506,7 +1599,7 @@ async fn persist_api_result(
         Err(err) => {
             let sanitized = sanitize_error(&err.to_string(), provider);
             let _ = aqbot_core::repo::drawing::mark_generation_failed(
-                &state.sea_db,
+                db,
                 &generation.id,
                 sanitized.clone(),
             )
@@ -1569,6 +1662,7 @@ async fn execute_adapter_request(
             .parameters
             .insert("_aqbot_reference_param".into(), serde_json::json!("images"));
     }
+    validate_target_request(&target, &request, request.images.len())?;
     let result = target
         .adapter
         .submit(&target.ctx, request, &target.config)
@@ -1933,11 +2027,11 @@ fn validate_common(
     prompt: &str,
     model_id: &str,
     output_format: &str,
-    background: Option<&str>,
-    output_compression: Option<u8>,
+    _background: Option<&str>,
+    _output_compression: Option<u8>,
     n: u8,
     reference_count: usize,
-    size: &str,
+    _size: &str,
 ) -> Result<(), String> {
     if prompt.trim().is_empty() {
         return Err("Prompt must not be empty".to_string());
@@ -1960,43 +2054,7 @@ fn validate_common(
     if !matches!(output_format, "png" | "jpeg" | "webp") {
         return Err("Output format must be png, jpeg, or webp".to_string());
     }
-    if output_compression.is_some() && !matches!(output_format, "jpeg" | "webp") {
-        return Err("Compression is only supported for jpeg and webp".to_string());
-    }
-    if model_id == "gpt-image-2" && background == Some("transparent") {
-        return Err("gpt-image-2 does not support transparent background".to_string());
-    }
-    validate_gpt_image_2_size(model_id, size)?;
     Ok(())
-}
-
-fn validate_gpt_image_2_size(model_id: &str, size: &str) -> Result<(), String> {
-    if model_id != "gpt-image-2" || size == "auto" {
-        return Ok(());
-    }
-    let Some((w, h)) = parse_size(size) else {
-        return Err("Size must be auto or WIDTHxHEIGHT".to_string());
-    };
-    if w > 3840 || h > 3840 {
-        return Err("gpt-image-2 size edge must not exceed 3840".to_string());
-    }
-    if w % 16 != 0 || h % 16 != 0 {
-        return Err("gpt-image-2 size edges must be multiples of 16".to_string());
-    }
-    let (long, short) = if w >= h { (w, h) } else { (h, w) };
-    if long > short * 3 {
-        return Err("gpt-image-2 size ratio must not exceed 3:1".to_string());
-    }
-    let pixels = w * h;
-    if !(655_360..=8_294_400).contains(&pixels) {
-        return Err("gpt-image-2 total pixels are outside the supported range".to_string());
-    }
-    Ok(())
-}
-
-fn parse_size(size: &str) -> Option<(u32, u32)> {
-    let (w, h) = size.split_once('x')?;
-    Some((w.parse().ok()?, h.parse().ok()?))
 }
 
 fn validate_upload_image(bytes: &[u8], mime_type: &str) -> Result<(), String> {
@@ -2047,6 +2105,55 @@ fn image_dimensions(bytes: &[u8]) -> Result<(u32, u32), String> {
     Ok(image.dimensions())
 }
 
+#[derive(Debug)]
+struct GeneratedImageMetadata {
+    mime_type: &'static str,
+    extension: &'static str,
+    width: u32,
+    height: u32,
+}
+
+fn inspect_generated_image(
+    bytes: &[u8],
+    declared_mime_type: Option<&str>,
+) -> Result<GeneratedImageMetadata, String> {
+    let format = image::guess_format(bytes)
+        .map_err(|error| format!("Generated image has an unknown format: {error}"))?;
+    let (mime_type, extension) = match format {
+        image::ImageFormat::Png => ("image/png", "png"),
+        image::ImageFormat::Jpeg => ("image/jpeg", "jpg"),
+        image::ImageFormat::WebP => ("image/webp", "webp"),
+        other => return Err(format!("Generated image format {other:?} is not supported")),
+    };
+    if let Some(declared) = declared_mime_type {
+        let normalized = normalize_generated_image_mime_type(declared)
+            .ok_or_else(|| format!("Generated image declared unsupported MIME type {declared}"))?;
+        if normalized != mime_type {
+            return Err(format!(
+                "Generated image declared MIME type {declared} does not match detected MIME type {mime_type}"
+            ));
+        }
+    }
+    let decoded = image::load_from_memory_with_format(bytes, format)
+        .map_err(|error| format!("Generated image could not be decoded: {error}"))?;
+    let (width, height) = decoded.dimensions();
+    Ok(GeneratedImageMetadata {
+        mime_type,
+        extension,
+        width,
+        height,
+    })
+}
+
+fn normalize_generated_image_mime_type(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "image/png" => Some("image/png"),
+        "image/jpeg" | "image/jpg" => Some("image/jpeg"),
+        "image/webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
 fn has_alpha_channel(color: image::ColorType) -> bool {
     matches!(
         color,
@@ -2063,14 +2170,6 @@ fn output_format_to_mime(format: &str) -> &'static str {
         "jpeg" => "image/jpeg",
         "webp" => "image/webp",
         _ => "image/png",
-    }
-}
-
-fn output_format_to_extension(format: &str) -> &'static str {
-    match format {
-        "jpeg" => "jpg",
-        "webp" => "webp",
-        _ => "png",
     }
 }
 
@@ -2093,7 +2192,147 @@ fn sanitize_error(raw: &str, provider: &ProviderConfig) -> String {
 mod tests {
     use super::*;
     use aqbot_core::repo::drawing::{NewDrawingGeneration, NewDrawingImage};
+    use std::io::Cursor;
     use tempfile::tempdir;
+
+    fn encoded_test_image(format: image::ImageFormat) -> Vec<u8> {
+        let image = image::DynamicImage::new_rgb8(3, 2);
+        let mut bytes = Cursor::new(Vec::new());
+        image.write_to(&mut bytes, format).unwrap();
+        bytes.into_inner()
+    }
+
+    #[test]
+    fn generated_image_metadata_accepts_supported_image_formats() {
+        for (format, declared_mime_type, expected_extension) in [
+            (image::ImageFormat::Png, "image/png", "png"),
+            (image::ImageFormat::Jpeg, "image/jpeg", "jpg"),
+            (image::ImageFormat::WebP, "image/webp", "webp"),
+        ] {
+            let metadata =
+                inspect_generated_image(&encoded_test_image(format), Some(declared_mime_type))
+                    .unwrap();
+
+            assert_eq!(metadata.mime_type, declared_mime_type);
+            assert_eq!(metadata.extension, expected_extension);
+            assert_eq!((metadata.width, metadata.height), (3, 2));
+        }
+    }
+
+    #[test]
+    fn generated_image_metadata_uses_detected_format_instead_of_requested_format() {
+        let metadata =
+            inspect_generated_image(&encoded_test_image(image::ImageFormat::Png), None).unwrap();
+
+        assert_eq!(metadata.mime_type, "image/png");
+        assert_eq!(metadata.extension, "png");
+    }
+
+    #[test]
+    fn generated_image_metadata_rejects_invalid_bytes_and_mime_mismatches() {
+        assert!(inspect_generated_image(b"not-an-image", None).is_err());
+
+        let error = inspect_generated_image(
+            &encoded_test_image(image::ImageFormat::Png),
+            Some("image/jpeg"),
+        )
+        .unwrap_err();
+        assert!(error.contains("does not match"));
+    }
+
+    #[tokio::test]
+    async fn persistence_uses_detected_png_for_jpeg_and_webp_requests() {
+        let db = aqbot_core::db::create_test_pool().await.unwrap();
+        let dir = tempdir().unwrap();
+        let file_store = FileStore::with_root(dir.path().join("documents"));
+        let provider = ProviderConfig {
+            id: "provider".into(),
+            name: "Provider".into(),
+            provider_type: ProviderType::Custom,
+            api_host: "https://example.com".into(),
+            api_path: None,
+            aws_region: None,
+            enabled: true,
+            models: Vec::new(),
+            keys: Vec::new(),
+            proxy_config: None,
+            custom_headers: None,
+            icon: None,
+            builtin_id: None,
+            sort_order: 0,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        for requested_format in ["jpeg", "webp"] {
+            let generation = aqbot_core::repo::drawing::create_generation(
+                &db.conn,
+                NewDrawingGeneration {
+                    parent_generation_id: None,
+                    provider_id: provider.id.clone(),
+                    key_id: "key".into(),
+                    model_id: "gemini-image".into(),
+                    action: "generate".into(),
+                    prompt: requested_format.into(),
+                    parameters_json: serde_json::json!({
+                        "output_format": requested_format,
+                    })
+                    .to_string(),
+                    reference_file_ids_json: "[]".into(),
+                    source_image_ids_json: "[]".into(),
+                    mask_file_id: None,
+                    adapter_id: Some("gemini_images".into()),
+                    adapter_config_snapshot: None,
+                    deadline_at: None,
+                },
+            )
+            .await
+            .unwrap();
+            let png_bytes = encoded_test_image(image::ImageFormat::Png);
+            let persisted = persist_api_result_using(
+                &db.conn,
+                &file_store,
+                generation,
+                Ok(aqbot_providers::openai_images::ImageApiOutput {
+                    response_id: None,
+                    usage_json: None,
+                    images: vec![aqbot_providers::openai_images::ImageApiImage {
+                        bytes: png_bytes.clone(),
+                        declared_mime_type: Some("image/png".into()),
+                        revised_prompt: None,
+                    }],
+                }),
+                requested_format,
+                &provider,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(persisted.status, "succeeded");
+            assert_eq!(persisted.images[0].mime_type, "image/png");
+            assert!(persisted.images[0].storage_path.ends_with(".png"));
+
+            let stored = aqbot_core::repo::stored_file::get_stored_file(
+                &db.conn,
+                &persisted.images[0].stored_file_id,
+            )
+            .await
+            .unwrap();
+            assert_eq!(stored.mime_type, "image/png");
+            assert!(stored.original_name.ends_with(".png"));
+            assert_eq!(
+                file_store.read_file(&stored.storage_path).unwrap(),
+                png_bytes
+            );
+
+            let fetched = aqbot_core::repo::drawing::get_generation(&db.conn, &persisted.id)
+                .await
+                .unwrap();
+            assert_eq!(fetched.status, "succeeded");
+            assert_eq!(fetched.images[0].mime_type, "image/png");
+            assert!(fetched.images[0].storage_path.ends_with(".png"));
+        }
+    }
 
     #[test]
     fn custom_grok_image_model_builds_an_xai_drawing_target() {
@@ -2133,6 +2372,36 @@ mod tests {
             .expect("custom grok image model should be available");
         assert_eq!(target.adapter_id, "xai_images");
         assert_eq!(target.model_id, "grok-imagine-image");
+    }
+
+    #[test]
+    fn custom_gemini_hosts_default_to_legacy_generate_content_mode() {
+        let mut custom = ImageAdapterConfig::default();
+        prefer_generate_content_for_custom_gemini_host(
+            &ProviderType::Gemini,
+            "https://gemini-proxy.example.com",
+            &mut custom,
+        );
+        assert_eq!(custom.gemini_api_mode, ImageApiMode::GenerateContent);
+
+        let mut official = ImageAdapterConfig::default();
+        prefer_generate_content_for_custom_gemini_host(
+            &ProviderType::Gemini,
+            "https://generativelanguage.googleapis.com",
+            &mut official,
+        );
+        assert_eq!(official.gemini_api_mode, ImageApiMode::Auto);
+
+        let mut explicit = ImageAdapterConfig {
+            gemini_api_mode: ImageApiMode::Interactions,
+            ..Default::default()
+        };
+        prefer_generate_content_for_custom_gemini_host(
+            &ProviderType::Gemini,
+            "https://gemini-proxy.example.com",
+            &mut explicit,
+        );
+        assert_eq!(explicit.gemini_api_mode, ImageApiMode::Interactions);
     }
 
     #[test]
@@ -2178,17 +2447,26 @@ mod tests {
 
     #[test]
     fn rejects_transparent_background_for_gpt_image_2() {
-        assert!(validate_common(
-            "prompt",
-            "gpt-image-2",
-            "png",
-            Some("transparent"),
-            None,
-            1,
-            0,
-            "1024x1024",
-        )
-        .is_err());
+        let config = ImageAdapterConfig::default();
+        let adapter = ImageAdapterRegistry::new()
+            .resolve(&ProviderType::OpenAI, "gpt-image-2", Some(&config))
+            .expect("gpt-image-2 adapter");
+        let request = ImageAdapterRequest {
+            operation: ImageOperation::Generate,
+            model: "gpt-image-2".into(),
+            prompt: "prompt".into(),
+            n: 1,
+            size: "1024x1024".into(),
+            quality: "auto".into(),
+            output_format: "png".into(),
+            background: Some("transparent".into()),
+            output_compression: None,
+            images: Vec::new(),
+            mask: None,
+            parameters: serde_json::Map::new(),
+        };
+
+        assert!(adapter.validate_request(&request, 0, &config).is_err());
     }
 
     #[test]

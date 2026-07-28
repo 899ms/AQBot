@@ -101,6 +101,7 @@ const xaiTarget: DrawingTarget = {
     }],
     max_batch_size: 1,
     max_reference_images: 0,
+    warnings: [],
   },
 };
 
@@ -175,9 +176,23 @@ describe('DrawingSettingsPanel', () => {
     }));
 
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
-      parameters: { aspect_ratio: '16:9' },
+      parameters: expect.objectContaining({
+        aspect_ratio: '16:9',
+        size: 'auto',
+        quality: 'auto',
+        output_format: 'png',
+        background: 'auto',
+        n: 1,
+      }),
       parametersByTarget: {
-        'provider-1::gpt-image-2': { aspect_ratio: '16:9' },
+        'provider-1::gpt-image-2': expect.objectContaining({
+          aspect_ratio: '16:9',
+          size: 'auto',
+          quality: 'auto',
+          output_format: 'png',
+          background: 'auto',
+          n: 1,
+        }),
       },
     }));
     expect(screen.queryByTestId('drawing-reference-uploader')).toBeNull();
@@ -207,5 +222,155 @@ describe('DrawingSettingsPanel', () => {
     expect(alert).toHaveStyle({ marginBottom: '16px' });
     expect(settingsButton.closest('.ant-alert-description')).not.toBeNull();
     expect(document.querySelector('.ant-alert-icon')).toBeNull();
+  });
+
+  it('isolates common parameters when switching to a target with different capabilities', async () => {
+    const onChange = vi.fn();
+    const providers = [{
+      ...providersFixture[0],
+      models: [
+        providersFixture[0].models[0],
+        {
+          ...providersFixture[0].models[0],
+          model_id: 'gemini-3.1-flash-image',
+          name: 'Gemini 3.1 Flash Image',
+        },
+      ],
+    }];
+    const openAiTarget: DrawingTarget = {
+      ...xaiTarget,
+      adapter_id: 'openai_images',
+      descriptor: {
+        adapter_id: 'openai_images',
+        operations: ['generate'],
+        parameters: [{
+          key: 'output_format',
+          kind: 'select',
+          default: 'png',
+          options: ['png', 'jpeg', 'webp'],
+          min: null,
+          max: null,
+        }],
+        max_batch_size: 1,
+        max_reference_images: 0,
+        warnings: [],
+      },
+    };
+    const geminiTarget: DrawingTarget = {
+      provider_id: 'provider-1',
+      provider_name: 'OpenAI',
+      model_id: 'gemini-3.1-flash-image',
+      model_name: 'Gemini 3.1 Flash Image',
+      adapter_id: 'gemini_images',
+      descriptor: {
+        adapter_id: 'gemini_images',
+        operations: ['generate'],
+        parameters: [{
+          key: 'aspect_ratio',
+          kind: 'select',
+          default: '1:1',
+          options: ['1:1', '16:9'],
+          min: null,
+          max: null,
+        }],
+        max_batch_size: 1,
+        max_reference_images: 0,
+        warnings: [],
+      },
+    };
+
+    render(
+      <DrawingSettingsPanel
+        settings={{ ...settingsFixture, outputFormat: 'webp' }}
+        providers={providers}
+        targets={[openAiTarget, geminiTarget]}
+        onChange={onChange}
+      />,
+    );
+
+    const modelItem = screen.getByText('模型').closest('.ant-form-item');
+    fireEvent.mouseDown(within(modelItem as HTMLElement).getByRole('combobox'));
+    await userEvent.click(await screen.findByText('Gemini 3.1 Flash Image', {
+      selector: '.ant-select-item-option-content',
+    }));
+
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      modelId: 'gemini-3.1-flash-image',
+      outputFormat: 'png',
+      parametersByTarget: expect.objectContaining({
+        'provider-1::gpt-image-2': expect.objectContaining({
+          output_format: 'webp',
+        }),
+        'provider-1::gemini-3.1-flash-image': expect.objectContaining({
+          output_format: 'png',
+          n: 1,
+        }),
+      }),
+    }));
+  });
+
+  it('shows model lifecycle warnings without removing the controls', () => {
+    render(
+      <DrawingSettingsPanel
+        settings={settingsFixture}
+        providers={providersFixture}
+        targets={[{
+          ...xaiTarget,
+          descriptor: {
+            ...xaiTarget.descriptor,
+            warnings: [{
+              code: 'retired_model',
+              message: 'This preview model is retired.',
+              deadline: '2026-01-15',
+              replacement_model_id: 'gemini-3.1-flash-image',
+            }],
+          },
+        }]}
+        onChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('This preview model is retired.')).toBeDefined();
+    expect(screen.getByText(/2026-01-15/)).toBeDefined();
+    expect(screen.getByText('模型')).toBeDefined();
+  });
+
+  it('allows a descriptor string size while keeping official suggestions', () => {
+    const onChange = vi.fn();
+    const sizeTarget: DrawingTarget = {
+      ...xaiTarget,
+      descriptor: {
+        ...xaiTarget.descriptor,
+        parameters: [{
+          key: 'size',
+          kind: 'string',
+          default: 'auto',
+          options: ['auto', '1024x1024', '2048x2048'],
+          min: null,
+          max: null,
+        }],
+      },
+    };
+    render(
+      <DrawingSettingsPanel
+        settings={settingsFixture}
+        providers={providersFixture}
+        targets={[sizeTarget]}
+        onChange={onChange}
+      />,
+    );
+
+    const sizeItem = screen.getByText('尺寸').closest('.ant-form-item');
+    const input = within(sizeItem as HTMLElement).getByRole('combobox');
+    fireEvent.change(input, { target: { value: '2048x1024' } });
+
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      size: '2048x1024',
+      parametersByTarget: {
+        'provider-1::gpt-image-2': expect.objectContaining({
+          size: '2048x1024',
+        }),
+      },
+    }));
   });
 });

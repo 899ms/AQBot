@@ -2,7 +2,7 @@ import { App } from 'antd';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useDrawingStore } from '@/stores/drawingStore';
-import type { DrawingImage } from '@/types';
+import type { DrawingImage, ImageModelDescriptor } from '@/types';
 import type { DrawingSettings } from '../DrawingSettingsPanel';
 import { DrawingComposer } from '../DrawingComposer';
 import { clearStoredMediaSourceCache } from '@/lib/storedMedia';
@@ -48,6 +48,38 @@ const settingsFixture: DrawingSettings = {
   n: 1,
   generationApiPath: '/images/generations',
   editApiPath: '/images/edits',
+};
+
+const geminiDescriptor: ImageModelDescriptor = {
+  adapter_id: 'gemini_images',
+  operations: ['generate', 'edit'],
+  parameters: [{
+    key: 'aspect_ratio',
+    kind: 'select',
+    default: '1:1',
+    options: ['1:1', '16:9'],
+    min: null,
+    max: null,
+  }],
+  max_batch_size: 1,
+  max_reference_images: 16,
+  warnings: [],
+};
+
+const openAiDescriptor: ImageModelDescriptor = {
+  adapter_id: 'openai_images',
+  operations: ['generate', 'edit', 'mask_edit'],
+  parameters: [{
+    key: 'output_format',
+    kind: 'select',
+    default: 'png',
+    options: ['png', 'jpeg', 'webp'],
+    min: null,
+    max: null,
+  }],
+  max_batch_size: 10,
+  max_reference_images: 16,
+  warnings: [],
 };
 
 describe('DrawingComposer', () => {
@@ -200,5 +232,83 @@ describe('DrawingComposer', () => {
     );
 
     expect(container.querySelector('.ant-btn-primary')).toBeDisabled();
+  });
+
+  it('submits png when the selected target does not support output_format', async () => {
+    const generateImages = vi.fn().mockResolvedValue({});
+    useDrawingStore.setState({ generateImages });
+
+    render(
+      <App>
+        <DrawingComposer
+          settings={{
+            ...settingsFixture,
+            modelId: 'gemini-2.5-flash-image-preview',
+            size: '3840x2160',
+            quality: 'high',
+            outputFormat: 'webp',
+            outputCompression: 80,
+            n: 4,
+            parametersByTarget: {
+              'provider-1::gemini-2.5-flash-image-preview': {
+                aspect_ratio: '16:9',
+                output_format: 'webp',
+                output_compression: 80,
+                hidden_vendor_parameter: true,
+              },
+            },
+          }}
+          prompt="生成 Gemini 图片"
+          onPromptChange={() => {}}
+          targetDescriptor={geminiDescriptor}
+        />
+      </App>,
+    );
+
+    fireEvent.keyDown(screen.getByPlaceholderText('输入你想生成的画面'), {
+      key: 'Enter',
+      shiftKey: false,
+      nativeEvent: { isComposing: false },
+    });
+
+    await waitFor(() => {
+      expect(generateImages).toHaveBeenCalledWith(expect.objectContaining({
+        size: 'auto',
+        quality: 'auto',
+        output_format: 'png',
+        background: 'auto',
+        output_compression: undefined,
+        n: 1,
+        parameters: { aspect_ratio: '16:9' },
+      }));
+    });
+  });
+
+  it('preserves the selected format when the target supports output_format', async () => {
+    const generateImages = vi.fn().mockResolvedValue({});
+    useDrawingStore.setState({ generateImages });
+
+    render(
+      <App>
+        <DrawingComposer
+          settings={{ ...settingsFixture, outputFormat: 'webp' }}
+          prompt="生成 OpenAI 图片"
+          onPromptChange={() => {}}
+          targetDescriptor={openAiDescriptor}
+        />
+      </App>,
+    );
+
+    fireEvent.keyDown(screen.getByPlaceholderText('输入你想生成的画面'), {
+      key: 'Enter',
+      shiftKey: false,
+      nativeEvent: { isComposing: false },
+    });
+
+    await waitFor(() => {
+      expect(generateImages).toHaveBeenCalledWith(expect.objectContaining({
+        output_format: 'webp',
+      }));
+    });
   });
 });
