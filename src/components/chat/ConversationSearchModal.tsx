@@ -127,6 +127,12 @@ export function ConversationSearchModal({ open, onClose }: ConversationSearchMod
 
   if (!open) return null;
 
+  // Mask is always a dark scrim (antd colorBgMask). Hint chrome sits on the
+  // scrim, so it must use light-on-dark colors in both light and dark themes.
+  const maskHintColor = 'rgba(255, 255, 255, 0.78)';
+  const maskKbdBorder = 'rgba(255, 255, 255, 0.28)';
+  const maskKbdBg = 'rgba(255, 255, 255, 0.14)';
+
   return (
     <div
       role="dialog"
@@ -145,8 +151,9 @@ export function ConversationSearchModal({ open, onClose }: ConversationSearchMod
         alignItems: 'center',
         justifyContent: 'center',
         padding: '0 16px 12vh',
-        background: 'rgba(0, 0, 0, 0.55)',
+        background: token.colorBgMask,
         backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
       }}
     >
       <div
@@ -166,7 +173,8 @@ export function ConversationSearchModal({ open, onClose }: ConversationSearchMod
             borderRadius: 14,
             border: `1.5px solid ${token.colorPrimary}`,
             background: token.colorBgElevated,
-            boxShadow: `0 0 0 1px ${token.colorPrimaryBorder}, 0 12px 40px rgba(0,0,0,0.35)`,
+            boxShadow: `0 0 0 1px ${token.colorPrimaryBorder}, ${token.boxShadowSecondary}`,
+            color: token.colorText,
           }}
         >
           <Search size={18} style={{ color: token.colorTextSecondary, flexShrink: 0 }} />
@@ -179,7 +187,7 @@ export function ConversationSearchModal({ open, onClose }: ConversationSearchMod
             onChange={(e) => setQuery(e.target.value)}
             placeholder={t('chat.globalSearchPlaceholder')}
             allowClear={{ clearIcon: <X size={14} /> }}
-            style={{ flex: 1, fontSize: 15, padding: 0 }}
+            style={{ flex: 1, fontSize: 15, padding: 0, color: token.colorText }}
             autoFocus
           />
           {loading && <Spin size="small" data-testid="conversation-search-input-spin" />}
@@ -191,9 +199,8 @@ export function ConversationSearchModal({ open, onClose }: ConversationSearchMod
             flexWrap: 'wrap',
             gap: 10,
             justifyContent: 'center',
-            color: token.colorTextSecondary,
+            color: maskHintColor,
             fontSize: 12,
-            opacity: 0.85,
           }}
         >
           {hintItems.map((item) => (
@@ -207,8 +214,9 @@ export function ConversationSearchModal({ open, onClose }: ConversationSearchMod
                   height: 20,
                   padding: '0 6px',
                   borderRadius: 6,
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                  background: token.colorFillTertiary,
+                  border: `1px solid ${maskKbdBorder}`,
+                  background: maskKbdBg,
+                  color: 'rgba(255, 255, 255, 0.92)',
                   fontSize: 11,
                   fontFamily: 'inherit',
                 }}
@@ -229,7 +237,8 @@ export function ConversationSearchModal({ open, onClose }: ConversationSearchMod
               borderRadius: 12,
               border: `1px solid ${token.colorBorderSecondary}`,
               background: token.colorBgElevated,
-              boxShadow: '0 16px 48px rgba(0,0,0,0.28)',
+              boxShadow: token.boxShadowSecondary,
+              color: token.colorText,
               position: 'relative',
               minHeight: loading && results.length === 0 ? 120 : undefined,
             }}
