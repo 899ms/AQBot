@@ -1,8 +1,13 @@
-import { useMemo, useCallback, useEffect } from 'react';
-import { Select, theme } from 'antd';
+import { useMemo, useEffect, type CSSProperties } from 'react';
+import { Select } from 'antd';
 import { ModelIcon } from '@lobehub/icons';
 import { useProviderStore } from '@/stores';
-import { parseModelValue, useProviderNameMap } from './ModelSelect';
+import {
+  MODEL_SELECT_CLASS,
+  useProviderNameMap,
+  useModelSelectLabelRender,
+  useModelSelectOptionRender,
+} from './ModelSelect';
 
 function isEmbeddingModel(model: { model_id: string; model_type?: string }) {
   return model.model_type === 'Embedding' || /embed/i.test(model.model_id);
@@ -54,48 +59,23 @@ export function EmbeddingModelSelect({
   placeholder,
   allowClear = true,
   style,
+  className,
 }: {
   value?: string;
   onChange: (value: string | undefined) => void;
   placeholder?: string;
   allowClear?: boolean;
-  style?: React.CSSProperties;
+  style?: CSSProperties;
+  className?: string;
 }) {
-  const { token } = theme.useToken();
   const embeddingOptions = useEmbeddingModelOptions();
   const providerNameMap = useProviderNameMap();
-
-  const optionRender = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (option: any) => (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        <ModelIcon model={option.data?.modelId ?? ''} size={18} type="avatar" />
-        {option.label}
-      </span>
-    ),
-    [],
-  );
-
-  const labelRender = useCallback(
-    (props: { label?: React.ReactNode; value?: string | number }) => {
-      const parsed = parseModelValue(String(props.value ?? ''));
-      if (!parsed) return <span>{props.label}</span>;
-      const providerName = providerNameMap.get(parsed.providerId) ?? '';
-      return (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <ModelIcon model={parsed.modelId} size={18} type="avatar" />
-          {props.label}
-          <span style={{ fontSize: 11, color: token.colorTextSecondary }}>
-            ({providerName})
-          </span>
-        </span>
-      );
-    },
-    [providerNameMap, token.colorTextSecondary],
-  );
+  const optionRender = useModelSelectOptionRender();
+  const labelRender = useModelSelectLabelRender(providerNameMap);
 
   return (
     <Select
+      className={[MODEL_SELECT_CLASS, className].filter(Boolean).join(' ')}
       value={value}
       onChange={onChange}
       placeholder={placeholder}

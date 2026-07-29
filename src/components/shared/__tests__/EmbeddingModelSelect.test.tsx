@@ -61,11 +61,14 @@ vi.mock('@/stores', () => ({
 }));
 
 vi.mock('../ModelSelect', () => ({
+  MODEL_SELECT_CLASS: 'aqbot-model-select',
   parseModelValue: (value: string) => {
     const [providerId, modelId] = value.split('::');
     return providerId && modelId ? { providerId, modelId } : null;
   },
   useProviderNameMap: () => new Map(providers.map((provider) => [provider.id, provider.name])),
+  useModelSelectOptionRender: () => (option: { label: string }) => option.label,
+  useModelSelectLabelRender: () => (props: { label?: string }) => props.label,
 }));
 
 describe('EmbeddingModelSelect', () => {

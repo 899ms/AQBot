@@ -1,9 +1,12 @@
-import { useMemo, useCallback } from 'react';
-import { Select, theme } from 'antd';
+import { useMemo, useCallback, type CSSProperties, type ReactNode } from 'react';
+import { Select } from 'antd';
 import { ModelIcon } from '@lobehub/icons';
 import { useProviderStore } from '@/stores';
 import { SmartProviderIcon } from '@/lib/providerIcons';
 import type { ModelType } from '@/types';
+
+/** Class applied to every model Select for shared alignment / open-state styles. */
+export const MODEL_SELECT_CLASS = 'aqbot-model-select';
 
 /** Parse a combined `providerId::modelId` value. */
 export function parseModelValue(value: string | undefined) {
@@ -53,6 +56,67 @@ export function useProviderNameMap() {
 }
 
 /**
+ * Selected-value label: icon + name + optional (provider).
+ * Provider name uses opacity (not a fixed color) so antd open-state graying inherits correctly.
+ */
+export function ModelSelectValueLabel({
+  modelId,
+  label,
+  providerName,
+}: {
+  modelId: string;
+  label: ReactNode;
+  providerName?: string;
+}) {
+  return (
+    <span className="aqbot-model-select-label">
+      <span className="aqbot-model-select-icon" aria-hidden>
+        <ModelIcon model={modelId} size={16} type="avatar" />
+      </span>
+      <span className="aqbot-model-select-name">{label}</span>
+      {providerName ? (
+        <span className="aqbot-model-select-provider">({providerName})</span>
+      ) : null}
+    </span>
+  );
+}
+
+/** Shared option renderer for model dropdown rows. */
+export function useModelSelectOptionRender() {
+  return useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (option: any) => (
+      <span className="aqbot-model-select-option">
+        <span className="aqbot-model-select-icon" aria-hidden>
+          <ModelIcon model={option.data?.modelId ?? ''} size={16} type="avatar" />
+        </span>
+        {option.label}
+      </span>
+    ),
+    [],
+  );
+}
+
+/** Shared labelRender for selected value (`providerId::modelId`). */
+export function useModelSelectLabelRender(providerNameMap: Map<string, string>) {
+  return useCallback(
+    (props: { label?: ReactNode; value?: string | number }) => {
+      const parsed = parseModelValue(String(props.value ?? ''));
+      if (!parsed) return <span>{props.label}</span>;
+      const providerName = providerNameMap.get(parsed.providerId) ?? '';
+      return (
+        <ModelSelectValueLabel
+          modelId={parsed.modelId}
+          label={props.label}
+          providerName={providerName}
+        />
+      );
+    },
+    [providerNameMap],
+  );
+}
+
+/**
  * Reusable model selector with provider-grouped options, ModelIcon rendering,
  * and search support. Value format: `providerId::modelId`.
  */
@@ -63,49 +127,24 @@ export function ModelSelect({
   allowClear = true,
   style,
   modelType,
+  className,
 }: {
   value?: string;
   onChange: (value: string | undefined) => void;
   placeholder?: string;
   allowClear?: boolean;
-  style?: React.CSSProperties;
+  style?: CSSProperties;
   modelType?: ModelType;
+  className?: string;
 }) {
-  const { token } = theme.useToken();
   const groupedOptions = useGroupedModelOptions(modelType);
   const providerNameMap = useProviderNameMap();
-
-  const optionRender = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (option: any) => (
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-        <ModelIcon model={option.data?.modelId ?? ''} size={18} type="avatar" />
-        {option.label}
-      </span>
-    ),
-    [],
-  );
-
-  const labelRender = useCallback(
-    (props: { label?: React.ReactNode; value?: string | number }) => {
-      const parsed = parseModelValue(String(props.value ?? ''));
-      if (!parsed) return <span>{props.label}</span>;
-      const providerName = providerNameMap.get(parsed.providerId) ?? '';
-      return (
-        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <ModelIcon model={parsed.modelId} size={18} type="avatar" />
-          {props.label}
-          <span style={{ fontSize: 11, color: token.colorTextSecondary }}>
-            ({providerName})
-          </span>
-        </span>
-      );
-    },
-    [providerNameMap, token.colorTextSecondary],
-  );
+  const optionRender = useModelSelectOptionRender();
+  const labelRender = useModelSelectLabelRender(providerNameMap);
 
   return (
     <Select
+      className={[MODEL_SELECT_CLASS, className].filter(Boolean).join(' ')}
       value={value}
       onChange={onChange}
       placeholder={placeholder}

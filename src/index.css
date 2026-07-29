@@ -467,6 +467,97 @@ svg.lucide {
   padding: 6px !important;
 }
 
+/* ── ModelSelect (antd Select with icon + provider suffix) ──────────────
+ * 1) Label / search text / caret vertically centered
+ * 2) Open state: text + icon gray out; while typing, hide selected label
+ * 3) Provider "(name)" uses opacity so open-state color inherits
+ */
+.aqbot-model-select.ant-select {
+  align-items: center;
+}
+
+/*
+ * Content box must stay at least one font line tall.
+ * Absolute search input fills this box; if it collapses to icon height (16px),
+ * typed characters are vertically clipped in half.
+ */
+.aqbot-model-select.ant-select-single .ant-select-content {
+  display: flex !important;
+  align-items: center;
+  min-width: 0;
+  min-height: var(--ant-select-font-height, 22px);
+  position: relative;
+}
+
+/* Match input line box to the content height so caret + typed text are centered */
+.aqbot-model-select.ant-select-single:not(.ant-select-customize) .ant-select-input {
+  line-height: var(--ant-select-font-height, 22px) !important;
+  height: 100% !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.aqbot-model-select-label,
+.aqbot-model-select-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: var(--ant-select-font-height, 22px);
+  line-height: var(--ant-select-line-height, var(--ant-line-height, 1.5714285714285714));
+  vertical-align: middle;
+}
+
+.aqbot-model-select-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  width: 16px;
+  height: 16px;
+  /* Colored avatars ignore parent `color`; animate opacity/filter instead */
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+.aqbot-model-select-icon > * {
+  display: block;
+  width: 16px !important;
+  height: 16px !important;
+}
+
+.aqbot-model-select-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Opacity (not color) so .ant-select-open .ant-select-content color inherits */
+.aqbot-model-select-provider {
+  font-size: 11px;
+  opacity: 0.55;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+/* Open + no search text: dim selected icon (color/filter; avatars ignore `color`) */
+.aqbot-model-select.ant-select-open
+  .ant-select-content:not(.ant-select-content-has-search-value)
+  .aqbot-model-select-icon {
+  opacity: 0.4;
+  filter: grayscale(1);
+}
+
+/* Open + typing: hide entire selected label so only search text is visible */
+.aqbot-model-select.ant-select-open
+  .ant-select-content-has-search-value
+  .aqbot-model-select-label {
+  visibility: hidden;
+}
+
 /* Multi-model streaming animation */
 @keyframes model-tag-spin {
   from { transform: rotate(0deg); }
