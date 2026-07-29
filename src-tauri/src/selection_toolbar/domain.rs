@@ -292,6 +292,62 @@ impl SelectionChange {
     }
 }
 
+/// Whether the selection contains at least one user-perceivable character.
+///
+/// Accessibility APIs often report non-empty `SelectedText` that is only
+/// whitespace, zero-width format marks, control codes, or the object
+/// replacement character (selected images). Those must not open the toolbar —
+/// translating them yields "special character" style model replies.
+pub fn is_actionable_selection_text(text: &str) -> bool {
+    text.chars().any(is_actionable_selection_char)
+}
+
+fn is_actionable_selection_char(c: char) -> bool {
+    if c.is_whitespace() || c.is_control() {
+        return false;
+    }
+    // Object Replacement Character — AX placeholder for selected images/attachments.
+    if c == '\u{FFFC}' {
+        return false;
+    }
+    if is_unicode_format_char(c) {
+        return false;
+    }
+    true
+}
+
+/// Common Unicode Format (Cf) and related invisible marks that survive `trim()`.
+/// Kept as an explicit table so we do not pull a general-category crate only for
+/// this gate; the table is locked by unit tests for the selection-toolbar cases.
+fn is_unicode_format_char(c: char) -> bool {
+    matches!(
+        c,
+        // Soft hyphen
+        '\u{00AD}'
+        // Combining grapheme joiner
+        | '\u{034F}'
+        // Arabic / Syriac / Mongolian format controls
+        | '\u{0600}'..='\u{0605}'
+        | '\u{061C}'
+        | '\u{06DD}'
+        | '\u{070F}'
+        | '\u{08E2}'
+        | '\u{180E}'
+        // Zero-width + bidi isolates / embeddings / overrides
+        | '\u{200B}'..='\u{200F}'
+        | '\u{202A}'..='\u{202E}'
+        | '\u{2060}'..='\u{2064}'
+        | '\u{2066}'..='\u{206F}'
+        // BOM / word joiner siblings already covered above; ZWNBSP
+        | '\u{FEFF}'
+        // Interlinear annotation controls
+        | '\u{FFF9}'..='\u{FFFB}'
+        // Language tags
+        | '\u{E0001}'
+        | '\u{E0020}'..='\u{E007F}'
+    )
+}
+
 pub struct SelectionDebouncer {
     delay_ms: u64,
     pending: Option<(SelectionChange, u64)>,
@@ -308,10 +364,10 @@ impl SelectionDebouncer {
     }
 
     pub fn push(&mut self, observation: SelectionObservation, now_ms: u64) {
-        let change = if observation.text.trim().is_empty() {
-            SelectionChange::Cleared
-        } else {
+        let change = if is_actionable_selection_text(&observation.text) {
             SelectionChange::Selected(observation)
+        } else {
+            SelectionChange::Cleared
         };
         self.pending = Some((change, now_ms.saturating_add(self.delay_ms)));
     }
@@ -694,6 +750,39 @@ mod tests {
         let _ = debouncer.take_ready(200);
         let mut cleared = observation("  \n", 100.0);
         cleared.range_signature = "4:4".into();
+        debouncer.push(cleared, 250);
+
+        assert_eq!(debouncer.take_ready(450), Some(SelectionChange::Cleared));
+    }
+
+    #[test]
+    fn actionable_selection_rejects_invisible_and_format_only_text() {
+        assert!(!is_actionable_selection_text(""));
+        assert!(!is_actionable_selection_text("  \n\t"));
+        assert!(!is_actionable_selection_text("\u{200B}"));
+        assert!(!is_actionable_selection_text("\u{200B}\u{FEFF}"));
+        assert!(!is_actionable_selection_text("\u{200E}  "));
+        assert!(!is_actionable_selection_text("\u{00AD}"));
+        assert!(!is_actionable_selection_text("\u{FFFC}"));
+        assert!(!is_actionable_selection_text("\u{0000}"));
+        assert!(!is_actionable_selection_text("\u{202A}\u{202C}"));
+    }
+
+    #[test]
+    fn actionable_selection_accepts_visible_text_even_with_embedded_format() {
+        assert!(is_actionable_selection_text("hello"));
+        assert!(is_actionable_selection_text("  中文  "));
+        assert!(is_actionable_selection_text("a\u{200B}b"));
+        assert!(is_actionable_selection_text("🙂"));
+    }
+
+    #[test]
+    fn format_only_selection_is_an_explicit_clear_event() {
+        let mut debouncer = SelectionDebouncer::new(200);
+        debouncer.push(observation("text", 100.0), 0);
+        let _ = debouncer.take_ready(200);
+        let mut cleared = observation("\u{200B}\u{FEFF}", 100.0);
+        cleared.range_signature = "ghost".into();
         debouncer.push(cleared, 250);
 
         assert_eq!(debouncer.take_ready(450), Some(SelectionChange::Cleared));

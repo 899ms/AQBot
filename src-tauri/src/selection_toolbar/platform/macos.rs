@@ -47,8 +47,8 @@ use tokio::sync::{
 
 use super::{DismissReason, PlatformEvent, PlatformMonitorHandle, PlatformStartError};
 use crate::selection_toolbar::{
-    PermissionSettingsOutcome, PermissionState, RuntimeError, ScreenPoint, ScreenRect,
-    SelectionAnchorKind, SelectionObservation,
+    is_actionable_selection_text, PermissionSettingsOutcome, PermissionState, RuntimeError,
+    ScreenPoint, ScreenRect, SelectionAnchorKind, SelectionObservation,
 };
 
 const MAX_SELECTION_ANCESTORS: usize = 16;
@@ -1089,7 +1089,7 @@ fn read_selection_payload(element: &AXUIElement) -> Option<SelectionPayload> {
 
 fn read_range_selection(element: &AXUIElement) -> Option<SelectionPayload> {
     let text = read_string_attribute(element, AX_SELECTED_TEXT_ATTRIBUTE)?;
-    if text.trim().is_empty() {
+    if !is_actionable_selection_text(&text) {
         return None;
     }
     let range = match element.range_attribute(AX_SELECTED_TEXT_RANGE_ATTRIBUTE) {
@@ -1143,6 +1143,11 @@ fn read_marker_selection(element: &AXUIElement) -> Option<SelectionPayload> {
             }
         };
     let selected_range = ordered_marker_range(element, &selected_range).unwrap_or(selected_range);
+    // Collapsed caret ranges are not selections; some apps still return a
+    // non-empty string (often format-only) for equal start/end markers.
+    if selected_range.start_marker().bytes() == selected_range.end_marker().bytes() {
+        return None;
+    }
     let selected_value = AXValue::from_text_marker_range(&selected_range)?;
     let text = match element.parameterized_attribute(
         AX_STRING_FOR_TEXT_MARKER_RANGE_PARAMETERIZED_ATTRIBUTE,
@@ -1158,7 +1163,7 @@ fn read_marker_selection(element: &AXUIElement) -> Option<SelectionPayload> {
             return None;
         }
     };
-    if text.trim().is_empty() {
+    if !is_actionable_selection_text(&text) {
         return None;
     }
     let rect = first_marker_rect(element, &selected_range)
@@ -1553,6 +1558,17 @@ mod macos_tests {
             marker_range_signature(&first),
             marker_range_signature(&second)
         );
+    }
+
+    #[test]
+    fn collapsed_text_marker_range_has_equal_boundary_bytes() {
+        let collapsed = AXTextMarkerRange::from_bytes(&[1, 2, 3], &[1, 2, 3]).expect("marker");
+        assert_eq!(
+            collapsed.start_marker().bytes(),
+            collapsed.end_marker().bytes()
+        );
+        let open = AXTextMarkerRange::from_bytes(&[1, 2, 3], &[1, 2, 4]).expect("marker");
+        assert_ne!(open.start_marker().bytes(), open.end_marker().bytes());
     }
 
     #[tokio::test]

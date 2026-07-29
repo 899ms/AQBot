@@ -16,8 +16,8 @@ use tokio::sync::{mpsc::UnboundedSender, oneshot};
 
 use super::{DismissReason, PlatformEvent, PlatformMonitorHandle, PlatformStartError};
 use crate::selection_toolbar::{
-    PermissionSettingsOutcome, PermissionState, RuntimeError, ScreenPoint, ScreenRect,
-    SelectionAnchorKind, SelectionObservation,
+    is_actionable_selection_text, PermissionSettingsOutcome, PermissionState, RuntimeError,
+    ScreenPoint, ScreenRect, SelectionAnchorKind, SelectionObservation,
 };
 
 pub fn start_monitor(
@@ -220,7 +220,7 @@ async fn read_selection(
         .get_text(start, end)
         .await
         .map_err(|error| error.to_string())?;
-    if text.trim().is_empty() {
+    if !is_actionable_selection_text(&text) {
         return Ok(None);
     }
     let (_, line_start, line_end) = text_proxy

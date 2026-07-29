@@ -32,8 +32,8 @@ use windows::core::PWSTR;
 
 use super::{DismissReason, PlatformEvent, PlatformMonitorHandle, PlatformStartError};
 use crate::selection_toolbar::{
-    PermissionSettingsOutcome, PermissionState, RuntimeError, ScreenPoint, ScreenRect,
-    SelectionAnchorKind, SelectionObservation,
+    is_actionable_selection_text, PermissionSettingsOutcome, PermissionState, RuntimeError,
+    ScreenPoint, ScreenRect, SelectionAnchorKind, SelectionObservation,
 };
 
 thread_local! {
@@ -261,7 +261,7 @@ fn read_selection(element: &UIElement) -> uiautomation::Result<Option<SelectionO
         return Ok(None);
     };
     let text = range.get_text(-1)?;
-    if text.trim().is_empty() {
+    if !is_actionable_selection_text(&text) {
         return Ok(None);
     }
     let Some(anchor) = first_bounding_rect(&range)? else {
