@@ -169,7 +169,11 @@ function VirtualConversationItem({
       {icon && <div className={`${prefixCls}-icon`}>{icon}</div>}
       <Typography.Text className={`${prefixCls}-label`}>{label}</Typography.Text>
       {!disabled && menuConfig && (
-        <div onClick={stopPropagation}>
+        <div
+          className={`${prefixCls}-menu`}
+          onClick={stopPropagation}
+          style={{ display: 'inline-flex', alignItems: 'center', lineHeight: 0 }}
+        >
           <Dropdown
             menu={dropdownMenu}
             placement={direction === 'rtl' ? 'bottomLeft' : 'bottomRight'}

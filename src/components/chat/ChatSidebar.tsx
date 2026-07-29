@@ -1043,6 +1043,9 @@ export function ChatSidebar() {
       }
       return {
         trigger: (_conversation: ConversationItemType, info: { originNode: React.ReactNode }) => {
+          // Keep Tooltip as Dropdown's direct interactive child chain without an
+          // extra span around originNode: EllipsisOutlined uses stopPropagation,
+          // so an intermediate wrapper would swallow the click and never open the menu.
           if (!directDeleteMode) {
             return <Tooltip title={directDeleteHint}>{info.originNode}</Tooltip>
           }
@@ -1054,13 +1057,14 @@ export function ChatSidebar() {
                 size="small"
                 aria-label={t('chat.delete')}
                 className="ant-conversations-menu-icon aqbot-chat-conversation-menu-delete"
-                icon={<Trash2 size={14} />}
                 onClick={(event) => {
                   event.preventDefault()
                   event.stopPropagation()
                   handleDelete(item, event)
                 }}
-              />
+              >
+                <Trash2 size={14} strokeWidth={2} style={{ display: 'block' }} />
+              </Button>
             </Tooltip>
           )
         },
@@ -1473,9 +1477,46 @@ export function ChatSidebar() {
                 .ant-conversations .ant-conversations-item-active .ant-conversations-label {
                   color: ${token.colorPrimary} !important;
                 }
+                .ant-conversations .ant-conversations-icon {
+                  display: inline-flex;
+                  align-items: center;
+                  justify-content: center;
+                  flex-shrink: 0;
+                  line-height: 0;
+                }
                 .ant-conversations .ant-conversations-label {
                   min-width: 0;
                   overflow: hidden;
+                  display: flex !important;
+                  align-items: center;
+                  margin-bottom: 0 !important;
+                  line-height: 1.25;
+                }
+                .ant-conversations .ant-conversations-menu {
+                  display: inline-flex;
+                  align-items: center;
+                  justify-content: center;
+                  flex-shrink: 0;
+                  line-height: 0;
+                }
+                .ant-conversations .ant-conversations-item > div:has(.ant-conversations-menu-icon) {
+                  display: inline-flex;
+                  align-items: center;
+                  justify-content: center;
+                  flex-shrink: 0;
+                  line-height: 0;
+                }
+                .ant-conversations .ant-conversations-menu-icon {
+                  display: inline-flex !important;
+                  align-items: center;
+                  justify-content: center;
+                  width: 22px;
+                  height: 22px;
+                  min-width: 22px;
+                  line-height: 1;
+                  font-size: 16px;
+                  flex-shrink: 0;
+                  box-sizing: border-box;
                 }
                 .aqbot-chat-conversation-title-row {
                   min-width: 0;
@@ -1483,13 +1524,25 @@ export function ChatSidebar() {
                   overflow: hidden;
                 }
                 .aqbot-chat-conversation-menu-delete {
-                  width: 22px;
-                  height: 22px;
-                  min-width: 22px;
-                  padding: 0;
-                  display: inline-flex;
+                  width: 22px !important;
+                  height: 22px !important;
+                  min-width: 22px !important;
+                  padding: 0 !important;
+                  display: inline-flex !important;
                   align-items: center;
                   justify-content: center;
+                  line-height: 1;
+                }
+                .aqbot-chat-conversation-menu-delete .ant-btn-icon {
+                  display: inline-flex !important;
+                  align-items: center;
+                  justify-content: center;
+                  margin-inline-end: 0 !important;
+                  line-height: 0;
+                }
+                .aqbot-chat-conversation-menu-delete .ant-btn-icon > svg,
+                .aqbot-chat-conversation-menu-delete svg {
+                  display: block;
                 }
                 .ant-conversations .ant-conversations-item-active .aqbot-chat-conversation-menu-delete {
                   opacity: 0;
@@ -1519,6 +1572,7 @@ export function ChatSidebar() {
                   text-overflow: ellipsis;
                   white-space: nowrap;
                   display: block;
+                  line-height: 1.25;
                 }
                 @keyframes spin {
                   from { transform: rotate(0deg); }
