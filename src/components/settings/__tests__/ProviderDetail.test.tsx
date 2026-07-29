@@ -1162,17 +1162,8 @@ describe('ProviderDetail', () => {
     });
   });
 
-  it('keeps existing models and exposes stale discovery details after a sync failure', async () => {
-    const lastSuccessAt = 1_700_000_000_000;
+  it('keeps existing models after a sync failure and does not show discovery status banner', async () => {
     const existingModels = [...provider.models];
-    window.localStorage.setItem(
-      'aqbot:model-discovery:provider-1',
-      JSON.stringify({
-        state: 'fresh',
-        lastSuccessAt,
-        error: null,
-      }),
-    );
     mocks.fetchRemoteModels.mockRejectedValue(new Error('image discovery offline'));
 
     render(
@@ -1187,13 +1178,7 @@ describe('ProviderDetail', () => {
     expect(mocks.applyModelSync).not.toHaveBeenCalled();
     expect(mocks.saveModels).not.toHaveBeenCalled();
     expect(provider.models).toEqual(existingModels);
-    expect(JSON.parse(
-      window.localStorage.getItem('aqbot:model-discovery:provider-1') ?? '{}',
-    )).toMatchObject({
-      state: 'stale',
-      lastSuccessAt,
-      error: 'Error: image discovery offline',
-    });
+    expect(screen.queryByText(/模型目录已同步|模型目录已过期|modelDiscoveryFresh|modelDiscoveryStale/)).toBeNull();
   });
 
   it('preserves an existing local model when its exact catalog mode is unsupported', async () => {

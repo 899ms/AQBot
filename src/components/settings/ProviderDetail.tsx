@@ -1,5 +1,4 @@
 import {
-  Alert,
   AutoComplete,
   Button,
   Card,
@@ -58,43 +57,6 @@ import { ModelSyncPickerModal, type ModelSyncEntry } from './ModelSyncPickerModa
 import { deriveModelGroupName, formatTokenCount, getModelGroupName } from '@/lib/modelSync';
 
 const { Text, Title } = Typography;
-
-interface ModelDiscoveryStatus {
-  state: 'fresh' | 'stale';
-  lastSuccessAt: number | null;
-  error: string | null;
-}
-
-function modelDiscoveryStorageKey(providerId: string): string {
-  return `aqbot:model-discovery:${providerId}`;
-}
-
-function readModelDiscoveryStatus(providerId: string): ModelDiscoveryStatus | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const stored = window.localStorage.getItem(modelDiscoveryStorageKey(providerId));
-    if (!stored) return null;
-    const parsed = JSON.parse(stored) as Partial<ModelDiscoveryStatus>;
-    if (parsed.state !== 'fresh' && parsed.state !== 'stale') return null;
-    return {
-      state: parsed.state,
-      lastSuccessAt: typeof parsed.lastSuccessAt === 'number' ? parsed.lastSuccessAt : null,
-      error: typeof parsed.error === 'string' ? parsed.error : null,
-    };
-  } catch (error) {
-    console.warn('Failed to read model discovery status', error);
-    return null;
-  }
-}
-
-function writeModelDiscoveryStatus(providerId: string, status: ModelDiscoveryStatus): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(modelDiscoveryStorageKey(providerId), JSON.stringify(status));
-  } catch (error) {
-    console.warn('Failed to persist model discovery status', error);
-  }
-}
 
 const CAPABILITY_LABEL_KEYS: Record<ModelCapability, string> = {
   TextChat: 'settings.capability.TextChat',
@@ -394,9 +356,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
   const [revealingKeys, setRevealingKeys] = useState<Set<string>>(new Set());
   const [validatingKeys, setValidatingKeys] = useState<Set<string>>(new Set());
   const [refreshing, setRefreshing] = useState(false);
-  const [modelDiscoveryStatus, setModelDiscoveryStatus] = useState<ModelDiscoveryStatus | null>(
-    () => readModelDiscoveryStatus(providerId),
-  );
   const [modelSearch, setModelSearch] = useState('');
   const [showModelSearch, setShowModelSearch] = useState(false);
   const [addModelModalOpen, setAddModelModalOpen] = useState(false);
@@ -430,9 +389,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
   const [editImageConfig, setEditImageConfig] = useState<ImageAdapterConfig | null>(null);
   const [editMetadataDirty, setEditMetadataDirty] = useState<Set<ModelMetadataField>>(new Set());
 
-  useEffect(() => {
-    setModelDiscoveryStatus(readModelDiscoveryStatus(providerId));
-  }, [providerId]);
   const [editMetadataAutomatic, setEditMetadataAutomatic] = useState<Set<ModelMetadataField>>(new Set());
   const [metadataSyncModalOpen, setMetadataSyncModalOpen] = useState(false);
   const [metadataSyncLoading, setMetadataSyncLoading] = useState(false);
@@ -783,13 +739,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
     setRefreshing(true);
     try {
       const result = await fetchRemoteModels(providerId);
-      const status: ModelDiscoveryStatus = {
-        state: 'fresh',
-        lastSuccessAt: Date.now(),
-        error: null,
-      };
-      setModelDiscoveryStatus(status);
-      writeModelDiscoveryStatus(providerId, status);
       const syncEntries = result.candidates
         .map((candidate) => ({ ...candidate, model: candidate.proposed_model }))
         .sort((a, b) =>
@@ -801,14 +750,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
       setPickerOpen(true);
     } catch (e) {
       const errMsg = String(e);
-      const previous = readModelDiscoveryStatus(providerId) ?? modelDiscoveryStatus;
-      const status: ModelDiscoveryStatus = {
-        state: 'stale',
-        lastSuccessAt: previous?.lastSuccessAt ?? null,
-        error: errMsg,
-      };
-      setModelDiscoveryStatus(status);
-      writeModelDiscoveryStatus(providerId, status);
       if (errMsg.includes('No active key') || errMsg.includes('key')) {
         message.error(t('settings.noActiveKeyError'));
       } else {
@@ -817,7 +758,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
     } finally {
       setRefreshing(false);
     }
-  }, [providerId, fetchRemoteModels, message, modelDiscoveryStatus, t]);
+  }, [providerId, fetchRemoteModels, message, t]);
 
   const handlePickerApply = useCallback(async (models: Model[]) => {
     try {
@@ -1851,26 +1792,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
           )
         }
       >
-        {modelDiscoveryStatus && (
-          <Alert
-            type={modelDiscoveryStatus.state === 'stale' ? 'warning' : 'success'}
-            showIcon
-            style={{ marginBottom: 12 }}
-            title={
-              modelDiscoveryStatus.state === 'stale'
-                ? t('settings.modelDiscoveryStale', '模型目录已过期')
-                : t('settings.modelDiscoveryFresh', '模型目录已同步')
-            }
-            description={[
-              modelDiscoveryStatus.lastSuccessAt
-                ? `${t('settings.modelDiscoveryLastSuccess', '上次成功同步')}：${
-                  new Date(modelDiscoveryStatus.lastSuccessAt).toLocaleString()
-                }`
-                : t('settings.modelDiscoveryNeverSucceeded', '尚无成功同步记录'),
-              modelDiscoveryStatus.error,
-            ].filter(Boolean).join('；')}
-          />
-        )}
         {showModelSearch && (
           <Input
             prefix={<Search size={14} />}
