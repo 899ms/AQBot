@@ -36,9 +36,24 @@ impl ImageAdapterRegistry {
         model_id: &str,
         config: Option<&ImageAdapterConfig>,
     ) -> Option<Arc<dyn ImageAdapter>> {
+        self.resolve_with_host(provider_type, model_id, config, None)
+    }
+
+    /// Resolve an image adapter, optionally using the provider API host for inference.
+    ///
+    /// Explicit `config.adapter_id` always wins. Otherwise well-known xAI Imagine model
+    /// IDs and `api.x.ai` hosts route to `xai_images` even under OpenAI-compat/Custom types.
+    pub fn resolve_with_host(
+        &self,
+        provider_type: &ProviderType,
+        model_id: &str,
+        config: Option<&ImageAdapterConfig>,
+        api_host: Option<&str>,
+    ) -> Option<Arc<dyn ImageAdapter>> {
         let id = config
             .and_then(|value| value.adapter_id.as_deref())
-            .unwrap_or_else(|| infer_adapter_id(provider_type, model_id));
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| infer_adapter_id(provider_type, model_id, api_host));
         self.adapters.get(id).cloned()
     }
 
@@ -53,14 +68,33 @@ impl Default for ImageAdapterRegistry {
     }
 }
 
-fn infer_adapter_id(provider_type: &ProviderType, model_id: &str) -> &'static str {
+/// Official and common alias IDs for xAI Imagine image models.
+pub fn is_xai_image_model(model_id: &str) -> bool {
+    let normalized = model_id.trim().to_ascii_lowercase();
+    normalized.starts_with("grok-imagine") || normalized.starts_with("grok-image")
+}
+
+fn is_xai_api_host(api_host: &str) -> bool {
+    api_host.to_ascii_lowercase().contains("api.x.ai")
+}
+
+fn infer_adapter_id(
+    provider_type: &ProviderType,
+    model_id: &str,
+    api_host: Option<&str>,
+) -> &'static str {
     let normalized = model_id.to_ascii_lowercase();
+    if is_xai_image_model(&normalized) {
+        return "xai_images";
+    }
+    if api_host.is_some_and(is_xai_api_host) {
+        return "xai_images";
+    }
     match provider_type {
         ProviderType::XAI => "xai_images",
         ProviderType::GLM => "glm_images",
         ProviderType::SiliconFlow => "siliconflow_images",
         ProviderType::Gemini => "gemini_images",
-        ProviderType::Custom if normalized.starts_with("grok-imagine") => "xai_images",
         ProviderType::Custom
             if normalized.starts_with("gpt-image-") || normalized.starts_with("dall-e-") =>
         {

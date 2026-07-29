@@ -437,10 +437,11 @@ fn build_drawing_target(provider: &ProviderConfig, model: &Model) -> Option<Draw
         return None;
     }
     let config = parse_image_adapter_config(model).ok()?;
-    let adapter = ImageAdapterRegistry::new().resolve(
+    let adapter = ImageAdapterRegistry::new().resolve_with_host(
         &provider.provider_type,
         &model.model_id,
         Some(&config),
+        Some(provider.api_host.as_str()),
     )?;
     let descriptor = adapter.descriptor(&model.model_id, &config);
     if descriptor.operations.is_empty() {
@@ -985,7 +986,12 @@ async fn build_image_context(
         config.endpoint = provider.api_path.clone();
     }
     let adapter = ImageAdapterRegistry::new()
-        .resolve(&provider.provider_type, model_id, Some(&config))
+        .resolve_with_host(
+            &provider.provider_type,
+            model_id,
+            Some(&config),
+            Some(provider.api_host.as_str()),
+        )
         .ok_or_else(|| "The selected image adapter is unavailable".to_string())?;
     build_resolved_image_target(provider, model, ctx, key_id, adapter, config, operation)
 }
@@ -2372,6 +2378,59 @@ mod tests {
             .expect("custom grok image model should be available");
         assert_eq!(target.adapter_id, "xai_images");
         assert_eq!(target.model_id, "grok-imagine-image");
+        assert!(target.descriptor.warnings.is_empty());
+        assert!(target
+            .descriptor
+            .operations
+            .contains(&ImageOperation::Edit));
+    }
+
+    #[test]
+    fn grok_image_alias_and_openai_compat_xai_host_use_verified_profile() {
+        let mut provider = ProviderConfig {
+            id: "openai-compat-xai".into(),
+            name: "xAI via OpenAI type".into(),
+            provider_type: ProviderType::OpenAI,
+            api_host: "https://api.x.ai".into(),
+            api_path: None,
+            aws_region: None,
+            enabled: true,
+            models: vec![Model {
+                provider_id: "openai-compat-xai".into(),
+                model_id: "grok-image".into(),
+                name: "grok-image".into(),
+                group_name: None,
+                model_type: ModelType::Image,
+                capabilities: Vec::new(),
+                context_window: None,
+                max_output_tokens: None,
+                enabled: true,
+                param_overrides: None,
+                image_config: None,
+                metadata_state: None,
+            }],
+            keys: Vec::new(),
+            proxy_config: None,
+            custom_headers: None,
+            icon: None,
+            builtin_id: None,
+            sort_order: 0,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        let by_model = build_drawing_target(&provider, &provider.models[0])
+            .expect("grok-image alias should resolve to xAI images");
+        assert_eq!(by_model.adapter_id, "xai_images");
+        assert!(by_model.descriptor.warnings.is_empty());
+        assert_eq!(by_model.descriptor.max_reference_images, 3);
+
+        provider.models[0].model_id = "proxy-image".into();
+        provider.models[0].name = "proxy-image".into();
+        let by_host = build_drawing_target(&provider, &provider.models[0])
+            .expect("api.x.ai host should resolve to xAI images");
+        assert_eq!(by_host.adapter_id, "xai_images");
+        assert!(by_host.descriptor.warnings.is_empty());
     }
 
     #[test]

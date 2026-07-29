@@ -158,6 +158,33 @@ fn known_xai_payload_sends_official_generation_fields() {
     assert_eq!(body["response_format"], "b64_json");
     assert_eq!(body["aspect_ratio"], "16:9");
     assert_eq!(body["resolution"], "2k");
+    assert!(body.get("size").is_none());
+    assert!(body.get("quality").is_none());
+}
+
+#[test]
+fn grok_image_alias_uses_full_xai_generation_payload() {
+    let mut xai_request = request();
+    xai_request.model = "grok-image".into();
+    xai_request
+        .parameters
+        .insert("aspect_ratio".into(), "1:1".into());
+    xai_request
+        .parameters
+        .insert("resolution".into(), "1k".into());
+
+    let body = build_request_body(
+        "xai_images",
+        &xai_request,
+        &ImageAdapterConfig::default(),
+    )
+    .expect("build grok-image body");
+
+    assert_eq!(body["model"], "grok-image");
+    assert_eq!(body["response_format"], "b64_json");
+    assert_eq!(body["aspect_ratio"], "1:1");
+    assert_eq!(body["resolution"], "1k");
+    assert_eq!(body["n"], 2);
 }
 
 fn upload(name: &str) -> aqbot_providers::openai_images::ImageUpload {

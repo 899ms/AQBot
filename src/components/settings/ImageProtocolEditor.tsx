@@ -10,6 +10,11 @@ interface Props {
   onChange: (value: ImageAdapterConfig | null) => void;
 }
 
+function isXaiImageModel(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  return normalized.startsWith('grok-imagine') || normalized.startsWith('grok-image');
+}
+
 export function ImageProtocolEditor({
   value,
   providerType,
@@ -55,7 +60,7 @@ export function ImageProtocolEditor({
           {t('imageProtocol.title', '图片协议')}
         </Typography.Title>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          {providerType === 'custom' && modelId.startsWith('grok-imagine')
+          {isXaiImageModel(modelId) || providerType === 'xai'
             ? t(
               'imageProtocol.grokAutoDetectDescription',
               '当前模型默认识别为 xAI Images，可在下方显式覆盖。',

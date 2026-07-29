@@ -33,13 +33,13 @@ describe('drawingWarnings', () => {
   it('localizes known warning codes with model id interpolation', () => {
     const warning: ImageModelWarning = {
       code: 'unknown_image_profile',
-      message: 'grok-image has no verified image parameter profile; only conservative text-to-image requests are enabled.',
+      message: 'vendor-image-model has no verified image parameter profile; only conservative text-to-image requests are enabled.',
       deadline: null,
       replacement_model_id: null,
     };
 
-    expect(getDrawingWarningTitle(warning, 'grok-image', translate)).toBe(
-      'grok-image 尚未验证图片参数配置，当前仅允许保守的文生图请求。',
+    expect(getDrawingWarningTitle(warning, 'vendor-image-model', translate)).toBe(
+      'vendor-image-model 尚未验证图片参数配置，当前仅允许保守的文生图请求。',
     );
     expect(getDrawingWarningDescription(warning, translate)).toBeUndefined();
   });

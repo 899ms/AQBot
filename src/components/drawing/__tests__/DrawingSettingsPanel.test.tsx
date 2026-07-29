@@ -20,6 +20,8 @@ vi.mock('react-i18next', () => ({
     ) => {
       const labels: Record<string, string> = {
         'drawing.aspectRatio': '宽高比',
+        'drawing.resolution': '分辨率',
+        'drawing.batchCount': '批量张数',
         'drawing.warning.retired_model':
           '{{modelId}} 是已退役的预览模型。兼容代理仍可继续请求。',
         'drawing.warning.unknown_image_profile':
@@ -352,18 +354,22 @@ describe('DrawingSettingsPanel', () => {
   it('localizes unknown image profile warnings for models without a verified profile', () => {
     render(
       <DrawingSettingsPanel
-        settings={{ ...settingsFixture, modelId: 'grok-image' }}
+        settings={{ ...settingsFixture, modelId: 'vendor-image-model' }}
         providers={providersFixture}
         targets={[{
           ...xaiTarget,
-          model_id: 'grok-image',
-          model_name: 'grok-image',
+          adapter_id: 'generic_json',
+          model_id: 'vendor-image-model',
+          model_name: 'vendor-image-model',
           descriptor: {
             ...xaiTarget.descriptor,
+            adapter_id: 'generic_json',
+            parameters: [],
+            max_reference_images: 0,
             warnings: [{
               code: 'unknown_image_profile',
               message:
-                'grok-image has no verified image parameter profile; only conservative text-to-image requests are enabled.',
+                'vendor-image-model has no verified image parameter profile; only conservative text-to-image requests are enabled.',
               deadline: null,
               replacement_model_id: null,
             }],
@@ -375,9 +381,63 @@ describe('DrawingSettingsPanel', () => {
 
     expect(
       screen.getByText(
-        'grok-image 尚未验证图片参数配置，当前仅允许保守的文生图请求。',
+        'vendor-image-model 尚未验证图片参数配置，当前仅允许保守的文生图请求。',
       ),
     ).toBeDefined();
+  });
+
+  it('shows verified xAI imagine parameters without unknown-profile warning', () => {
+    render(
+      <DrawingSettingsPanel
+        settings={{ ...settingsFixture, modelId: 'grok-image' }}
+        providers={providersFixture}
+        targets={[{
+          ...xaiTarget,
+          model_id: 'grok-image',
+          model_name: 'grok-image',
+          descriptor: {
+            adapter_id: 'xai_images',
+            operations: ['generate', 'edit'],
+            parameters: [
+              {
+                key: 'aspect_ratio',
+                kind: 'select',
+                default: 'auto',
+                options: ['auto', '1:1', '16:9'],
+                min: null,
+                max: null,
+              },
+              {
+                key: 'resolution',
+                kind: 'select',
+                default: '1k',
+                options: ['1k', '2k'],
+                min: null,
+                max: null,
+              },
+              {
+                key: 'n',
+                kind: 'number',
+                default: 1,
+                options: [],
+                min: 1,
+                max: 10,
+              },
+            ],
+            max_batch_size: 10,
+            max_reference_images: 3,
+            warnings: [],
+          },
+        }]}
+        onChange={() => {}}
+      />,
+    );
+
+    expect(screen.queryByText(/尚未验证图片参数配置/)).toBeNull();
+    expect(screen.getByText('宽高比')).toBeDefined();
+    expect(screen.getByText('分辨率')).toBeDefined();
+    expect(screen.getByText('批量张数')).toBeDefined();
+    expect(screen.getByTestId('drawing-reference-uploader')).toBeDefined();
   });
 
   it('allows a descriptor string size while keeping official suggestions', () => {

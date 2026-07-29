@@ -103,6 +103,11 @@ impl BuiltinModel {
         }
     }
 
+    fn with_group_name(mut self, group_name: &'static str) -> Self {
+        self.group_name = Some(group_name);
+        self
+    }
+
     fn disabled(mut self) -> Self {
         self.enabled = false;
         self
@@ -424,8 +429,10 @@ pub fn get_builtin_providers() -> Vec<BuiltinProvider> {
                 )
                 .with_param_overrides(reasoning_profile("none"))
                 .disabled(),
-                BuiltinModel::image("grok-imagine-image", "Grok Imagine Image"),
+                BuiltinModel::image("grok-imagine-image", "Grok Imagine Image")
+                    .with_group_name("grok-imagine"),
                 BuiltinModel::image("grok-imagine-image-quality", "Grok Imagine Image Quality")
+                    .with_group_name("grok-imagine")
                     .disabled(),
             ],
         },

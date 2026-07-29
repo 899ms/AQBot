@@ -13,7 +13,7 @@ const XAI_IMAGE_DOCS: &str = "https://docs.x.ai/developers/rest-api-reference/in
 const GLM_IMAGE_DOCS: &str = "https://docs.bigmodel.cn/api-reference/模型-api/图像生成";
 const SILICONFLOW_IMAGE_DOCS: &str =
     "https://docs.siliconflow.cn/cn/api-reference/images/images-generations";
-const PROFILE_AUDITED_AT: &str = "2026-07-27";
+const PROFILE_AUDITED_AT: &str = "2026-07-29";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ImageModelFamily {
@@ -85,9 +85,7 @@ pub(crate) fn image_model_profile(
         }
         "openai_images" if normalized.starts_with("dall-e-2") => ImageModelFamily::DallE2,
         "openai_images" if normalized.starts_with("dall-e-3") => ImageModelFamily::DallE3,
-        "xai_images" if normalized.starts_with("grok-imagine-image") => {
-            ImageModelFamily::XaiImagine
-        }
+        // Official: grok-imagine-image / grok-imagine-image-quality; aliases like grok-image*
         "xai_images" => ImageModelFamily::XaiImagine,
         "gemini_images" if normalized.starts_with("imagen-4.0-ultra") => {
             ImageModelFamily::Imagen4Ultra
@@ -751,6 +749,7 @@ pub(crate) fn validate_profile_request(
         ImageModelFamily::OpenAiGpt2 | ImageModelFamily::OpenAiGptLegacy => {
             validate_gpt_image_request(request, profile.family == ImageModelFamily::OpenAiGpt2)
         }
+        ImageModelFamily::XaiImagine => validate_xai_imagine_request(request, reference_count),
         ImageModelFamily::GlmImage => validate_custom_size(request, 1024, 2048, 32, 1 << 22),
         ImageModelFamily::CogView => validate_custom_size(request, 512, 2048, 16, 1 << 21),
         ImageModelFamily::Imagen4Standard
@@ -770,6 +769,21 @@ pub(crate) fn validate_profile_request(
         }
         _ => Ok(()),
     }
+}
+
+fn validate_xai_imagine_request(
+    request: &ImageAdapterRequest,
+    reference_count: usize,
+) -> Result<()> {
+    if request.operation == ImageOperation::Edit && reference_count == 0 {
+        return invalid(
+            request,
+            "reference_images",
+            reference_count,
+            "1..=3 for image edit",
+        );
+    }
+    Ok(())
 }
 
 fn request_parameter_value<'a>(request: &'a ImageAdapterRequest, key: &str) -> Option<Value> {
@@ -972,6 +986,31 @@ mod tests {
         let mut imagen = request("imagen-4.0-generate-001");
         imagen.prompt = "x".repeat(2_000);
         assert!(validate_profile_request("gemini_images", &imagen, 0, &config).is_err());
+    }
+
+    #[test]
+    fn xai_imagine_profile_is_verified_for_aliases_and_requires_edit_references() {
+        let config = ImageAdapterConfig::default();
+        for model in ["grok-image", "grok-imagine-image", "grok-imagine-image-quality"] {
+            let profile = image_model_profile("xai_images", model, &config);
+            assert_eq!(profile.family, ImageModelFamily::XaiImagine);
+            assert!(profile.descriptor.warnings.is_empty());
+            assert_eq!(profile.official_docs, Some(XAI_IMAGE_DOCS));
+            assert!(validate_profile_request(
+                "xai_images",
+                &request(model),
+                0,
+                &config
+            )
+            .is_ok());
+
+            let mut edit = request(model);
+            edit.operation = ImageOperation::Edit;
+            assert!(validate_profile_request("xai_images", &edit, 0, &config).is_err());
+            assert!(validate_profile_request("xai_images", &edit, 1, &config).is_ok());
+            assert!(validate_profile_request("xai_images", &edit, 3, &config).is_ok());
+            assert!(validate_profile_request("xai_images", &edit, 4, &config).is_err());
+        }
     }
 
     #[test]
