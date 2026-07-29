@@ -8,6 +8,10 @@ import {
   getDrawingProvidersForModel,
   normalizeDrawingSettingsByConfig,
 } from '@/lib/drawingModels';
+import {
+  getDrawingWarningDescription,
+  getDrawingWarningTitle,
+} from '@/lib/drawingWarnings';
 import { SmartProviderIcon } from '@/lib/providerIcons';
 import { useUIStore } from '@/stores/uiStore';
 import type { DrawingSettings, DrawingTarget, ProviderConfig } from '@/types';
@@ -43,6 +47,8 @@ export function DrawingSettingsPanel({
   const setActivePage = useUIStore((state) => state.setActivePage);
   const setSettingsSection = useUIStore((state) => state.setSettingsSection);
   const translateOption = (key: string, fallback: string) => t(key, fallback);
+  const translateWarning = (key: string, options: Record<string, unknown>) =>
+    String(t(key, options as never));
   const paramConfig = getDrawingParamConfig(settings.modelId);
   const basicFields = paramConfig.groups.find((group) => group.id === 'basic')?.fields ?? [];
   const advancedFields = paramConfig.groups.find((group) => group.id === 'advanced')?.fields ?? [];
@@ -260,13 +266,8 @@ export function DrawingSettingsPanel({
             type="warning"
             showIcon
             style={{ marginBottom: 12 }}
-            title={warning.message}
-            description={[
-              warning.deadline ? `截止日期：${warning.deadline}` : null,
-              warning.replacement_model_id
-                ? `建议模型：${warning.replacement_model_id}`
-                : null,
-            ].filter(Boolean).join('；') || undefined}
+            title={getDrawingWarningTitle(warning, selectedTarget.model_id, translateWarning)}
+            description={getDrawingWarningDescription(warning, translateWarning)}
           />
         ))}
         {visibleBasicFields.map(renderField)}

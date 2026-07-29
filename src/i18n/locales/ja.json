@@ -1827,6 +1827,11 @@
       "referenceImageFormat": {
         "object": "オブジェクト配列",
         "string": "文字列配列"
+      },
+      "personGeneration": {
+        "dontAllow": "許可しない",
+        "allowAdult": "成人を許可",
+        "allowAll": "すべて許可"
       }
     },
     "deleteConfirmTitle": "この描画記録を削除しますか？",
@@ -1834,7 +1839,27 @@
     "referenceImageFormat": "参照画像形式",
     "stopConfirmContent": "停止すると、この記録はユーザーによる停止としてマークされます。",
     "stopConfirmTitle": "生成を停止しますか？",
-    "stopped": "ユーザーが停止"
+    "stopped": "ユーザーが停止",
+    "advancedSettings": "詳細設定",
+    "generationApiPath": "生成 API パス",
+    "editApiPath": "編集 API パス",
+    "operationUnavailable": "現在のモデルはこの画像操作に対応していません。モデルを切り替えるか参照画像を削除してください。",
+    "personGeneration": "人物生成",
+    "resolution": "解像度",
+    "seed": "シード",
+    "inferenceSteps": "推論ステップ",
+    "guidanceScale": "ガイダンス強度",
+    "warning": {
+      "unknown_image_profile": "{{modelId}} には検証済みの画像パラメータプロファイルがありません。保守的なテキスト生成のみ有効です。",
+      "legacy_model": "{{modelId}} は旧世代の画像モデルです。新規用途には {{replacement}} を使用してください。",
+      "retired_model": "{{modelId}} は廃止済みのプレビューモデルです。互換プロキシでは引き続き利用できます。",
+      "deprecated_model": "この画像モデルは非推奨で停止予定です。互換エンドポイントでは引き続き利用できます。",
+      "deadline": "期限：{{deadline}}",
+      "replacement": "推奨モデル：{{modelId}}",
+      "separator": " · "
+    },
+    "referenceImageParamName": "サードパーティ画像パラメータ名",
+    "referenceImageParamNameHint": "サードパーティ互換 API 向け。公式 OpenAI は images/image[] を自動使用します。"
   },
   "roles": {
     "addOpeningQuestion": "質問を追加",

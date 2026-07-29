@@ -9,6 +9,8 @@ const labels: Record<string, string> = {
   'drawing.size': '尺寸',
   'drawing.batchCount': '批量张数',
   'drawing.referenceImageFormat': '参考图格式',
+  'drawing.personGeneration': '人物生成',
+  'drawing.seed': '随机种子',
   'drawing.option.auto': '自动',
   'drawing.option.quality.standard': '标准',
   'drawing.option.quality.hd': '高清',
@@ -17,6 +19,8 @@ const labels: Record<string, string> = {
   'drawing.option.background.transparent': '透明',
   'drawing.option.referenceImageMode.base64': 'Base64',
   'drawing.option.referenceImageFormat.object': '对象数组',
+  'drawing.option.personGeneration.allowAdult': '允许成人',
+  'drawing.option.personGeneration.dontAllow': '不允许',
 };
 const translate = (key: string, fallback: string) => labels[key] ?? fallback;
 
@@ -60,5 +64,11 @@ describe('drawing parameter presentation', () => {
       value: 'object',
     });
     expect(getDrawingParameterOption('aspect_ratio', '16:9', translate).label).toBe('16:9');
+    expect(getDrawingParameterLabel('person_generation', translate)).toBe('人物生成');
+    expect(getDrawingParameterLabel('seed', translate)).toBe('随机种子');
+    expect(getDrawingParameterOption('person_generation', 'allow_adult', translate).label)
+      .toBe('允许成人');
+    expect(getDrawingParameterOption('person_generation', 'dont_allow', translate).label)
+      .toBe('不允许');
   });
 });

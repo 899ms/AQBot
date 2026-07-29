@@ -243,7 +243,7 @@ const advancedFields: DrawingParamField[] = [
     labelKey: 'drawing.referenceImageParamName',
     fallbackLabel: '第三方图片参数名',
     placeholder: 'images',
-    hintKey: 'drawing.referenceImageParamName.hint',
+    hintKey: 'drawing.referenceImageParamNameHint',
     fallbackHint: '仅用于第三方兼容接口；官方 OpenAI 会自动使用 images/image[]',
   },
   {

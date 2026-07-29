@@ -1874,7 +1874,32 @@
       "referenceImageFormat": {
         "object": "对象数组",
         "string": "字符串数组"
+      },
+      "personGeneration": {
+        "dontAllow": "不允许",
+        "allowAdult": "允许成人",
+        "allowAll": "全部允许"
       }
-    }
+    },
+    "advancedSettings": "高级设置",
+    "generationApiPath": "生图接口",
+    "editApiPath": "编辑接口",
+    "operationUnavailable": "当前模型不支持这项图片操作，请更换模型或移除参考图。",
+    "personGeneration": "人物生成",
+    "resolution": "分辨率",
+    "seed": "随机种子",
+    "inferenceSteps": "推理步数",
+    "guidanceScale": "引导强度",
+    "warning": {
+      "unknown_image_profile": "{{modelId}} 尚未验证图片参数配置，当前仅允许保守的文生图请求。",
+      "legacy_model": "{{modelId}} 是旧版图片模型；新项目请使用 {{replacement}}。",
+      "retired_model": "{{modelId}} 是已退役的预览模型。兼容代理仍可继续请求。",
+      "deprecated_model": "该图片模型已弃用并计划下线。兼容端点仍可使用。",
+      "deadline": "截止日期：{{deadline}}",
+      "replacement": "建议模型：{{modelId}}",
+      "separator": "；"
+    },
+    "referenceImageParamName": "第三方图片参数名",
+    "referenceImageParamNameHint": "仅用于第三方兼容接口；官方 OpenAI 会自动使用 images/image[]"
   }
 }

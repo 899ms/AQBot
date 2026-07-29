@@ -1827,6 +1827,11 @@
       "referenceImageFormat": {
         "object": "객체 배열",
         "string": "문자열 배열"
+      },
+      "personGeneration": {
+        "dontAllow": "허용 안 함",
+        "allowAdult": "성인 허용",
+        "allowAll": "모두 허용"
       }
     },
     "deleteConfirmTitle": "이 그림 기록을 삭제할까요?",
@@ -1834,7 +1839,27 @@
     "referenceImageFormat": "참조 이미지 형식",
     "stopConfirmContent": "중지하면 이 기록이 사용자 중지로 표시됩니다.",
     "stopConfirmTitle": "생성을 중지할까요?",
-    "stopped": "사용자가 중지함"
+    "stopped": "사용자가 중지함",
+    "advancedSettings": "고급 설정",
+    "generationApiPath": "생성 API 경로",
+    "editApiPath": "편집 API 경로",
+    "operationUnavailable": "현재 모델은 이 이미지 작업을 지원하지 않습니다. 모델을 바꾸거나 참고 이미지를 제거하세요.",
+    "personGeneration": "인물 생성",
+    "resolution": "해상도",
+    "seed": "시드",
+    "inferenceSteps": "추론 단계",
+    "guidanceScale": "가이던스 강도",
+    "warning": {
+      "unknown_image_profile": "{{modelId}}에는 검증된 이미지 파라미터 프로필이 없습니다. 보수적인 텍스트-이미지 요청만 허용됩니다.",
+      "legacy_model": "{{modelId}}는 레거시 이미지 모델입니다. 새 작업에는 {{replacement}}를 사용하세요.",
+      "retired_model": "{{modelId}}는 중단된 미리보기 모델입니다. 호환 프록시에서는 계속 사용할 수 있습니다.",
+      "deprecated_model": "이 이미지 모델은 더 이상 사용되지 않으며 종료 예정입니다. 호환 엔드포인트는 계속 사용할 수 있습니다.",
+      "deadline": "마감일: {{deadline}}",
+      "replacement": "권장 모델: {{modelId}}",
+      "separator": " · "
+    },
+    "referenceImageParamName": "서드파티 이미지 파라미터 이름",
+    "referenceImageParamNameHint": "서드파티 호환 API 전용입니다. 공식 OpenAI는 images/image[]를 자동 사용합니다."
   },
   "roles": {
     "addOpeningQuestion": "질문 추가",

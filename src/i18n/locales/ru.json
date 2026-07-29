@@ -1827,6 +1827,11 @@
       "referenceImageFormat": {
         "object": "Массив объектов",
         "string": "Массив строк"
+      },
+      "personGeneration": {
+        "dontAllow": "Do not allow",
+        "allowAdult": "Allow adults",
+        "allowAll": "Allow all"
       }
     },
     "deleteConfirmTitle": "Удалить эту запись рисунка?",
@@ -1834,7 +1839,27 @@
     "referenceImageFormat": "Формат эталонного изображения",
     "stopConfirmContent": "Запись будет помечена как остановленная пользователем.",
     "stopConfirmTitle": "Остановить генерацию?",
-    "stopped": "Остановлено пользователем"
+    "stopped": "Остановлено пользователем",
+    "advancedSettings": "Advanced settings",
+    "generationApiPath": "Generation API path",
+    "editApiPath": "Edit API path",
+    "operationUnavailable": "This model does not support the current image operation. Switch models or remove references.",
+    "personGeneration": "Person generation",
+    "resolution": "Resolution",
+    "seed": "Seed",
+    "inferenceSteps": "Inference steps",
+    "guidanceScale": "Guidance scale",
+    "warning": {
+      "unknown_image_profile": "{{modelId}} has no verified image parameter profile; only conservative text-to-image requests are enabled.",
+      "legacy_model": "{{modelId}} is a legacy image model; use {{replacement}} for new work.",
+      "retired_model": "{{modelId}} is a retired preview model. Compatible proxies can still serve requests.",
+      "deprecated_model": "This image model is deprecated and scheduled to shut down. Compatible endpoints remain available.",
+      "deadline": "Deadline: {{deadline}}",
+      "replacement": "Suggested model: {{modelId}}",
+      "separator": " · "
+    },
+    "referenceImageParamName": "Third-party image parameter name",
+    "referenceImageParamNameHint": "Only for third-party compatible APIs; official OpenAI uses images/image[] automatically."
   },
   "roles": {
     "addOpeningQuestion": "Добавить вопрос",

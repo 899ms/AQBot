@@ -8,8 +8,17 @@ interface LocalizedLabel {
 const PARAMETER_LABELS: Record<string, LocalizedLabel> = {
   aspect_ratio: { key: 'drawing.aspectRatio', fallback: 'Aspect ratio' },
   background: { key: 'drawing.background', fallback: 'Background' },
+  guidance_scale: { key: 'drawing.guidanceScale', fallback: 'Guidance scale' },
   n: { key: 'drawing.batchCount', fallback: 'Batch count' },
+  num_inference_steps: {
+    key: 'drawing.inferenceSteps',
+    fallback: 'Inference steps',
+  },
   output_format: { key: 'drawing.outputFormat', fallback: 'Output format' },
+  person_generation: {
+    key: 'drawing.personGeneration',
+    fallback: 'Person generation',
+  },
   quality: { key: 'drawing.quality', fallback: 'Quality' },
   reference_image_format: {
     key: 'drawing.referenceImageFormat',
@@ -19,6 +28,8 @@ const PARAMETER_LABELS: Record<string, LocalizedLabel> = {
     key: 'drawing.referenceImageMode',
     fallback: 'Reference image transport',
   },
+  resolution: { key: 'drawing.resolution', fallback: 'Resolution' },
+  seed: { key: 'drawing.seed', fallback: 'Seed' },
   size: { key: 'drawing.size', fallback: 'Size' },
 };
 
@@ -42,6 +53,20 @@ const OPTION_LABELS: Record<string, Record<string, LocalizedLabel>> = {
     transparent: {
       key: 'drawing.option.background.transparent',
       fallback: 'Transparent',
+    },
+  },
+  person_generation: {
+    allow_adult: {
+      key: 'drawing.option.personGeneration.allowAdult',
+      fallback: 'Allow adults',
+    },
+    allow_all: {
+      key: 'drawing.option.personGeneration.allowAll',
+      fallback: 'Allow all',
+    },
+    dont_allow: {
+      key: 'drawing.option.personGeneration.dontAllow',
+      fallback: 'Do not allow',
     },
   },
   quality: {

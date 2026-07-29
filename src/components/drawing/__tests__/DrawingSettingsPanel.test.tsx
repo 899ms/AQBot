@@ -20,12 +20,23 @@ vi.mock('react-i18next', () => ({
     ) => {
       const labels: Record<string, string> = {
         'drawing.aspectRatio': '宽高比',
+        'drawing.warning.retired_model':
+          '{{modelId}} 是已退役的预览模型。兼容代理仍可继续请求。',
+        'drawing.warning.unknown_image_profile':
+          '{{modelId}} 尚未验证图片参数配置，当前仅允许保守的文生图请求。',
+        'drawing.warning.deadline': '截止日期：{{deadline}}',
+        'drawing.warning.replacement': '建议模型：{{modelId}}',
+        'drawing.warning.separator': '；',
       };
-      if (labels[key]) return labels[key];
-      if (typeof fallbackOrOptions === 'string') return fallbackOrOptions;
-      const template = String(fallbackOrOptions?.defaultValue ?? key);
+      const template = labels[key]
+        ?? (typeof fallbackOrOptions === 'string'
+          ? fallbackOrOptions
+          : String(fallbackOrOptions?.defaultValue ?? key));
+      if (typeof fallbackOrOptions === 'string' || fallbackOrOptions == null) {
+        return template;
+      }
       return template.replace(/\{\{(\w+)\}\}/g, (_match, name: string) =>
-        String(fallbackOrOptions?.[name] ?? ''),
+        String(fallbackOrOptions[name] ?? ''),
       );
     },
   }),
@@ -309,7 +320,7 @@ describe('DrawingSettingsPanel', () => {
     }));
   });
 
-  it('shows model lifecycle warnings without removing the controls', () => {
+  it('shows localized model lifecycle warnings without removing the controls', () => {
     render(
       <DrawingSettingsPanel
         settings={settingsFixture}
@@ -330,9 +341,43 @@ describe('DrawingSettingsPanel', () => {
       />,
     );
 
-    expect(screen.getByText('This preview model is retired.')).toBeDefined();
-    expect(screen.getByText(/2026-01-15/)).toBeDefined();
+    expect(
+      screen.getByText('gpt-image-2 是已退役的预览模型。兼容代理仍可继续请求。'),
+    ).toBeDefined();
+    expect(screen.getByText(/截止日期：2026-01-15/)).toBeDefined();
+    expect(screen.getByText(/建议模型：gemini-3.1-flash-image/)).toBeDefined();
     expect(screen.getByText('模型')).toBeDefined();
+  });
+
+  it('localizes unknown image profile warnings for models without a verified profile', () => {
+    render(
+      <DrawingSettingsPanel
+        settings={{ ...settingsFixture, modelId: 'grok-image' }}
+        providers={providersFixture}
+        targets={[{
+          ...xaiTarget,
+          model_id: 'grok-image',
+          model_name: 'grok-image',
+          descriptor: {
+            ...xaiTarget.descriptor,
+            warnings: [{
+              code: 'unknown_image_profile',
+              message:
+                'grok-image has no verified image parameter profile; only conservative text-to-image requests are enabled.',
+              deadline: null,
+              replacement_model_id: null,
+            }],
+          },
+        }]}
+        onChange={() => {}}
+      />,
+    );
+
+    expect(
+      screen.getByText(
+        'grok-image 尚未验证图片参数配置，当前仅允许保守的文生图请求。',
+      ),
+    ).toBeDefined();
   });
 
   it('allows a descriptor string size while keeping official suggestions', () => {

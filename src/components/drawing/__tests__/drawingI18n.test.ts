@@ -10,6 +10,17 @@ describe('drawing i18n', () => {
       expect(locale.drawing, fileName).toMatchObject({
         noConfiguredImageProvider: expect.any(String),
         openProviderSettings: expect.any(String),
+        advancedSettings: expect.any(String),
+        generationApiPath: expect.any(String),
+        editApiPath: expect.any(String),
+        referenceImageParamName: expect.any(String),
+        referenceImageParamNameHint: expect.any(String),
+        operationUnavailable: expect.any(String),
+        personGeneration: expect.any(String),
+        resolution: expect.any(String),
+        seed: expect.any(String),
+        inferenceSteps: expect.any(String),
+        guidanceScale: expect.any(String),
         aspectRatio: expect.any(String),
         referenceImageFormat: expect.any(String),
         option: {
@@ -29,6 +40,20 @@ describe('drawing i18n', () => {
             object: expect.any(String),
             string: expect.any(String),
           },
+          personGeneration: {
+            dontAllow: expect.any(String),
+            allowAdult: expect.any(String),
+            allowAll: expect.any(String),
+          },
+        },
+        warning: {
+          unknown_image_profile: expect.any(String),
+          legacy_model: expect.any(String),
+          retired_model: expect.any(String),
+          deprecated_model: expect.any(String),
+          deadline: expect.any(String),
+          replacement: expect.any(String),
+          separator: expect.any(String),
         },
       });
       expect(locale.imageProtocol, fileName).toMatchObject({

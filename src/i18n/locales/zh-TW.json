@@ -1827,6 +1827,11 @@
       "referenceImageFormat": {
         "object": "物件陣列",
         "string": "字串陣列"
+      },
+      "personGeneration": {
+        "dontAllow": "不允許",
+        "allowAdult": "允許成人",
+        "allowAll": "全部允許"
       }
     },
     "deleteConfirmTitle": "刪除這條繪畫記錄？",
@@ -1834,7 +1839,27 @@
     "referenceImageFormat": "參考圖格式",
     "stopConfirmContent": "停止後這條記錄會標記為主動停止。",
     "stopConfirmTitle": "停止生成？",
-    "stopped": "主動停止"
+    "stopped": "主動停止",
+    "advancedSettings": "進階設定",
+    "generationApiPath": "生圖介面",
+    "editApiPath": "編輯介面",
+    "operationUnavailable": "目前模型不支援這項圖片操作，請更換模型或移除參考圖。",
+    "personGeneration": "人物生成",
+    "resolution": "解析度",
+    "seed": "隨機種子",
+    "inferenceSteps": "推理步數",
+    "guidanceScale": "引導強度",
+    "warning": {
+      "unknown_image_profile": "{{modelId}} 尚未驗證圖片參數設定，目前僅允許保守的文生圖請求。",
+      "legacy_model": "{{modelId}} 是舊版圖片模型；新專案請使用 {{replacement}}。",
+      "retired_model": "{{modelId}} 是已退役的預覽模型。相容代理仍可繼續請求。",
+      "deprecated_model": "該圖片模型已棄用並計畫下線。相容端點仍可使用。",
+      "deadline": "截止日期：{{deadline}}",
+      "replacement": "建議模型：{{modelId}}",
+      "separator": "；"
+    },
+    "referenceImageParamName": "第三方圖片參數名",
+    "referenceImageParamNameHint": "僅用於第三方相容介面；官方 OpenAI 會自動使用 images/image[]"
   },
   "roles": {
     "addOpeningQuestion": "新增問題",
