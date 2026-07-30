@@ -182,6 +182,61 @@ describe('ProviderList', () => {
     expect(screen.getAllByTestId('provider-icon')).toHaveLength(2);
   });
 
+  it('keeps the selected built-in provider when its virtual id is materialized', () => {
+    const firstProvider = makeProvider({
+      id: 'real-openai',
+      name: 'OpenAI',
+      builtin_id: 'openai',
+    });
+    selectedProviderId = 'builtin_shuaiapi';
+    providers = [
+      firstProvider,
+      makeProvider({
+        id: 'builtin_shuaiapi',
+        name: 'SHUAI API',
+        builtin_id: 'shuaiapi',
+      }),
+    ];
+    const { rerender } = render(
+      <App>
+        <ProviderList />
+      </App>,
+    );
+
+    providers = [
+      firstProvider,
+      makeProvider({
+        id: 'real-shuaiapi',
+        name: 'SHUAI API',
+        builtin_id: 'shuaiapi',
+      }),
+    ];
+    rerender(
+      <App>
+        <ProviderList />
+      </App>,
+    );
+
+    expect(mocks.setSelectedProviderId).toHaveBeenCalledWith('real-shuaiapi');
+    expect(mocks.setSelectedProviderId).not.toHaveBeenCalledWith('real-openai');
+  });
+
+  it('selects the first provider when the selected provider is genuinely missing', () => {
+    selectedProviderId = 'deleted-custom-provider';
+    providers = [
+      makeProvider({ id: 'real-openai', name: 'OpenAI', builtin_id: 'openai' }),
+      makeProvider({ id: 'custom-openai', name: 'Custom OpenAI', builtin_id: null }),
+    ];
+
+    render(
+      <App>
+        <ProviderList />
+      </App>,
+    );
+
+    expect(mocks.setSelectedProviderId).toHaveBeenCalledWith('real-openai');
+  });
+
   it('requires Region and hides API Host when adding AWS Bedrock', async () => {
     const user = userEvent.setup();
     mocks.createProvider.mockResolvedValue(

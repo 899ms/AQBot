@@ -245,14 +245,19 @@ export function ProviderList() {
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
 
-  // Auto-select first provider if none selected
+  // Preserve the logical selection when a virtual built-in receives its real database ID.
   React.useEffect(() => {
-    if (
-      providers.length > 0 &&
-      (!selectedProviderId || !providers.some((p) => p.id === selectedProviderId))
-    ) {
-      setSelectedProviderId(providers[0].id);
+    if (providers.length === 0) return;
+    if (selectedProviderId && providers.some((provider) => provider.id === selectedProviderId)) {
+      return;
     }
+
+    const materializedProvider = providers.find(
+      (provider) =>
+        provider.builtin_id
+        && selectedProviderId === `builtin_${provider.builtin_id}`,
+    );
+    setSelectedProviderId(materializedProvider?.id ?? providers[0].id);
   }, [selectedProviderId, providers, setSelectedProviderId]);
 
   const [search, setSearch] = useState('');
