@@ -819,6 +819,8 @@
     "awsSessionToken": "Session Token (اختياري)",
     "bedrockManualModelHelp": "أدخل معرّف نموذج أساسي أو معرّف ملف تعريف استدلال أو ARN للنموذج.",
     "models": "النماذج",
+    "emptyModelsHint": "قائمة النماذج فارغة. قم أولاً بتهيئة مفتاح API ثم مزامنة النماذج من المزود.",
+    "noMatchingModels": "لا توجد نماذج مطابقة",
     "modelName": "اسم النموذج",
     "modelCapabilities": "الإمكانيات",
     "modelEnabled": "مفعّل",

@@ -819,6 +819,8 @@
     "awsSessionToken": "Session Token(선택 사항)",
     "bedrockManualModelHelp": "파운데이션 모델 ID, inference profile ID 또는 모델 ARN을 입력할 수 있습니다.",
     "models": "모델",
+    "emptyModelsHint": "모델 목록이 비어 있습니다. 먼저 API 키를 구성한 다음 「모델 동기화」로 업스트림에서 가져오세요.",
+    "noMatchingModels": "일치하는 모델이 없습니다",
     "modelName": "모델 이름",
     "modelCapabilities": "기능",
     "modelEnabled": "활성화됨",

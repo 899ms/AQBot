@@ -830,6 +830,8 @@
     "awsSessionToken": "Session Token（選填）",
     "bedrockManualModelHelp": "可填寫基礎模型 ID、inference profile ID 或模型 ARN。",
     "models": "模型清單",
+    "emptyModelsHint": "模型清單為空。請先設定 API 金鑰，然後點擊「同步模型」從上游拉取模型。",
+    "noMatchingModels": "未找到符合的模型",
     "modelName": "模型名稱",
     "modelCapabilities": "能力",
     "modelEnabled": "啟用",

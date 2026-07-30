@@ -819,6 +819,8 @@
     "awsSessionToken": "Session Token (optional)",
     "bedrockManualModelHelp": "Geben Sie eine Foundation-Model-ID, Inference-Profile-ID oder Modell-ARN ein.",
     "models": "Modelle",
+    "emptyModelsHint": "Noch keine Modelle. Konfigurieren Sie zuerst einen API-Schlüssel und synchronisieren Sie dann Modelle vom Upstream-Anbieter.",
+    "noMatchingModels": "Keine passenden Modelle",
     "modelName": "Modellname",
     "modelCapabilities": "Fähigkeiten",
     "modelEnabled": "Aktiviert",

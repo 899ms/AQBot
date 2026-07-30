@@ -819,6 +819,8 @@
     "awsSessionToken": "Session Token (वैकल्पिक)",
     "bedrockManualModelHelp": "फ़ाउंडेशन मॉडल ID, inference profile ID या मॉडल ARN दर्ज करें।",
     "models": "मॉडल",
+    "emptyModelsHint": "मॉडल सूची खाली है। पहले API कुंजी कॉन्फ़िगर करें, फिर अपस्ट्रीम से मॉडल सिंक करें।",
+    "noMatchingModels": "कोई मिलान मॉडल नहीं",
     "modelName": "मॉडल नाम",
     "modelCapabilities": "क्षमताएँ",
     "modelEnabled": "सक्षम",

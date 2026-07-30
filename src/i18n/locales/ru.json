@@ -819,6 +819,8 @@
     "awsSessionToken": "Session Token (необязательно)",
     "bedrockManualModelHelp": "Введите ID базовой модели, ID профиля инференса или ARN модели.",
     "models": "Модели",
+    "emptyModelsHint": "Список моделей пуст. Сначала настройте API-ключ, затем синхронизируйте модели с провайдером.",
+    "noMatchingModels": "Подходящие модели не найдены",
     "modelName": "Имя модели",
     "modelCapabilities": "Возможности",
     "modelEnabled": "Включено",

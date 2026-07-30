@@ -255,6 +255,53 @@ describe('ProviderDetail', () => {
     return screen.findByRole('dialog');
   }
 
+  it('shows empty-models guidance with actions when the model list is empty', async () => {
+    provider.models = [];
+
+    render(
+      <App>
+        <ProviderDetail providerId="provider-1" />
+      </App>,
+    );
+
+    expect(
+      screen.getByText('模型列表为空。请先配置 API 密钥，然后点击「同步模型」从上游拉取模型。'),
+    ).toBeInTheDocument();
+    // API Keys card + empty models empty-state both expose "add key"
+    expect(screen.getAllByRole('button', { name: 'settings.addKey' }).length).toBeGreaterThanOrEqual(1);
+    const syncButtons = screen.getAllByRole('button', { name: 'settings.syncModels' });
+    expect(syncButtons.length).toBeGreaterThanOrEqual(1);
+
+    await userEvent.click(syncButtons[syncButtons.length - 1]);
+    await waitFor(() => {
+      expect(mocks.fetchRemoteModels).toHaveBeenCalledWith('provider-1');
+    });
+  });
+
+  it('shows official website link for built-in providers', () => {
+    provider.builtin_id = 'openai';
+
+    render(
+      <App>
+        <ProviderDetail providerId="provider-1" />
+      </App>,
+    );
+
+    expect(screen.getByRole('button', { name: '官网' })).toBeInTheDocument();
+  });
+
+  it('hides official website link for custom providers', () => {
+    provider.builtin_id = null;
+
+    render(
+      <App>
+        <ProviderDetail providerId="provider-1" />
+      </App>,
+    );
+
+    expect(screen.queryByRole('button', { name: '官网' })).not.toBeInTheDocument();
+  });
+
   it('shows model sync request preview from the resolved base URL', () => {
     provider.api_host = 'https://api.openai.com';
     provider.api_path = '/v1/chat/completions';

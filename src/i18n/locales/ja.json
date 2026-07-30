@@ -819,6 +819,8 @@
     "awsSessionToken": "Session Token（任意）",
     "bedrockManualModelHelp": "基盤モデル ID、inference profile ID、またはモデル ARN を入力できます。",
     "models": "モデル",
+    "emptyModelsHint": "モデルがありません。先に API キーを設定し、「モデルを同期」で上流から取得してください。",
+    "noMatchingModels": "一致するモデルがありません",
     "modelName": "モデル名",
     "modelCapabilities": "機能",
     "modelEnabled": "有効",

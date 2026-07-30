@@ -6,6 +6,7 @@ import {
   Collapse,
   Divider,
   Dropdown,
+  Empty,
   Form,
   Input,
   InputNumber,
@@ -23,7 +24,7 @@ import {
   App,
   theme,
 } from 'antd';
-import { Maximize2, Mic, Lightbulb, Database, Trash2, Eye, EyeOff, Heart, Key, MessageSquare, Plus, RefreshCw, Search, Settings, Minimize2, Wrench, Undo2, CircleHelp, ChevronRight, ChevronDown, Expand, Shrink, SquarePen, ListChecks, X, Power, PowerOff, Pencil, ImagePlus, ListFilter } from 'lucide-react';
+import { Maximize2, Mic, Lightbulb, Database, Trash2, Eye, EyeOff, Heart, Key, MessageSquare, Plus, RefreshCw, Search, Settings, Minimize2, Wrench, Undo2, CircleHelp, ChevronRight, ChevronDown, Expand, Shrink, SquarePen, ListChecks, X, Power, PowerOff, Pencil, ImagePlus, ListFilter, ExternalLink } from 'lucide-react';
 import { ModelIcon } from '@lobehub/icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -55,6 +56,7 @@ import {
 } from './ModelMetadataSyncModal';
 import { ModelSyncPickerModal, type ModelSyncEntry } from './ModelSyncPickerModal';
 import { deriveModelGroupName, formatTokenCount, getModelGroupName } from '@/lib/modelSync';
+import { getBuiltinProviderWebsite, openExternalUrl } from '@/lib/providerWebsites';
 
 const { Text, Title } = Typography;
 
@@ -1384,6 +1386,8 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
 
   if (!provider) return null;
 
+  const providerWebsite = getBuiltinProviderWebsite(provider.builtin_id);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
       {/* Header */}
@@ -1408,10 +1412,22 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
             modelIconsDefaultTab="provider"
           />
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
               <Title level={4} className="!mb-0">
                 {provider.name}
               </Title>
+              {providerWebsite && (
+                <Button
+                  type="link"
+                  size="small"
+                  icon={<ExternalLink size={13} />}
+                  onClick={() => openExternalUrl(providerWebsite)}
+                  style={{ paddingInline: 2, height: 'auto', gap: 2 }}
+                  aria-label={t('settings.website', '官网')}
+                >
+                  {t('settings.website', '官网')}
+                </Button>
+              )}
               {!provider.builtin_id && (
                 <Button
                   type="text"
@@ -1804,6 +1820,45 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
             autoFocus
           />
         )}
+        {(provider.models?.length ?? 0) === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={
+              <div style={{ maxWidth: 400, margin: '0 auto' }}>
+                <Text type="secondary">
+                  {t(
+                    'settings.emptyModelsHint',
+                    '模型列表为空。请先配置 API 密钥，然后点击「同步模型」从上游拉取模型。',
+                  )}
+                </Text>
+              </div>
+            }
+            style={{ padding: '32px 16px' }}
+          >
+            <Space>
+              <Button
+                icon={<Key size={14} />}
+                onClick={handleOpenAddKey}
+              >
+                {t(isBedrock ? 'settings.addAwsCredentials' : 'settings.addKey')}
+              </Button>
+              <Button
+                type="primary"
+                icon={<RefreshCw size={14} />}
+                loading={refreshing}
+                onClick={handleRefreshModels}
+              >
+                {t('settings.syncModels')}
+              </Button>
+            </Space>
+          </Empty>
+        ) : filteredModels.length === 0 ? (
+          <Empty
+            image={Empty.PRESENTED_IMAGE_SIMPLE}
+            description={t('settings.noMatchingModels', '未找到匹配的模型')}
+            style={{ padding: '24px 16px' }}
+          />
+        ) : (
         <div
           ref={modelListParentRef}
           style={{ maxHeight: modelListFullscreen ? 'calc(100vh - 140px)' : 520, overflow: 'auto' }}
@@ -1998,6 +2053,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
             })}
           </div>
         </div>
+        )}
       </Card>
 
       {/* Custom Headers */}

@@ -819,6 +819,8 @@
     "awsSessionToken": "Session Token (opcional)",
     "bedrockManualModelHelp": "Introduce un ID de modelo fundacional, un ID de perfil de inferencia o un ARN de modelo.",
     "models": "Modelos",
+    "emptyModelsHint": "No hay modelos. Configura primero una clave API y luego sincroniza modelos del proveedor.",
+    "noMatchingModels": "No hay modelos coincidentes",
     "modelName": "Nombre del modelo",
     "modelCapabilities": "Capacidades",
     "modelEnabled": "Activado",
