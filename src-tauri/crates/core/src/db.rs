@@ -524,6 +524,13 @@ pub fn get_builtin_providers() -> Vec<BuiltinProvider> {
             ],
         },
         BuiltinProvider {
+            builtin_id: "shuaiapi",
+            name: "SHUAI API",
+            provider_type: ProviderType::OpenAI,
+            api_host: "https://api.shuaiapi.com",
+            models: vec![],
+        },
+        BuiltinProvider {
             builtin_id: "jina",
             name: "Jina",
             provider_type: ProviderType::Jina,
@@ -609,6 +616,23 @@ mod tests {
 
             assert_eq!(provider.provider_type, provider_type);
         }
+    }
+
+    #[test]
+    fn shuaiapi_builtin_is_registered_between_minimax_and_jina() {
+        let providers = get_builtin_providers();
+        let shuaiapi_index = providers
+            .iter()
+            .position(|provider| provider.builtin_id == "shuaiapi")
+            .expect("missing SHUAI API builtin provider");
+        let shuaiapi = &providers[shuaiapi_index];
+
+        assert_eq!(providers[shuaiapi_index - 1].builtin_id, "minimax");
+        assert_eq!(providers[shuaiapi_index + 1].builtin_id, "jina");
+        assert_eq!(shuaiapi.name, "SHUAI API");
+        assert_eq!(shuaiapi.provider_type, ProviderType::OpenAI);
+        assert_eq!(shuaiapi.api_host, "https://api.shuaiapi.com");
+        assert!(shuaiapi.models.is_empty());
     }
 
     #[test]

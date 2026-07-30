@@ -3,6 +3,8 @@ import type { ProviderConfig } from '@/types';
 import { ProviderIcon, ModelIcon, providerMappings, modelMappings } from '@lobehub/icons';
 import { DynamicLobeIcon } from '@/components/shared/DynamicLobeIcon';
 
+const SHUAI_API_LOGO_URL = 'https://api.shuaiapi.com/images/logo.svg';
+
 const TYPE_TO_PROVIDER: Record<string, string> = {
   openai: 'openai',
   openai_responses: 'openai',
@@ -117,6 +119,27 @@ export const SmartProviderIcon = memo(function SmartProviderIcon({
     // key is a toc `id` (e.g., "Ai302", "OpenAI") — use DynamicLobeIcon for reliable rendering
     return <DynamicLobeIcon iconId={key} size={size} type={type} />;
   }
+  if (provider.builtin_id === 'shuaiapi') {
+    const borderRadius = shape === 'circle' || (shape === undefined && type === 'avatar')
+      ? '50%'
+      : shape === 'square'
+        ? Math.floor(size * 0.1)
+        : undefined;
+    return (
+      <img
+        alt=""
+        height={size}
+        src={SHUAI_API_LOGO_URL}
+        style={{
+          borderRadius,
+          display: 'block',
+          flex: 'none',
+          objectFit: 'contain',
+        }}
+        width={size}
+      />
+    );
+  }
   const result = resolveProviderIcon(provider);
   if (result.type === 'model') {
     return <ModelIcon model={result.key} size={size} type={type} />;
@@ -124,6 +147,7 @@ export const SmartProviderIcon = memo(function SmartProviderIcon({
   return <ProviderIcon provider={result.key} size={size} type={type} shape={shape} />;
 }, (prev, next) =>
   prev.provider.icon === next.provider.icon
+  && prev.provider.builtin_id === next.provider.builtin_id
   && prev.provider.name === next.provider.name
   && prev.provider.provider_type === next.provider.provider_type
   && prev.size === next.size

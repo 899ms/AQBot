@@ -286,6 +286,21 @@ const BUILT_IN_PROVIDERS = [
     updated_at: 1700000000000,
   },
   {
+    id: 'builtin-shuaiapi',
+    builtin_id: 'shuaiapi',
+    name: 'SHUAI API',
+    provider_type: 'openai',
+    api_host: 'https://api.shuaiapi.com',
+    api_path: null,
+    enabled: false,
+    models: [],
+    keys: [],
+    proxy_config: null,
+    sort_order: 9,
+    created_at: 1700000000000,
+    updated_at: 1700000000000,
+  },
+  {
     id: 'builtin-jina',
     name: 'Jina',
     provider_type: 'jina',
@@ -299,7 +314,7 @@ const BUILT_IN_PROVIDERS = [
     ],
     keys: [],
     proxy_config: null,
-    sort_order: 9,
+    sort_order: 10,
     created_at: 1700000000000,
     updated_at: 1700000000000,
   },
@@ -318,7 +333,7 @@ const BUILT_IN_PROVIDERS = [
     ],
     keys: [],
     proxy_config: null,
-    sort_order: 10,
+    sort_order: 11,
     created_at: 1700000000000,
     updated_at: 1700000000000,
   },
@@ -337,30 +352,65 @@ const BUILT_IN_PROVIDERS = [
     ],
     keys: [],
     proxy_config: null,
-    sort_order: 11,
+    sort_order: 12,
     created_at: 1700000000000,
     updated_at: 1700000000000,
   },
 ];
 
+function cloneBuiltInValue<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+const LEGACY_RERANK_PROVIDER_SORT_ORDERS: Record<string, number> = {
+  'builtin-jina': 9,
+  'builtin-cohere': 10,
+  'builtin-voyage': 11,
+};
+
+function shiftLegacyRerankProviderSortOrders(providers: any[]): boolean {
+  let dirty = false;
+  for (const [providerId, legacySortOrder] of Object.entries(LEGACY_RERANK_PROVIDER_SORT_ORDERS)) {
+    const provider = providers.find((item: any) => item.id === providerId);
+    if (provider?.sort_order === legacySortOrder) {
+      provider.sort_order = legacySortOrder + 1;
+      dirty = true;
+    }
+  }
+  return dirty;
+}
+
 function initProviders(): any[] {
   const existing = getStore<any[]>('providers', []);
   if (existing.length === 0) {
-    setStore('providers', BUILT_IN_PROVIDERS);
-    return [...BUILT_IN_PROVIDERS];
+    const providers = cloneBuiltInValue(BUILT_IN_PROVIDERS);
+    setStore('providers', providers);
+    return providers;
   }
-  // Restore missing models for built-in providers (e.g. after a bad fetch_remote_models wipe)
-  let dirty = false;
+  // Restore missing built-in providers and models (e.g. after an upgrade or a bad fetch_remote_models wipe)
+  const isShuaiApiMissing = !existing.some((provider: any) => provider.id === 'builtin-shuaiapi');
+  let dirty = isShuaiApiMissing && shiftLegacyRerankProviderSortOrders(existing);
   for (const builtin of BUILT_IN_PROVIDERS) {
     const stored = existing.find((p: any) => p.id === builtin.id);
-    if (stored && (!stored.models || stored.models.length === 0)) {
-      stored.models = [...builtin.models];
+    if (!stored) {
+      const insertionIndex = existing.findIndex(
+        (provider: any) => (provider.sort_order ?? Number.MAX_SAFE_INTEGER) >= builtin.sort_order,
+      );
+      const provider = cloneBuiltInValue(builtin);
+      if (insertionIndex === -1) {
+        existing.push(provider);
+      } else {
+        existing.splice(insertionIndex, 0, provider);
+      }
       dirty = true;
-    } else if (stored) {
+    } else if (builtin.models.length > 0 && (!stored.models || stored.models.length === 0)) {
+      stored.models = cloneBuiltInValue(builtin.models);
+      dirty = true;
+    } else if (builtin.models.length > 0) {
       const storedModelIds = new Set((stored.models || []).map((model: any) => model.model_id));
       const missingModels = builtin.models.filter((model: any) => !storedModelIds.has(model.model_id));
       if (missingModels.length > 0) {
-        stored.models = [...(stored.models || []), ...missingModels];
+        stored.models = [...(stored.models || []), ...cloneBuiltInValue(missingModels)];
         dirty = true;
       }
     }
