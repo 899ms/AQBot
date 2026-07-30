@@ -25,13 +25,12 @@ import {
   theme,
 } from 'antd';
 import { Maximize2, Mic, Lightbulb, Database, Trash2, Eye, EyeOff, Heart, Key, MessageSquare, Plus, RefreshCw, Search, Settings, Minimize2, Wrench, Undo2, CircleHelp, ChevronRight, ChevronDown, Expand, Shrink, SquarePen, ListChecks, X, Power, PowerOff, Pencil, ImagePlus, ListFilter, ExternalLink } from 'lucide-react';
-import { ModelIcon } from '@lobehub/icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { useProviderStore, useUIStore } from '@/stores';
-import { SmartProviderIcon } from '@/lib/providerIcons';
+import { SmartModelIcon, SmartProviderIcon } from '@/lib/providerIcons';
 import { getEditableCapabilities, getVisibleModelCapabilities, sanitizeModelCapabilities } from '@/lib/modelCapabilities';
 import { IconEditor } from '@/components/shared/IconEditor';
 import { DynamicLobeIcon } from '@/components/shared/DynamicLobeIcon';
@@ -1911,7 +1910,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                         />
                       )}
                       {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      <ModelIcon model={models[0]?.model_id ?? group} size={20} type="avatar" />
+                      <SmartModelIcon modelId={models[0]?.model_id ?? group} provider={provider} size={20} type="avatar" />
                       <Text style={{ fontWeight: 600 }}>{group}</Text>
                       <Tag style={{ fontSize: 11, lineHeight: '18px', padding: '0 6px', margin: 0 }}>{models.length}</Tag>
                       <div style={{ flex: 1 }} />
@@ -1993,7 +1992,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                     )}
                     {iconOverrides[model.model_id]
                       ? <DynamicLobeIcon iconId={iconOverrides[model.model_id]} size={20} type="avatar" />
-                      : <ModelIcon model={model.model_id} size={20} type="avatar" />
+                      : <SmartModelIcon modelId={model.model_id} provider={provider} size={20} type="avatar" />
                     }
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1 flex-wrap">
@@ -2397,7 +2396,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                 size={32}
                 showModelIcons
                 showClear={!!iconOverrides[editingModel.model_id]}
-                defaultIcon={<ModelIcon model={editingModel.model_id} size={32} type="avatar" />}
+                defaultIcon={<SmartModelIcon modelId={editingModel.model_id} provider={provider} size={32} type="avatar" />}
               />
               <div className="flex items-center gap-1.5 min-w-0 flex-1">
                 <span className="font-medium truncate">{editingModel.name || editingModel.model_id}</span>
@@ -2940,6 +2939,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
         entries={pickerModels}
         catalog={pickerCatalog}
         localModels={provider.models}
+        provider={provider}
         onCancel={() => setPickerOpen(false)}
         onApply={handlePickerApply}
       />

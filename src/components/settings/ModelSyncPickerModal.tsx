@@ -27,7 +27,6 @@ import {
   Search,
   Wrench,
 } from 'lucide-react';
-import { ModelIcon } from '@lobehub/icons';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
@@ -37,12 +36,14 @@ import type {
   ModelCatalogStatus,
   ModelSyncCandidate,
   ModelSyncStatus,
+  ProviderConfig,
 } from '@/types';
 import {
   MODEL_SYNC_STATUS_CONFIG,
   formatTokenCount,
   getModelGroupName,
 } from '@/lib/modelSync';
+import { SmartModelIcon } from '@/lib/providerIcons';
 import { ModelCatalogStatusBar } from './ModelCatalogStatusBar';
 
 const { Text } = Typography;
@@ -137,6 +138,8 @@ interface ModelSyncPickerModalProps {
   entries: ModelSyncEntry[];
   catalog: ModelCatalogStatus | null;
   localModels: Model[];
+  /** Used as icon fallback when a model_id has no brand mapping (e.g. Cohere/Voyage rerank). */
+  provider?: ProviderConfig | null;
   onCancel: () => void;
   onApply: (models: Model[]) => void | Promise<void>;
 }
@@ -154,6 +157,7 @@ export function ModelSyncPickerModal({
   entries,
   catalog,
   localModels,
+  provider,
   onCancel,
   onApply,
 }: ModelSyncPickerModalProps) {
@@ -603,7 +607,7 @@ export function ModelSyncPickerModal({
                           }}
                         />
                       </div>
-                      <ModelIcon model={models[0]?.model.model_id ?? group} size={20} type="avatar" />
+                      <SmartModelIcon modelId={models[0]?.model.model_id ?? group} provider={provider} size={20} type="avatar" />
                       <Text style={{ fontWeight: 600 }}>{group}</Text>
                       <Tag style={{ fontSize: 11, lineHeight: '18px', padding: '0 6px', margin: 0 }}>
                         {selectableModels.length > 0 ? `${selectedInGroup}/${models.length}` : models.length}
@@ -638,7 +642,7 @@ export function ModelSyncPickerModal({
                         }}
                       />
                     </div>
-                    <ModelIcon model={m.model_id} size={20} type="avatar" />
+                    <SmartModelIcon modelId={m.model_id} provider={provider} size={20} type="avatar" />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1 flex-wrap">
                         <span style={{ overflowWrap: 'anywhere' }}>{m.name || m.model_id}</span>

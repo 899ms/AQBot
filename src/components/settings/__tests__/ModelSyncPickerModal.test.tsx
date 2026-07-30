@@ -15,6 +15,14 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('@lobehub/icons', () => ({
   ModelIcon: () => <div>model-icon</div>,
+  ProviderIcon: () => <div>provider-icon</div>,
+  modelMappings: [],
+  providerMappings: [],
+}));
+
+vi.mock('@/lib/providerIcons', () => ({
+  SmartModelIcon: () => <div>smart-model-icon</div>,
+  SmartProviderIcon: () => <div>smart-provider-icon</div>,
 }));
 
 vi.mock('@tanstack/react-virtual', () => ({

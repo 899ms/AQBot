@@ -53,6 +53,20 @@ function findModelKey(name: string): string | null {
   return null;
 }
 
+/**
+ * Whether @lobehub/icons ModelIcon would resolve a brand icon for this model id
+ * (as opposed to its generic Brain DefaultAvatar).
+ *
+ * ModelIcon only matches model_id keywords — e.g. Cohere maps to `command`,
+ * Voyage to `voyage`. IDs like `rerank-v4.0` / `rerank-2.5` do not match and
+ * fall through to the default avatar.
+ */
+export function hasKnownModelIcon(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase().replace(/\s+/g, '');
+  if (!normalized) return false;
+  return findModelKey(normalized) != null;
+}
+
 export type IconResult = {
   type: 'provider';
   key: string;
@@ -150,6 +164,46 @@ export const SmartProviderIcon = memo(function SmartProviderIcon({
   && prev.provider.builtin_id === next.provider.builtin_id
   && prev.provider.name === next.provider.name
   && prev.provider.provider_type === next.provider.provider_type
+  && prev.size === next.size
+  && prev.type === next.type
+  && prev.shape === next.shape
+);
+
+/**
+ * Model avatar with provider fallback.
+ *
+ * 1) Known model brand (e.g. gpt-4o, jina-*, command-*) → ModelIcon
+ * 2) Unknown model id but provider is known → SmartProviderIcon
+ *    (Cohere `rerank-v4.0`, Voyage `rerank-2.5`, custom endpoints, …)
+ * 3) No provider → ModelIcon default avatar
+ */
+export const SmartModelIcon = memo(function SmartModelIcon({
+  modelId,
+  provider,
+  size = 20,
+  type = 'avatar',
+  shape,
+}: {
+  modelId: string;
+  provider?: ProviderConfig | null;
+  size?: number;
+  type?: 'avatar' | 'color' | 'mono';
+  shape?: 'circle' | 'square';
+}) {
+  if (hasKnownModelIcon(modelId)) {
+    return <ModelIcon model={modelId} size={size} type={type} />;
+  }
+  if (provider) {
+    return <SmartProviderIcon provider={provider} size={size} type={type} shape={shape} />;
+  }
+  return <ModelIcon model={modelId} size={size} type={type} />;
+}, (prev, next) =>
+  prev.modelId === next.modelId
+  && prev.provider?.id === next.provider?.id
+  && prev.provider?.icon === next.provider?.icon
+  && prev.provider?.builtin_id === next.provider?.builtin_id
+  && prev.provider?.name === next.provider?.name
+  && prev.provider?.provider_type === next.provider?.provider_type
   && prev.size === next.size
   && prev.type === next.type
   && prev.shape === next.shape

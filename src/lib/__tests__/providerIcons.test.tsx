@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { ProviderConfig } from '@/types';
-import { SmartProviderIcon } from '../providerIcons';
+import { hasKnownModelIcon, SmartModelIcon, SmartProviderIcon } from '../providerIcons';
 
 vi.mock('@lobehub/icons', () => ({
   ModelIcon: ({ model }: { model: string }) => (
@@ -10,7 +10,8 @@ vi.mock('@lobehub/icons', () => ({
   ProviderIcon: ({ provider }: { provider: string }) => (
     <span data-testid="provider-icon" data-provider={provider} />
   ),
-  modelMappings: [],
+  // Only command-* maps to a known model brand (mirrors Cohere mapping shape)
+  modelMappings: [{ keywords: ['command'] }],
   providerMappings: [],
 }));
 
@@ -111,5 +112,42 @@ describe('SmartProviderIcon', () => {
       'src',
       'https://api.shuaiapi.com/images/logo.svg',
     );
+  });
+});
+
+describe('hasKnownModelIcon', () => {
+  it('returns true for model ids that match brand keywords', () => {
+    expect(hasKnownModelIcon('command-r')).toBe(true);
+    expect(hasKnownModelIcon('command-a-03-2025')).toBe(true);
+  });
+
+  it('returns false for Cohere/Voyage rerank ids without brand keywords', () => {
+    expect(hasKnownModelIcon('rerank-v4.0')).toBe(false);
+    expect(hasKnownModelIcon('rerank-2.5')).toBe(false);
+    expect(hasKnownModelIcon('')).toBe(false);
+  });
+});
+
+describe('SmartModelIcon', () => {
+  it('uses ModelIcon when the model id has a brand mapping', () => {
+    render(<SmartModelIcon modelId="command-r" provider={makeProvider({ provider_type: 'cohere' })} />);
+    expect(screen.getByTestId('model-icon')).toHaveAttribute('data-model', 'command-r');
+    expect(screen.queryByTestId('provider-icon')).not.toBeInTheDocument();
+  });
+
+  it('falls back to the provider icon for unmapped model ids (Cohere/Voyage rerank)', () => {
+    render(
+      <SmartModelIcon
+        modelId="rerank-v4.0"
+        provider={makeProvider({ name: 'Cohere', provider_type: 'cohere' })}
+      />,
+    );
+    expect(screen.queryByTestId('model-icon')).not.toBeInTheDocument();
+    expect(screen.getByTestId('provider-icon')).toHaveAttribute('data-provider', 'cohere');
+  });
+
+  it('falls back to ModelIcon default when no provider is provided', () => {
+    render(<SmartModelIcon modelId="rerank-2.5" />);
+    expect(screen.getByTestId('model-icon')).toHaveAttribute('data-model', 'rerank-2.5');
   });
 });

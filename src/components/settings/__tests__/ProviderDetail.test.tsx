@@ -144,6 +144,7 @@ vi.mock('@/components/common/CopyButton', () => ({
 
 vi.mock('@/lib/providerIcons', () => ({
   SmartProviderIcon: () => <div>smart-provider-icon</div>,
+  SmartModelIcon: () => <div>smart-model-icon</div>,
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({
