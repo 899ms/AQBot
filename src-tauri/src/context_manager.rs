@@ -60,6 +60,75 @@ pub fn should_auto_compress(
     total > threshold
 }
 
+/// Values ≥ this are treated as "unlimited" (UI marks 50 as unlimited).
+pub const CONTEXT_MESSAGE_LIMIT_UNLIMITED: u32 = 50;
+
+/// Resolve the effective per-message history cap.
+///
+/// - Conversation override wins over the global default.
+/// - `None` at both levels means unlimited (legacy behaviour).
+/// - Values ≥ [`CONTEXT_MESSAGE_LIMIT_UNLIMITED`] mean unlimited.
+/// - `Some(0)` means "current turn only" and is applied as keep-last-1.
+pub fn resolve_message_count_limit(
+    conversation_limit: Option<u32>,
+    global_default: Option<u32>,
+) -> Option<u32> {
+    let limit = conversation_limit.or(global_default)?;
+    if limit >= CONTEXT_MESSAGE_LIMIT_UNLIMITED {
+        None
+    } else {
+        Some(limit)
+    }
+}
+
+/// Keep only the most recent `limit` provider history messages.
+///
+/// `None` leaves history unchanged. `Some(0)` keeps the last message group
+/// (current user turn). Tool-call groups are kept atomically so the provider
+/// never receives an orphan `tool` result without its assistant call.
+pub fn apply_message_count_limit(
+    history: &[ChatMessage],
+    limit: Option<u32>,
+) -> Vec<ChatMessage> {
+    let Some(raw_limit) = limit else {
+        return history.to_vec();
+    };
+    if history.is_empty() {
+        return Vec::new();
+    }
+
+    // 0 ⇒ only the current turn (last group, at least one message).
+    let keep = (raw_limit as usize).max(1);
+    if history.len() <= keep {
+        return history.to_vec();
+    }
+
+    let mut total_msgs = 0usize;
+    let mut start_idx = history.len();
+    let mut end_idx = history.len();
+
+    while end_idx > 0 {
+        let group_start = message_group_start(history, end_idx - 1);
+        let group_len = end_idx - group_start;
+
+        if total_msgs > 0 && total_msgs + group_len > keep {
+            break;
+        }
+
+        // Always include at least the trailing group, even if it exceeds `keep`
+        // (e.g. a multi-message tool call group).
+        total_msgs += group_len;
+        start_idx = group_start;
+        end_idx = group_start;
+
+        if total_msgs >= keep {
+            break;
+        }
+    }
+
+    history[start_idx..].to_vec()
+}
+
 /// Build the final context for LLM from system messages + optional summary + history.
 ///
 /// If a summary exists, it is prepended as a system message.
@@ -380,5 +449,116 @@ mod tests {
         let history = vec![text_message("user", &"token ".repeat(100_000))];
 
         assert!(!should_auto_compress(&[], &history, Some(1_000_000)));
+    }
+
+    #[test]
+    fn resolve_message_count_limit_prefers_conversation_over_global() {
+        assert_eq!(
+            resolve_message_count_limit(Some(1), Some(10)),
+            Some(1)
+        );
+        assert_eq!(
+            resolve_message_count_limit(None, Some(3)),
+            Some(3)
+        );
+        assert_eq!(resolve_message_count_limit(None, None), None);
+        assert_eq!(
+            resolve_message_count_limit(Some(50), Some(3)),
+            None
+        );
+        assert_eq!(
+            resolve_message_count_limit(None, Some(50)),
+            None
+        );
+        assert_eq!(
+            resolve_message_count_limit(Some(0), None),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn apply_message_count_limit_keeps_last_n_messages() {
+        let history = vec![
+            text_message("user", "u1"),
+            text_message("assistant", "a1"),
+            text_message("user", "u2"),
+            text_message("assistant", "a2"),
+            text_message("user", "u3"),
+        ];
+
+        assert_eq!(apply_message_count_limit(&history, None).len(), 5);
+        assert_eq!(
+            apply_message_count_limit(&history, Some(50)).len(),
+            5
+        );
+
+        let limited_one = apply_message_count_limit(&history, Some(1));
+        assert_eq!(limited_one.len(), 1);
+        assert_eq!(limited_one[0].role, "user");
+        match &limited_one[0].content {
+            ChatContent::Text(s) => assert_eq!(s, "u3"),
+            _ => panic!("expected text"),
+        }
+
+        let limited_zero = apply_message_count_limit(&history, Some(0));
+        assert_eq!(limited_zero.len(), 1);
+        match &limited_zero[0].content {
+            ChatContent::Text(s) => assert_eq!(s, "u3"),
+            _ => panic!("expected text"),
+        }
+
+        let limited_two = apply_message_count_limit(&history, Some(2));
+        assert_eq!(limited_two.len(), 2);
+        match &limited_two[0].content {
+            ChatContent::Text(s) => assert_eq!(s, "a2"),
+            _ => panic!("expected text"),
+        }
+    }
+
+    #[test]
+    fn apply_message_count_limit_keeps_tool_groups_atomic() {
+        let mut assistant = text_message("assistant", "");
+        assistant.tool_calls = Some(vec![ToolCall {
+            id: "call-1".into(),
+            call_type: "function".into(),
+            function: ToolCallFunction {
+                name: "read_file".into(),
+                arguments: "{}".into(),
+            },
+        }]);
+
+        let mut tool = text_message("tool", "file contents");
+        tool.tool_call_id = Some("call-1".into());
+
+        let history = vec![
+            text_message("user", "old"),
+            assistant,
+            tool,
+            text_message("user", "next"),
+        ];
+
+        // keep=1 → only current user
+        let only_current = apply_message_count_limit(&history, Some(1));
+        assert_eq!(only_current.len(), 1);
+        assert_eq!(only_current[0].role, "user");
+
+        // keep=2 would try to take user + one prior, but tool group is 2 msgs;
+        // taking the tool result alone is invalid, so group stays together.
+        // With keep=2 we get current user (1) + cannot add full tool group (2)
+        // without exceeding → only current user? Let's check: total starts 0,
+        // last group is user (1 msg) → total=1, then next group is tool-only
+        // index for tool: message_group_start finds assistant. Group is
+        // assistant+tool (2 msgs). total_msgs=1, 1+2=3 > keep=2, break.
+        // Result: only current user.
+        let keep_two = apply_message_count_limit(&history, Some(2));
+        assert_eq!(keep_two.len(), 1);
+        assert_eq!(keep_two[0].role, "user");
+
+        // keep=3 → current user (1) + full tool group (2) = 3
+        let keep_three = apply_message_count_limit(&history, Some(3));
+        assert_eq!(keep_three.len(), 3);
+        assert_eq!(keep_three[0].role, "assistant");
+        assert_eq!(keep_three[1].role, "tool");
+        assert_eq!(keep_three[2].role, "user");
     }
 }

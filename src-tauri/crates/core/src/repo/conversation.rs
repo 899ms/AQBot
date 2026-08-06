@@ -33,6 +33,7 @@ fn conversation_from_entity(m: conversations::Model) -> Conversation {
         is_pinned: m.is_pinned != 0,
         is_archived: m.is_archived != 0,
         context_compression: m.context_compression != 0,
+        context_message_limit: m.context_message_limit.map(|v| v as u32),
         category_id: m.category_id,
         parent_conversation_id: m.parent_conversation_id,
         mode: m.mode,
@@ -206,6 +207,9 @@ pub async fn update_conversation(
     }
     if let Some(context_compression) = input.context_compression {
         am.context_compression = Set(if context_compression { 1 } else { 0 });
+    }
+    if let Some(context_message_limit) = input.context_message_limit {
+        am.context_message_limit = Set(context_message_limit.map(|v| v as i32));
     }
     if let Some(category_id) = input.category_id {
         am.category_id = Set(category_id);
@@ -504,6 +508,7 @@ pub async fn branch_conversation(
         is_pinned: Set(0),
         is_archived: Set(0),
         context_compression: Set(source.context_compression),
+        context_message_limit: Set(source.context_message_limit),
         category_id: Set(source.category_id.clone()),
         parent_conversation_id: Set(parent_id),
         research_mode: Set(source.research_mode),

@@ -182,24 +182,41 @@ export function InputArea() {
   const messages = useConversationStore((s) => s.messages);
   const totalActiveCount = useConversationStore((s) => s.totalActiveCount);
   const hasOlderMessages = useConversationStore((s) => s.hasOlderMessages);
+  const conversations = useConversationStore((s) => s.conversations);
+  const providers = useProviderStore((s) => s.providers);
+  const settings = useSettingsStore((s) => s.settings);
+  const activeConversationForContext = conversations.find((c) => c.id === activeConversationId);
   const contextCount = useMemo(() => {
     const activeMessages = messages.filter((m) => m.is_active !== false && !m.content.startsWith('%%ERROR%%'));
     const lastMarkerIdx = activeMessages.reduce((maxIdx, m, i) => {
       if (m.content === '<!-- context-clear -->' || m.content === '<!-- context-compressed -->') return i;
       return maxIdx;
     }, -1);
+    let count: number;
     if (lastMarkerIdx !== -1) {
-      return activeMessages.slice(lastMarkerIdx + 1).length;
+      count = activeMessages.slice(lastMarkerIdx + 1).length;
+    } else if (hasOlderMessages && totalActiveCount > 0) {
+      count = totalActiveCount;
+    } else {
+      count = activeMessages.length;
     }
-    if (hasOlderMessages && totalActiveCount > 0) {
-      return totalActiveCount;
+    // Reflect the effective message-count cap in the badge (matches backend).
+    const rawLimit =
+      activeConversationForContext?.context_message_limit ??
+      settings.default_context_count ??
+      null;
+    if (rawLimit != null && rawLimit < 50) {
+      // 0 means current-only → display at most 1 when messages exist.
+      count = Math.min(count, rawLimit === 0 ? 1 : rawLimit);
     }
-    return activeMessages.length;
-  }, [messages, hasOlderMessages, totalActiveCount]);
-
-  const conversations = useConversationStore((s) => s.conversations);
-  const providers = useProviderStore((s) => s.providers);
-  const settings = useSettingsStore((s) => s.settings);
+    return count;
+  }, [
+    messages,
+    hasOlderMessages,
+    totalActiveCount,
+    activeConversationForContext?.context_message_limit,
+    settings.default_context_count,
+  ]);
   const inputActionsScale = normalizeChatInputActionsScale(
     settings.chat_input_actions_scale ?? DEFAULT_CHAT_INPUT_ACTIONS_SCALE,
   ) / 100;

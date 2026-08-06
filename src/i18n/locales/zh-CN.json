@@ -1011,7 +1011,7 @@
     "modelTemperature": "模型温度",
     "topPTooltip": "控制采样范围，较低的值会限制模型只从最可能的词中选择",
     "contextCount": "上下文数",
-    "contextCountTooltip": "发送给模型的历史消息数量",
+    "contextCountTooltip": "发送给模型的消息数量上限（含当前用户消息）。0 表示仅当前；50 表示不限制。",
     "maxTokenCount": "最大 Tokens 数",
     "maxTokensTooltip": "模型生成的最大 Tokens 数量",
     "frequencyPenaltyTooltip": "对重复 token 施加惩罚，减少重复内容的生成",
@@ -1337,7 +1337,8 @@
     "systemPromptLabel": "系统提示（角色设定）",
     "systemPromptPlaceholder": "输入系统提示词...",
     "contextMessageLimit": "上下文的消息数量上限",
-    "contextMessageLimitTooltip": "限制发送给模型的历史消息数量。设为 50 表示不限制。",
+    "contextMessageLimitTooltip": "限制发送给模型的消息数量（含当前用户消息）。0 表示仅当前消息；设为 50 表示不限制。",
+    "contextMessageLimitCurrentOnly": "仅当前",
     "iconGroupModel": "模型",
     "iconGroupProvider": "厂商",
     "indexStatus": {

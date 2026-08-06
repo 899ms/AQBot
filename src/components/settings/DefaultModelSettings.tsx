@@ -29,8 +29,15 @@ function ContextCountParam({
 }) {
   const { token } = theme.useToken();
   const { t } = useTranslation();
-  const effectiveValue = value ?? 5;
-  const contextMarks: Record<number, string> = { 0: '0', 5: '5', 10: '10', 15: '15', 50: t('common.unlimited') };
+  // null means unlimited (matches backend). Display 50 so the slider sits on "unlimited".
+  const effectiveValue = value ?? 50;
+  const contextMarks: Record<number, string> = {
+    0: '0',
+    5: '5',
+    10: '10',
+    15: '15',
+    50: t('common.unlimited'),
+  };
 
   return (
     <>
@@ -50,13 +57,16 @@ function ContextCountParam({
           min={0} max={50} step={1}
           marks={contextMarks}
           value={effectiveValue}
-          onChange={(v) => onChange(v)}
+          onChange={(v) => onChange(v >= 50 ? null : v)}
         />
         <InputNumber
           style={{ width: 72 }}
           min={0} max={50}
           value={effectiveValue}
-          onChange={(v) => onChange(v ?? 5)}
+          onChange={(v) => {
+            if (v == null || v >= 50) onChange(null);
+            else onChange(v);
+          }}
           size="small"
         />
       </div>

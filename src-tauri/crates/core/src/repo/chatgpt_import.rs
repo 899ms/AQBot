@@ -200,6 +200,7 @@ pub async fn import_chatgpt_export_from_path(
             active_artifact_id: Set(None),
             research_mode: Set(0),
             context_compression: Set(0),
+            context_message_limit: Set(None),
             category_id: Set(None),
             parent_conversation_id: Set(None),
             mode: Set("chat".to_string()),

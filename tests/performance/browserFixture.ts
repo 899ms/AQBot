@@ -57,6 +57,7 @@ function buildConversations(
     is_pinned: false,
     is_archived: false,
     context_compression: false,
+    context_message_limit: null,
     category_id: null,
     parent_conversation_id: null,
     mode: 'chat',

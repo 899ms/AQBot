@@ -347,6 +347,11 @@ async fn test_conversation_update_input() {
         enabled_mcp_server_ids: Some(vec!["mcp-a".into(), "mcp-b".into()]),
         enabled_knowledge_base_ids: Some(vec!["kb-a".into()]),
         enabled_memory_namespace_ids: Some(vec!["mem-a".into()]),
+        context_compression: None,
+        context_message_limit: Some(Some(3)),
+        category_id: None,
+        parent_conversation_id: None,
+        mode: None,
     };
     let updated = conversation::update_conversation(db, &conv.id, input)
         .await

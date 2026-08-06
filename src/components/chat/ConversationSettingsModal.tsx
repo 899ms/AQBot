@@ -16,7 +16,35 @@ interface ConversationSettingsModalProps {
   onClose: () => void;
 }
 
-const CONTEXT_LIMIT_KEY = (id: string) => `aqbot_context_limit_${id}`;
+const LEGACY_CONTEXT_LIMIT_KEY = (id: string) => `aqbot_context_limit_${id}`;
+/** Values ≥ this mean unlimited (matches backend CONTEXT_MESSAGE_LIMIT_UNLIMITED). */
+const CONTEXT_LIMIT_UNLIMITED = 50;
+
+function resolveInitialContextLimit(
+  conversationId: string,
+  storedLimit: number | null | undefined,
+  globalDefault: number | null | undefined,
+): number {
+  if (storedLimit != null && Number.isFinite(storedLimit)) {
+    return Math.max(0, Math.min(CONTEXT_LIMIT_UNLIMITED, storedLimit));
+  }
+  // One-time migration from the old localStorage-only setting.
+  try {
+    const legacy = localStorage.getItem(LEGACY_CONTEXT_LIMIT_KEY(conversationId));
+    if (legacy != null) {
+      const parsed = Number(legacy);
+      if (Number.isFinite(parsed)) {
+        return Math.max(0, Math.min(CONTEXT_LIMIT_UNLIMITED, parsed));
+      }
+    }
+  } catch {
+    // ignore storage errors
+  }
+  if (globalDefault != null && Number.isFinite(globalDefault)) {
+    return Math.max(0, Math.min(CONTEXT_LIMIT_UNLIMITED, globalDefault));
+  }
+  return CONTEXT_LIMIT_UNLIMITED;
+}
 
 export function ConversationSettingsModal({ open, onClose }: ConversationSettingsModalProps) {
   const { token } = theme.useToken();
@@ -40,7 +68,7 @@ export function ConversationSettingsModal({ open, onClose }: ConversationSetting
   // Form state
   const [title, setTitle] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
-  const [contextLimit, setContextLimit] = useState(50);
+  const [contextLimit, setContextLimit] = useState(CONTEXT_LIMIT_UNLIMITED);
   const [temperature, setTemperature] = useState<number | null>(null);
   const [topP, setTopP] = useState<number | null>(null);
   const [maxTokens, setMaxTokens] = useState<number | null>(null);
@@ -61,8 +89,13 @@ export function ConversationSettingsModal({ open, onClose }: ConversationSetting
       setMaxTokens(conversation.max_tokens ?? null);
       setFrequencyPenalty(conversation.frequency_penalty ?? null);
 
-      const stored = localStorage.getItem(CONTEXT_LIMIT_KEY(conversation.id));
-      setContextLimit(stored ? Number(stored) : 50);
+      setContextLimit(
+        resolveInitialContextLimit(
+          conversation.id,
+          conversation.context_message_limit,
+          settings.default_context_count,
+        ),
+      );
 
       // Load icon
       const iconStored = localStorage.getItem(CONV_ICON_KEY(conversation.id));
@@ -80,7 +113,7 @@ export function ConversationSettingsModal({ open, onClose }: ConversationSetting
         setIconValue('');
       }
     }
-  }, [open, conversation]);
+  }, [open, conversation, settings.default_context_count]);
 
   if (!conversation) return null;
 
@@ -102,8 +135,14 @@ export function ConversationSettingsModal({ open, onClose }: ConversationSetting
         max_tokens: maxTokens,
         top_p: topP,
         frequency_penalty: frequencyPenalty,
+        context_message_limit: contextLimit,
       });
-      localStorage.setItem(CONTEXT_LIMIT_KEY(conversation.id), String(contextLimit));
+      // Drop legacy localStorage key after persisting to the database.
+      try {
+        localStorage.removeItem(LEGACY_CONTEXT_LIMIT_KEY(conversation.id));
+      } catch {
+        // ignore
+      }
       // Save icon
       if (iconType === 'model') {
         localStorage.removeItem(CONV_ICON_KEY(conversation.id));
@@ -220,17 +259,27 @@ export function ConversationSettingsModal({ open, onClose }: ConversationSetting
                 <Info size={14} style={{ color: token.colorTextSecondary, cursor: 'help' }} />
               </Tooltip>
               <span style={{ marginLeft: 'auto', color: token.colorTextSecondary, fontSize: 12 }}>
-                {contextLimit >= 50 ? t('common.unlimited') : contextLimit}
+                {contextLimit >= CONTEXT_LIMIT_UNLIMITED
+                  ? t('common.unlimited')
+                  : contextLimit === 0
+                    ? t('settings.contextMessageLimitCurrentOnly')
+                    : contextLimit}
               </span>
             </div>
             <div style={sliderRowStyle}>
               <Slider
                 style={{ flex: 1 }}
-                min={1}
-                max={50}
+                min={0}
+                max={CONTEXT_LIMIT_UNLIMITED}
                 value={contextLimit}
                 onChange={setContextLimit}
-                marks={{ 1: '1', 10: '10', 25: '25', 50: '50' }}
+                marks={{
+                  0: '0',
+                  1: '1',
+                  10: '10',
+                  25: '25',
+                  50: t('common.unlimited'),
+                }}
               />
             </div>
           </div>

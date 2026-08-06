@@ -352,6 +352,8 @@ export interface Conversation {
   is_pinned: boolean;
   is_archived: boolean;
   context_compression: boolean;
+  /** Per-conversation history message cap. null = use global default. ≥50 = unlimited. */
+  context_message_limit: number | null;
   category_id: string | null;
   parent_conversation_id: string | null;
   mode?: 'chat' | 'agent' | 'role';
@@ -496,6 +498,8 @@ export interface UpdateConversationInput {
   enabled_knowledge_base_ids?: string[];
   enabled_memory_namespace_ids?: string[];
   context_compression?: boolean;
+  /** Set null to clear override and use global default. ≥50 = unlimited. */
+  context_message_limit?: number | null;
   category_id?: string | null;
   mode?: 'chat' | 'agent' | 'role';
 }

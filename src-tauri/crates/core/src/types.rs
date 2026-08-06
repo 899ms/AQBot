@@ -582,6 +582,9 @@ pub struct Conversation {
     pub is_pinned: bool,
     pub is_archived: bool,
     pub context_compression: bool,
+    /// Per-conversation cap on history messages sent to the model.
+    /// `None` falls back to global `default_context_count`. Values ≥ 50 mean unlimited.
+    pub context_message_limit: Option<u32>,
     pub category_id: Option<String>,
     pub parent_conversation_id: Option<String>,
     pub mode: String,
@@ -730,6 +733,9 @@ pub struct UpdateConversationInput {
     pub enabled_knowledge_base_ids: Option<Vec<String>>,
     pub enabled_memory_namespace_ids: Option<Vec<String>>,
     pub context_compression: Option<bool>,
+    /// Set to `Some(None)` to clear the override (use global default).
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub context_message_limit: Option<Option<i64>>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub category_id: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_double_option")]

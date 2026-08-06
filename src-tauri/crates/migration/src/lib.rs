@@ -41,6 +41,7 @@ mod m20260723_000001_add_image_adapter_support;
 mod m20260724_000001_add_model_metadata;
 mod m20260725_000001_add_provider_aws_region;
 mod m20260806_000001_add_role_capability_bindings;
+mod m20260807_000001_add_conversation_context_message_limit;
 
 pub struct Migrator;
 
@@ -89,6 +90,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260724_000001_add_model_metadata::Migration),
             Box::new(m20260725_000001_add_provider_aws_region::Migration),
             Box::new(m20260806_000001_add_role_capability_bindings::Migration),
+            Box::new(m20260807_000001_add_conversation_context_message_limit::Migration),
         ]
     }
 }

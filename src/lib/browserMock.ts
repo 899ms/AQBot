@@ -942,6 +942,11 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
         message_count: 0,
         is_pinned: false,
         is_archived: false,
+        context_compression: false,
+        context_message_limit: null,
+        category_id: null,
+        parent_conversation_id: null,
+        mode: 'chat',
         created_at: nowTs(),
         updated_at: nowTs(),
       };

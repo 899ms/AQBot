@@ -31,6 +31,9 @@ pub struct Model {
     pub active_artifact_id: Option<String>,
     pub research_mode: i32,
     pub context_compression: i32,
+    /// Max provider history messages for this conversation. `None` falls back
+    /// to the global `default_context_count` setting. Values ≥ 50 mean unlimited.
+    pub context_message_limit: Option<i32>,
     pub category_id: Option<String>,
     pub parent_conversation_id: Option<String>,
     pub mode: String,

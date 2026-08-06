@@ -1618,6 +1618,19 @@ fn build_provider_context_messages(
     )
 }
 
+/// Apply the conversation / global message-count cap to provider history.
+fn limit_provider_history(
+    history: Vec<ChatMessage>,
+    conversation: &Conversation,
+    settings: &AppSettings,
+) -> Vec<ChatMessage> {
+    let limit = crate::context_manager::resolve_message_count_limit(
+        conversation.context_message_limit,
+        settings.default_context_count,
+    );
+    crate::context_manager::apply_message_count_limit(&history, limit)
+}
+
 fn build_provider_context_messages_from_index(
     file_store: &aqbot_core::file_store::FileStore,
     db_messages: &[Message],
@@ -4352,16 +4365,20 @@ pub async fn send_message(
         .as_ref()
         .filter(|_| context_boundary.use_summary);
 
-    let history_messages = build_provider_context_messages_from_index(
-        &file_store,
-        &db_messages,
-        context_boundary.start_index,
-        document_attachment_reading_enabled,
-        model_context_window,
-        Some(&user_message.id),
-        None,
-    )
-    .map_err(|e| e.to_string())?;
+    let history_messages = limit_provider_history(
+        build_provider_context_messages_from_index(
+            &file_store,
+            &db_messages,
+            context_boundary.start_index,
+            document_attachment_reading_enabled,
+            model_context_window,
+            Some(&user_message.id),
+            None,
+        )
+        .map_err(|e| e.to_string())?,
+        &conversation,
+        &global_settings,
+    );
     let current_user_history_index = history_messages
         .iter()
         .rposition(|message| message.role == "user");
@@ -4728,16 +4745,20 @@ pub async fn regenerate_message(
     let effective_existing_summary = existing_summary
         .as_ref()
         .filter(|_| context_boundary.use_summary);
-    let history_messages = build_provider_context_messages_from_index(
-        &file_store,
-        &remaining_messages,
-        context_boundary.start_index,
-        document_attachment_reading_enabled,
-        model_context_window,
-        Some(&last_user_msg.id),
-        Some(&last_user_msg.id),
-    )
-    .map_err(|e| e.to_string())?;
+    let history_messages = limit_provider_history(
+        build_provider_context_messages_from_index(
+            &file_store,
+            &remaining_messages,
+            context_boundary.start_index,
+            document_attachment_reading_enabled,
+            model_context_window,
+            Some(&last_user_msg.id),
+            Some(&last_user_msg.id),
+        )
+        .map_err(|e| e.to_string())?,
+        &conversation,
+        &global_settings,
+    );
     chat_messages = crate::context_manager::build_context(
         &chat_messages,
         &history_messages,
@@ -5024,16 +5045,20 @@ pub async fn regenerate_with_model(
     let effective_existing_summary = existing_summary
         .as_ref()
         .filter(|_| context_boundary.use_summary);
-    let history_messages = build_provider_context_messages_from_index(
-        &file_store,
-        &remaining_messages,
-        context_boundary.start_index,
-        document_attachment_reading_enabled,
-        model_context_window,
-        Some(&user_msg.id),
-        Some(&user_msg.id),
-    )
-    .map_err(|e| e.to_string())?;
+    let history_messages = limit_provider_history(
+        build_provider_context_messages_from_index(
+            &file_store,
+            &remaining_messages,
+            context_boundary.start_index,
+            document_attachment_reading_enabled,
+            model_context_window,
+            Some(&user_msg.id),
+            Some(&user_msg.id),
+        )
+        .map_err(|e| e.to_string())?,
+        &conversation,
+        &global_settings,
+    );
     chat_messages = crate::context_manager::build_context(
         &chat_messages,
         &history_messages,
@@ -5630,16 +5655,20 @@ pub async fn get_context_usage(
         .filter(|_| context_boundary.use_summary);
 
     let file_store = aqbot_core::file_store::FileStore::new();
-    let history_messages = build_provider_context_messages_from_index(
-        &file_store,
-        &db_messages,
-        context_boundary.start_index,
-        global_settings.document_attachment_reading_enabled,
-        model_context_window,
-        None,
-        None,
-    )
-    .map_err(|e| e.to_string())?;
+    let history_messages = limit_provider_history(
+        build_provider_context_messages_from_index(
+            &file_store,
+            &db_messages,
+            context_boundary.start_index,
+            global_settings.document_attachment_reading_enabled,
+            model_context_window,
+            None,
+            None,
+        )
+        .map_err(|e| e.to_string())?,
+        &conversation,
+        &global_settings,
+    );
 
     let mut system_messages = Vec::new();
     if let Some(system_prompt) = resolve_system_prompt(&state.sea_db, &conversation).await {
@@ -5802,6 +5831,7 @@ mod tests {
             is_pinned: false,
             is_archived: false,
             context_compression: false,
+            context_message_limit: None,
             category_id: None,
             parent_conversation_id: None,
             mode: "chat".to_string(),
