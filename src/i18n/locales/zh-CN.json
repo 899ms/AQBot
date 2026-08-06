@@ -1305,7 +1305,7 @@
       "title": "导入 Kelivo 备份",
       "selectFile": "选择备份文件",
       "uploadHint": "点击或拖拽 Kelivo 备份到此处",
-      "supportedFormats": "支持格式：.zip",
+      "supportedFormats": "支持格式：.zip，或解压后的备份目录（含 chats.json）",
       "exportPath": "导出路径：Kelivo 设置 -> 备份与同步 -> 本地导出",
       "preview": "导入预览",
       "conversations": "会话",
@@ -1313,7 +1313,7 @@
       "files": "文件",
       "providers": "服务商",
       "duplicates": "重复",
-      "importProviderKeys": "同时导入会话引用的服务商和 API Key",
+      "importProviderKeys": "同时导入带 API Key 的服务商配置与模型",
       "emptyTopics": "将跳过 {{count}} 个空会话",
       "success": "Kelivo 备份导入完成"
     },

@@ -1369,7 +1369,7 @@
       "title": "Импорт резервной копии Kelivo",
       "selectFile": "Выбрать файл резервной копии",
       "uploadHint": "Нажмите или перетащите резервную копию Kelivo сюда",
-      "supportedFormats": "Поддерживаемые форматы: .zip",
+      "supportedFormats": "Supported formats: .zip, or an extracted backup folder (with chats.json)",
       "exportPath": "Путь экспорта: Настройки Kelivo → Резервное копирование и синхронизация → Локальный экспорт",
       "preview": "Предпросмотр импорта",
       "conversations": "Диалоги",
@@ -1377,7 +1377,7 @@
       "files": "Файлы",
       "providers": "Провайдеры",
       "duplicates": "Дубликаты",
-      "importProviderKeys": "Также импортировать связанные провайдеры и API-ключи",
+      "importProviderKeys": "Also import providers that have API keys (including models)",
       "emptyTopics": "Будет пропущено пустых тем: {{count}}",
       "success": "Резервная копия Kelivo импортирована"
     }

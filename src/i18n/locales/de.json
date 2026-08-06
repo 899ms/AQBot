@@ -1369,7 +1369,7 @@
       "title": "Kelivo-Backup importieren",
       "selectFile": "Backup-Datei wählen",
       "uploadHint": "Hier klicken oder Kelivo-Backup ablegen",
-      "supportedFormats": "Unterstützte Formate: .zip",
+      "supportedFormats": "Supported formats: .zip, or an extracted backup folder (with chats.json)",
       "exportPath": "Exportpfad: Kelivo Einstellungen → Backup & Sync → Lokaler Export",
       "preview": "Importvorschau",
       "conversations": "Unterhaltungen",
@@ -1377,7 +1377,7 @@
       "files": "Dateien",
       "providers": "Anbieter",
       "duplicates": "Duplikate",
-      "importProviderKeys": "Referenzierte Anbieter und API-Schlüssel ebenfalls importieren",
+      "importProviderKeys": "Also import providers that have API keys (including models)",
       "emptyTopics": "{{count}} leere Themen werden übersprungen",
       "success": "Kelivo-Backup importiert"
     }

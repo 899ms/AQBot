@@ -1369,7 +1369,7 @@
       "title": "Kelivo バックアップをインポート",
       "selectFile": "バックアップファイルを選択",
       "uploadHint": "クリックまたはドラッグして Kelivo バックアップを追加",
-      "supportedFormats": "対応形式: .zip",
+      "supportedFormats": "対応形式：.zip、または chats.json を含む展開済みバックアップフォルダ",
       "exportPath": "エクスポート手順: Kelivo 設定 → バックアップと同期 → ローカルエクスポート",
       "preview": "インポートプレビュー",
       "conversations": "会話",
@@ -1377,7 +1377,7 @@
       "files": "ファイル",
       "providers": "プロバイダー",
       "duplicates": "重複",
-      "importProviderKeys": "参照先のプロバイダーと API キーもインポートする",
+      "importProviderKeys": "API キーがあるプロバイダー設定とモデルもインポート",
       "emptyTopics": "空のトピック {{count}} 件はスキップされます",
       "success": "Kelivo バックアップをインポートしました"
     }

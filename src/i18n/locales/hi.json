@@ -1369,7 +1369,7 @@
       "title": "Kelivo बैकअप आयात करें",
       "selectFile": "बैकअप फ़ाइल चुनें",
       "uploadHint": "क्लिक करें या Kelivo बैकअप यहाँ खींचें",
-      "supportedFormats": "समर्थित प्रारूप: .zip",
+      "supportedFormats": "Supported formats: .zip, or an extracted backup folder (with chats.json)",
       "exportPath": "निर्यात पथ: Kelivo Settings → Backup & Sync → Local Export",
       "preview": "आयात पूर्वावलोकन",
       "conversations": "वार्तालाप",
@@ -1377,7 +1377,7 @@
       "files": "फ़ाइलें",
       "providers": "प्रदाता",
       "duplicates": "डुप्लिकेट",
-      "importProviderKeys": "संदर्भित प्रदाता और API कुंजियाँ भी आयात करें",
+      "importProviderKeys": "Also import providers that have API keys (including models)",
       "emptyTopics": "{{count}} खाली विषय छोड़ दिए जाएँगे",
       "success": "Kelivo बैकअप आयात किया गया"
     }

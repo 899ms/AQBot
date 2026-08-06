@@ -1369,7 +1369,7 @@
       "title": "استيراد نسخة Kelivo الاحتياطية",
       "selectFile": "اختر ملف النسخة الاحتياطية",
       "uploadHint": "انقر أو اسحب نسخة Kelivo هنا",
-      "supportedFormats": "الصيغ المدعومة: .zip",
+      "supportedFormats": "Supported formats: .zip, or an extracted backup folder (with chats.json)",
       "exportPath": "مسار التصدير: إعدادات Kelivo → النسخ والمزامنة → تصدير محلي",
       "preview": "معاينة الاستيراد",
       "conversations": "المحادثات",
@@ -1377,7 +1377,7 @@
       "files": "الملفات",
       "providers": "المزودون",
       "duplicates": "مكررات",
-      "importProviderKeys": "استيراد المزودين ومفاتيح API المشار إليها أيضًا",
+      "importProviderKeys": "Also import providers that have API keys (including models)",
       "emptyTopics": "سيتم تخطي {{count}} مواضيع فارغة",
       "success": "تم استيراد نسخة Kelivo"
     }

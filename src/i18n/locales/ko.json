@@ -1369,7 +1369,7 @@
       "title": "Kelivo 백업 가져오기",
       "selectFile": "백업 파일 선택",
       "uploadHint": "클릭하거나 드래그하여 Kelivo 백업 추가",
-      "supportedFormats": "지원 형식: .zip",
+      "supportedFormats": "지원 형식: .zip 또는 chats.json이 포함된 압축 해제 백업 폴더",
       "exportPath": "내보내기 경로: Kelivo 설정 → 백업 및 동기화 → 로컬 내보내기",
       "preview": "가져오기 미리보기",
       "conversations": "대화",
@@ -1377,7 +1377,7 @@
       "files": "파일",
       "providers": "제공자",
       "duplicates": "중복",
-      "importProviderKeys": "참조된 제공자와 API 키도 가져오기",
+      "importProviderKeys": "API 키가 있는 제공자 설정과 모델도 가져오기",
       "emptyTopics": "빈 주제 {{count}}개는 건너뜁니다",
       "success": "Kelivo 백업을 가져왔습니다"
     }

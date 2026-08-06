@@ -1305,7 +1305,7 @@
       "title": "Import Kelivo Backup",
       "selectFile": "Select backup file",
       "uploadHint": "Click or drag a Kelivo backup here",
-      "supportedFormats": "Supported formats: .zip",
+      "supportedFormats": "Supported formats: .zip, or an extracted backup folder (with chats.json)",
       "exportPath": "Export path: Kelivo Settings -> Backup & Sync -> Local Export",
       "preview": "Import Preview",
       "conversations": "Conversations",
@@ -1313,7 +1313,7 @@
       "files": "Files",
       "providers": "Providers",
       "duplicates": "Duplicates",
-      "importProviderKeys": "Also import referenced providers and API keys",
+      "importProviderKeys": "Also import providers that have API keys (including models)",
       "emptyTopics": "{{count}} empty topics will be skipped",
       "success": "Kelivo backup imported"
     },
