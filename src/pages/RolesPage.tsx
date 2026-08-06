@@ -924,16 +924,21 @@ export function RolesPage() {
               value={draft.enabledSkillNames}
               onChange={(names) => setDraft((s) => ({ ...s, enabledSkillNames: names }))}
               options={skillSelectOptions}
-              optionRender={(option) => (
-                <div style={{ lineHeight: 1.3 }}>
-                  <div>{option.label}</div>
-                  {option.data?.description ? (
-                    <div style={{ fontSize: 11, color: token.colorTextSecondary }}>
-                      {option.data.description}
-                    </div>
-                  ) : null}
-                </div>
-              )}
+              optionRender={(option) => {
+                // Grouped options make antd type `option.data` as the group node;
+                // leaf entries still carry `description` at runtime.
+                const description = skills.find((s) => s.name === option.value)?.description;
+                return (
+                  <div style={{ lineHeight: 1.3 }}>
+                    <div>{option.label}</div>
+                    {description ? (
+                      <div style={{ fontSize: 11, color: token.colorTextSecondary }}>
+                        {description}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              }}
               style={{ width: '100%' }}
               maxTagCount="responsive"
               notFoundContent={t('roles.skillsEmpty')}
