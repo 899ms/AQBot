@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   Avatar,
   Button,
   Card,
+  Divider,
   Dropdown,
   Empty,
   Form,
@@ -21,14 +22,43 @@ import {
 import type { InputRef, MenuProps } from 'antd';
 import { ChevronDown, Download, Edit3, Plus, Search, Trash2, User, Wand2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { useConversationStore, useProviderStore, useRoleStore, useSettingsStore, useUIStore } from '@/stores';
+import {
+  useConversationStore,
+  useMcpStore,
+  useProviderStore,
+  useRoleStore,
+  useSettingsStore,
+  useSkillStore,
+  useUIStore,
+} from '@/stores';
 import { IconEditor } from '@/components/shared/IconEditor';
 import { ModelParamSliders } from '@/components/common/ModelParamSliders';
-import { CONV_ICON_KEY } from '@/lib/convIcon';
-import { saveRoleIntro } from '@/lib/roleIntro';
+import { McpServerIcon } from '@/components/shared/McpServerIcon';
+import { buildApplyRoleUpdate, roleSkillNames, syncConversationRoleMetadata } from '@/lib/applyRole';
+import { getRoleErrorMessage, validateRoleDraft, type RoleDraftValidation } from '@/lib/roleErrorMessage';
 import { useResolvedAvatarSrc } from '@/hooks/useResolvedAvatarSrc';
 import type { CreateRoleInput, MarketplaceRole, Role, UpdateRoleInput } from '@/types';
 import type { AvatarType } from '@/stores/userProfileStore';
+
+/** Keep modal inside the app window with room for margins; header/footer stay visible. */
+const ROLE_MODAL_CONTAINER_STYLE: CSSProperties = {
+  maxHeight: 'calc(100vh - 48px)',
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
+};
+const ROLE_MODAL_BODY_STYLE: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  overflowX: 'hidden',
+};
+const ROLE_MODAL_HEADER_STYLE: CSSProperties = {
+  flexShrink: 0,
+};
+const ROLE_MODAL_FOOTER_STYLE: CSSProperties = {
+  flexShrink: 0,
+};
 
 const { Text, Paragraph, Title } = Typography;
 
@@ -43,6 +73,8 @@ interface RoleDraft {
   avatarValue: string;
   temperature: number | null;
   topP: number | null;
+  enabledMcpServerIds: string[];
+  enabledSkillNames: string[];
 }
 
 const emptyDraft: RoleDraft = {
@@ -56,6 +88,8 @@ const emptyDraft: RoleDraft = {
   avatarValue: '',
   temperature: null,
   topP: null,
+  enabledMcpServerIds: [],
+  enabledSkillNames: [],
 };
 
 let didAutoOpenMarketplace = false;
@@ -72,6 +106,8 @@ function roleToDraft(role: Role): RoleDraft {
     avatarValue: role.avatar_value ?? role.avatar ?? '',
     temperature: role.temperature,
     topP: role.top_p,
+    enabledMcpServerIds: role.enabled_mcp_server_ids ?? [],
+    enabledSkillNames: role.enabled_skill_names ?? [],
   };
 }
 
@@ -89,6 +125,8 @@ function draftToCreateInput(draft: RoleDraft): CreateRoleInput {
     avatar_value: avatarValue || null,
     temperature: draft.temperature,
     top_p: draft.topP,
+    enabled_mcp_server_ids: draft.enabledMcpServerIds,
+    enabled_skill_names: draft.enabledSkillNames,
     source_kind: 'local',
     source_ref: null,
   };
@@ -108,6 +146,8 @@ function draftToUpdateInput(draft: RoleDraft): UpdateRoleInput {
     avatar_value: avatarValue || null,
     temperature: draft.temperature,
     top_p: draft.topP,
+    enabled_mcp_server_ids: draft.enabledMcpServerIds,
+    enabled_skill_names: draft.enabledSkillNames,
   };
 }
 
@@ -125,16 +165,6 @@ function getRoleAvatar(role: Pick<Role | MarketplaceRole, 'avatar' | 'avatar_typ
     type: role.avatar_type ?? (value ? inferAvatarType(value) : null),
     value,
   };
-}
-
-function syncConversationRoleMetadata(conversationId: string, role: Role) {
-  const avatar = getRoleAvatar(role);
-  if (avatar.type && avatar.value) {
-    localStorage.setItem(CONV_ICON_KEY(conversationId), JSON.stringify({ type: avatar.type, value: avatar.value }));
-  } else {
-    localStorage.removeItem(CONV_ICON_KEY(conversationId));
-  }
-  saveRoleIntro(conversationId, role);
 }
 
 function RoleAvatar({ role }: { role: Pick<Role | MarketplaceRole, 'name' | 'avatar' | 'avatar_type' | 'avatar_value'> }) {
@@ -211,11 +241,17 @@ export function RolesPage() {
   const providers = useProviderStore((s) => s.providers);
   const settings = useSettingsStore((s) => s.settings);
   const setActivePage = useUIStore((s) => s.setActivePage);
+  const mcpServers = useMcpStore((s) => s.servers);
+  const ensureMcpLoaded = useMcpStore((s) => s.ensureServersLoaded);
+  const skills = useSkillStore((s) => s.skills);
+  const ensureSkillsLoaded = useSkillStore((s) => s.ensureSkillsLoaded);
+  const toggleSkill = useSkillStore((s) => s.toggleSkill);
 
   const [activeTab, setActiveTab] = useState('roles');
   const [query, setQuery] = useState('');
   const [marketplaceQuery, setMarketplaceQuery] = useState('');
   const [modalOpen, setModalOpen] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<RoleDraftValidation>({});
   const [editingRole, setEditingRole] = useState<Role | null>(null);
   const [draft, setDraft] = useState<RoleDraft>(emptyDraft);
   const [tagInput, setTagInput] = useState('');
@@ -265,18 +301,29 @@ export function RolesPage() {
     return provider && model ? { provider, model } : null;
   }, [activeConversationId, conversations, providers, settings.default_model_id, settings.default_provider_id]);
 
+  const ensureRoleSkillsEnabled = useCallback(async (role: Role) => {
+    const names = roleSkillNames(role);
+    if (names.length === 0) return;
+    await ensureSkillsLoaded();
+    const current = useSkillStore.getState().skills;
+    await Promise.all(
+      names.map(async (name) => {
+        const skill = current.find((item) => item.name === name);
+        if (skill && !skill.enabled) {
+          await toggleSkill(name, true);
+        }
+      }),
+    );
+  }, [ensureSkillsLoaded, toggleSkill]);
+
   const applyToCurrentConversation = useCallback(async (role: Role) => {
     if (!activeConversationId) return;
-    await updateConversation(activeConversationId, {
-      system_prompt: role.system_prompt,
-      temperature: role.temperature,
-      top_p: role.top_p,
-      mode: 'role',
-    });
+    await updateConversation(activeConversationId, buildApplyRoleUpdate(role));
+    await ensureRoleSkillsEnabled(role);
     syncConversationRoleMetadata(activeConversationId, role);
     setActivePage('chat');
     messageApi.success(t('roles.applied'));
-  }, [activeConversationId, messageApi, setActivePage, t, updateConversation]);
+  }, [activeConversationId, ensureRoleSkillsEnabled, messageApi, setActivePage, t, updateConversation]);
 
   const createConversationWithRole = useCallback(async (role: Role) => {
     const selection = pickModel();
@@ -285,16 +332,12 @@ export function RolesPage() {
       return;
     }
     const conversation = await createConversation(role.name, selection.model.model_id, selection.provider.id);
-    await updateConversation(conversation.id, {
-      system_prompt: role.system_prompt,
-      temperature: role.temperature,
-      top_p: role.top_p,
-      mode: 'role',
-    });
+    await updateConversation(conversation.id, buildApplyRoleUpdate(role));
+    await ensureRoleSkillsEnabled(role);
     syncConversationRoleMetadata(conversation.id, role);
     setActiveConversation(conversation.id);
     setActivePage('chat');
-  }, [createConversation, messageApi, pickModel, setActiveConversation, setActivePage, t, updateConversation]);
+  }, [createConversation, ensureRoleSkillsEnabled, messageApi, pickModel, setActiveConversation, setActivePage, t, updateConversation]);
 
   const useRole = useCallback((role: Role) => {
     void createConversationWithRole(role);
@@ -317,18 +360,66 @@ export function RolesPage() {
   const openCreate = useCallback(() => {
     setEditingRole(null);
     setDraft(emptyDraft);
+    setFieldErrors({});
     setTagInput('');
     setModalOpen(true);
-  }, []);
+    void ensureMcpLoaded();
+    void ensureSkillsLoaded();
+  }, [ensureMcpLoaded, ensureSkillsLoaded]);
 
   const openEdit = useCallback((role: Role) => {
     setEditingRole(role);
     setDraft(roleToDraft(role));
+    setFieldErrors({});
     setTagInput('');
     setModalOpen(true);
-  }, []);
+    void ensureMcpLoaded();
+    void ensureSkillsLoaded();
+  }, [ensureMcpLoaded, ensureSkillsLoaded]);
+
+  const mcpSelectOptions = useMemo(() => {
+    const enabled = mcpServers.filter((server) => server.enabled);
+    const byId = new Map(enabled.map((server) => [server.id, server]));
+    // Keep previously selected but now-disabled servers visible so they can be cleared.
+    for (const id of draft.enabledMcpServerIds) {
+      if (!byId.has(id)) {
+        const stale = mcpServers.find((server) => server.id === id);
+        if (stale) byId.set(id, stale);
+      }
+    }
+    return Array.from(byId.values()).map((server) => ({
+      value: server.id,
+      label: server.name,
+      server,
+    }));
+  }, [draft.enabledMcpServerIds, mcpServers]);
+
+  const skillSelectOptions = useMemo(() => {
+    const groups = new Map<string, { label: string; options: { value: string; label: string; description?: string }[] }>();
+    for (const skill of skills) {
+      const source = skill.source || 'other';
+      const group = groups.get(source) ?? {
+        label: t(`skills.source.${source}`, { defaultValue: source }),
+        options: [],
+      };
+      group.options.push({
+        value: skill.name,
+        label: skill.name,
+        description: skill.description,
+      });
+      groups.set(source, group);
+    }
+    return Array.from(groups.values());
+  }, [skills, t]);
 
   const saveDraft = useCallback(async () => {
+    const errors = validateRoleDraft(draft, t);
+    setFieldErrors(errors);
+    if (errors.name || errors.systemPrompt) {
+      messageApi.error(errors.name || errors.systemPrompt);
+      return;
+    }
+
     setSaving(true);
     try {
       if (editingRole) {
@@ -336,15 +427,26 @@ export function RolesPage() {
       } else {
         await createRole(draftToCreateInput(draft));
       }
+      messageApi.success(t('roles.saveSuccess'));
       setModalOpen(false);
       setDraft(emptyDraft);
+      setFieldErrors({});
       setEditingRole(null);
     } catch (e) {
-      messageApi.error(String(e));
+      messageApi.error(getRoleErrorMessage(e, t));
     } finally {
       setSaving(false);
     }
-  }, [createRole, draft, editingRole, messageApi, updateRole]);
+  }, [createRole, draft, editingRole, messageApi, t, updateRole]);
+
+  const handleDeleteRole = useCallback(async (roleId: string) => {
+    try {
+      await deleteRole(roleId);
+      messageApi.success(t('roles.deleteSuccess'));
+    } catch (e) {
+      messageApi.error(getRoleErrorMessage(e, t) || t('roles.deleteFailed'));
+    }
+  }, [deleteRole, messageApi, t]);
 
   const handleTabChange = useCallback((key: string) => {
     setActiveTab(key);
@@ -364,7 +466,7 @@ export function RolesPage() {
       await installRole(role.source_kind, role.source_ref);
       messageApi.success(t('roles.installSuccess'));
     } catch (e) {
-      messageApi.error(String(e));
+      messageApi.error(getRoleErrorMessage(e, t) || t('roles.installFailed'));
     } finally {
       setInstallingRef(null);
     }
@@ -431,7 +533,7 @@ export function RolesPage() {
             title={t('roles.deleteConfirm')}
             okText={t('roles.delete')}
             cancelText={t('common.cancel')}
-            onConfirm={() => deleteRole(role.id)}
+            onConfirm={() => { void handleDeleteRole(role.id); }}
           >
             <Button size="small" type="text" danger icon={<Trash2 size={14} />}>
               {t('roles.delete')}
@@ -520,7 +622,7 @@ export function RolesPage() {
                     <Spin spinning={loading}>
                       {filteredRoles.length > 0
                         ? filteredRoles.map(renderRoleCard)
-                        : <Empty description={t('roles.empty')} />}
+                        : <Empty description={t('roles.emptyDesc')} />}
                     </Spin>
                   </div>
                 </div>
@@ -604,12 +706,24 @@ export function RolesPage() {
         title={editingRole ? t('roles.edit') : t('roles.create')}
         open={modalOpen}
         mask={{ enabled: true, blur: true }}
-        onCancel={() => setModalOpen(false)}
+        onCancel={() => {
+          setModalOpen(false);
+          setFieldErrors({});
+        }}
         onOk={saveDraft}
         okText={t('common.save')}
         cancelText={t('common.cancel')}
         confirmLoading={saving}
         destroyOnHidden
+        centered
+        width={560}
+        style={{ maxWidth: 'calc(100vw - 48px)' }}
+        styles={{
+          container: ROLE_MODAL_CONTAINER_STYLE,
+          header: ROLE_MODAL_HEADER_STYLE,
+          body: ROLE_MODAL_BODY_STYLE,
+          footer: ROLE_MODAL_FOOTER_STYLE,
+        }}
       >
         <Form layout="vertical">
           <Form.Item label={t('roles.avatar')} style={{ marginBottom: 18 }}>
@@ -633,11 +747,24 @@ export function RolesPage() {
             </div>
           </Form.Item>
 
-          <Form.Item label={t('roles.name')}>
+          <Form.Item
+            label={t('roles.name')}
+            required
+            validateStatus={fieldErrors.name ? 'error' : undefined}
+            help={fieldErrors.name}
+          >
             <Input
               value={draft.name}
-              onChange={(event) => setDraft((s) => ({ ...s, name: event.target.value }))}
+              onChange={(event) => {
+                const name = event.target.value;
+                setDraft((s) => ({ ...s, name }));
+                if (fieldErrors.name) {
+                  setFieldErrors((s) => ({ ...s, name: name.trim() ? undefined : s.name }));
+                }
+              }}
               placeholder={t('roles.namePlaceholder')}
+              maxLength={80}
+              showCount
             />
           </Form.Item>
 
@@ -649,11 +776,25 @@ export function RolesPage() {
             />
           </Form.Item>
 
-          <Form.Item label={t('roles.systemPrompt')}>
+          <Form.Item
+            label={t('roles.systemPrompt')}
+            required
+            validateStatus={fieldErrors.systemPrompt ? 'error' : undefined}
+            help={fieldErrors.systemPrompt}
+          >
             <Input.TextArea
               rows={6}
               value={draft.systemPrompt}
-              onChange={(event) => setDraft((s) => ({ ...s, systemPrompt: event.target.value }))}
+              onChange={(event) => {
+                const systemPrompt = event.target.value;
+                setDraft((s) => ({ ...s, systemPrompt }));
+                if (fieldErrors.systemPrompt) {
+                  setFieldErrors((s) => ({
+                    ...s,
+                    systemPrompt: systemPrompt.trim() ? undefined : s.systemPrompt,
+                  }));
+                }
+              }}
               placeholder={t('roles.systemPromptPlaceholder')}
             />
           </Form.Item>
@@ -729,6 +870,73 @@ export function RolesPage() {
               }}
               defaults={{ temperature: 0.7, topP: 1 }}
               visibleParams={['temperature', 'topP']}
+            />
+          </Form.Item>
+
+          <Divider style={{ margin: '8px 0 16px' }}>{t('roles.capabilities')}</Divider>
+
+          <Form.Item
+            label={t('roles.mcpServers')}
+            extra={t('roles.mcpServersHint')}
+          >
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder={mcpSelectOptions.length === 0 ? t('roles.mcpEmpty') : t('roles.mcpServersPlaceholder')}
+              value={draft.enabledMcpServerIds}
+              onChange={(ids) => setDraft((s) => ({ ...s, enabledMcpServerIds: ids }))}
+              options={mcpSelectOptions}
+              optionRender={(option) => (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  {option.data?.server ? (
+                    <McpServerIcon server={option.data.server} size={16} />
+                  ) : null}
+                  <span>{option.label}</span>
+                </span>
+              )}
+              labelRender={(props) => {
+                const server = mcpSelectOptions.find((item) => item.value === props.value)?.server;
+                return (
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    {server ? <McpServerIcon server={server} size={14} /> : null}
+                    <span>{props.label}</span>
+                  </span>
+                );
+              }}
+              style={{ width: '100%' }}
+              maxTagCount="responsive"
+              notFoundContent={t('roles.mcpEmpty')}
+            />
+          </Form.Item>
+
+          <Form.Item
+            label={t('roles.skills')}
+            extra={t('roles.skillsHint')}
+          >
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              optionFilterProp="label"
+              placeholder={skillSelectOptions.length === 0 ? t('roles.skillsEmpty') : t('roles.skillsPlaceholder')}
+              value={draft.enabledSkillNames}
+              onChange={(names) => setDraft((s) => ({ ...s, enabledSkillNames: names }))}
+              options={skillSelectOptions}
+              optionRender={(option) => (
+                <div style={{ lineHeight: 1.3 }}>
+                  <div>{option.label}</div>
+                  {option.data?.description ? (
+                    <div style={{ fontSize: 11, color: token.colorTextSecondary }}>
+                      {option.data.description}
+                    </div>
+                  ) : null}
+                </div>
+              )}
+              style={{ width: '100%' }}
+              maxTagCount="responsive"
+              notFoundContent={t('roles.skillsEmpty')}
             />
           </Form.Item>
         </Form>

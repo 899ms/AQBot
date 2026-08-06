@@ -33,6 +33,8 @@ import {
 } from '@/types';
 import { invoke } from '@/lib/invoke';
 import { usePageSuspendCleanup } from '@/components/layout/PageLifecycle';
+import { RoleSwitcherPopover } from './toolbar/RoleSwitcherPopover';
+import { SkillPickerPopover } from './toolbar/SkillPickerPopover';
 
 const DOCUMENT_ATTACHMENT_ACCEPT = [
   '.pdf',
@@ -1541,6 +1543,8 @@ export function InputArea() {
                 />
               </Tooltip>
             )}
+            <RoleSwitcherPopover />
+            {currentMode === 'agent' && <SkillPickerPopover />}
             <Popover
               trigger="click"
               placement="topLeft"

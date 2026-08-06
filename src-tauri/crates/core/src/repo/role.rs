@@ -60,6 +60,8 @@ fn role_from_entity(m: roles::Model) -> Role {
         avatar_value: m.avatar_value.or(fallback_avatar_value),
         temperature: m.temperature.map(|v| v as f32),
         top_p: m.top_p.map(|v| v as f32),
+        enabled_mcp_server_ids: parse_string_list(&m.enabled_mcp_server_ids_json),
+        enabled_skill_names: parse_string_list(&m.enabled_skill_names_json),
         source_kind: m.source_kind,
         source_ref: m.source_ref,
         created_at: m.created_at,
@@ -108,6 +110,12 @@ pub async fn create_role(db: &DatabaseConnection, input: CreateRoleInput) -> Res
         avatar_value: Set(avatar_value),
         temperature: Set(input.temperature),
         top_p: Set(input.top_p),
+        enabled_mcp_server_ids_json: Set(stringify_string_list(&clean_list(
+            input.enabled_mcp_server_ids,
+        ))?),
+        enabled_skill_names_json: Set(stringify_string_list(&clean_list(
+            input.enabled_skill_names,
+        ))?),
         source_kind: Set(input.source_kind.unwrap_or_else(|| "local".to_string())),
         source_ref: Set(clean_optional_text(input.source_ref)),
         created_at: Set(now),
@@ -161,6 +169,14 @@ pub async fn update_role(
     if let Some(top_p) = input.top_p {
         model.top_p = Set(top_p);
     }
+    if let Some(enabled_mcp_server_ids) = input.enabled_mcp_server_ids {
+        model.enabled_mcp_server_ids_json =
+            Set(stringify_string_list(&clean_list(enabled_mcp_server_ids))?);
+    }
+    if let Some(enabled_skill_names) = input.enabled_skill_names {
+        model.enabled_skill_names_json =
+            Set(stringify_string_list(&clean_list(enabled_skill_names))?);
+    }
     model.updated_at = Set(now_ts());
     model.update(db).await?;
 
@@ -199,6 +215,8 @@ mod tests {
                 avatar_value: Some("🌐".into()),
                 temperature: Some(0.2),
                 top_p: Some(0.8),
+                enabled_mcp_server_ids: vec!["mcp-1".into()],
+                enabled_skill_names: vec!["demo-skill".into()],
                 source_kind: Some("local".into()),
                 source_ref: None,
             },
@@ -213,6 +231,8 @@ mod tests {
         assert_eq!(created.avatar_value.as_deref(), Some("🌐"));
         assert_eq!(created.temperature, Some(0.2));
         assert_eq!(created.top_p, Some(0.8));
+        assert_eq!(created.enabled_mcp_server_ids, vec!["mcp-1"]);
+        assert_eq!(created.enabled_skill_names, vec!["demo-skill"]);
 
         let listed = super::list_roles(&h.conn).await.unwrap();
         assert_eq!(listed.len(), 1);
@@ -232,6 +252,8 @@ mod tests {
                 avatar_value: Some(None),
                 temperature: Some(None),
                 top_p: Some(Some(0.9)),
+                enabled_mcp_server_ids: Some(vec!["mcp-2".into()]),
+                enabled_skill_names: Some(vec![]),
             },
         )
         .await
@@ -244,6 +266,8 @@ mod tests {
         assert_eq!(updated.avatar_value, None);
         assert_eq!(updated.temperature, None);
         assert_eq!(updated.top_p, Some(0.9));
+        assert_eq!(updated.enabled_mcp_server_ids, vec!["mcp-2"]);
+        assert!(updated.enabled_skill_names.is_empty());
 
         super::delete_role(&h.conn, &created.id).await.unwrap();
         assert!(super::list_roles(&h.conn).await.unwrap().is_empty());
@@ -259,7 +283,9 @@ mod tests {
                 DbBackend::Sqlite,
                 r#"
                 DROP TABLE roles;
-                DELETE FROM seaql_migrations WHERE version LIKE '%roles%';
+                DELETE FROM seaql_migrations
+                  WHERE version LIKE '%roles%'
+                     OR version LIKE '%role_capability%';
                 CREATE TABLE roles (
                     id varchar NOT NULL PRIMARY KEY,
                     name varchar NOT NULL,

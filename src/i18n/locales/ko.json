@@ -291,7 +291,19 @@
     "searchSelectHint": "to select",
     "searchCloseHint": "to close",
     "searchNoResults": "No matching conversations",
-    "searchingConversations": "Searching conversations…"
+    "searchingConversations": "Searching conversations…",
+    "role": {
+      "title": "Switch role",
+      "apply": "Apply",
+      "new": "New",
+      "manage": "Manage roles →"
+    },
+    "skill": {
+      "title": "Skills",
+      "searchPlaceholder": "Search skills",
+      "empty": "No skills yet. Install some on the Skills page.",
+      "manage": "Manage skills →"
+    }
   },
   "gateway": {
     "title": "게이트웨이",
@@ -1913,6 +1925,26 @@
     "tags": "태그",
     "tagsPlaceholder": "태그, 쉼표로 구분",
     "title": "역할",
-    "use": "사용"
+    "use": "사용",
+    "capabilities": "Capabilities",
+    "mcpServers": "MCP servers",
+    "mcpServersHint": "Applying this role enables selected MCP servers (non-empty list replaces the current chat selection).",
+    "mcpEmpty": "No enabled MCP servers",
+    "skills": "Skills",
+    "skillsHint": "Applying this role ensures selected skills are enabled globally for Agent mode.",
+    "skillsEmpty": "No installed skills",
+    "mcpServersPlaceholder": "Search and select MCP servers",
+    "skillsPlaceholder": "Search and select skills",
+    "installFailed": "Failed to install role",
+    "saveSuccess": "Role saved",
+    "saveFailed": "Failed to save role",
+    "deleteSuccess": "Role deleted",
+    "deleteFailed": "Failed to delete role",
+    "notFound": "Role not found",
+    "validation": {
+      "nameRequired": "Role name is required",
+      "systemPromptRequired": "System prompt is required",
+      "failed": "Validation failed: {{detail}}"
+    }
   }
 }

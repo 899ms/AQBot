@@ -139,6 +139,20 @@ vi.mock('@/stores', () => ({
   useMcpStore: (selector: (state: typeof mcpState) => unknown) => selector(mcpState),
   useKnowledgeStore: (selector: (state: typeof knowledgeState) => unknown) => selector(knowledgeState),
   useMemoryStore: (selector: (state: typeof memoryState) => unknown) => selector(memoryState),
+  useRoleStore: Object.assign(
+    (selector: (state: { roles: []; ensureRolesLoaded: () => Promise<void> }) => unknown) =>
+      selector({ roles: [], ensureRolesLoaded: async () => {} }),
+    { getState: () => ({ roles: [] }) },
+  ),
+  useSkillStore: Object.assign(
+    (selector: (state: {
+      skills: [];
+      ensureSkillsLoaded: () => Promise<void>;
+      toggleSkill: () => Promise<void>;
+    }) => unknown) =>
+      selector({ skills: [], ensureSkillsLoaded: async () => {}, toggleSkill: async () => {} }),
+    { getState: () => ({ skills: [] }) },
+  ),
 }));
 
 vi.mock('@/stores/uiStore', () => ({

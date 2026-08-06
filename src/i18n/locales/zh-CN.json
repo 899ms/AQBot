@@ -221,6 +221,18 @@
       "noServers": "请先在设置中配置并启用 MCP 服务器",
       "goConfig": "前往配置 →"
     },
+    "role": {
+      "title": "切换角色",
+      "apply": "应用",
+      "new": "新建",
+      "manage": "管理角色 →"
+    },
+    "skill": {
+      "title": "技能",
+      "searchPlaceholder": "搜索技能",
+      "empty": "暂无技能，请先在技能页安装",
+      "manage": "管理技能 →"
+    },
     "contextCleared": "上下文已从此处重置",
     "knowledge": {
       "title": "知识库",
@@ -1725,9 +1737,15 @@
     "installed": "已安装",
     "applied": "已应用到当前会话",
     "installSuccess": "角色已安装",
+    "installFailed": "安装角色失败",
+    "saveSuccess": "角色已保存",
+    "saveFailed": "保存角色失败",
+    "deleteSuccess": "角色已删除",
+    "deleteFailed": "删除角色失败",
+    "notFound": "角色不存在",
     "searchPlaceholder": "搜索角色",
     "empty": "暂无角色",
-    "emptyDesc": "还没有角色",
+    "emptyDesc": "创建角色或从市场安装，即可快速切换人设",
     "marketplaceEmpty": "暂无市场角色",
     "avatar": "头像",
     "name": "角色名称",
@@ -1737,17 +1755,31 @@
     "openingQuestions": "开场问题",
     "tags": "标签",
     "modelParams": "模型参数",
-    "namePlaceholder": "角色名称",
+    "capabilities": "能力绑定",
+    "mcpServers": "MCP 服务器",
+    "mcpServersHint": "应用角色时会启用所选 MCP（非空列表会覆盖当前会话）",
+    "mcpServersPlaceholder": "搜索并选择 MCP 服务器",
+    "mcpEmpty": "暂无已启用的 MCP 服务器",
+    "skills": "技能",
+    "skillsHint": "应用角色时会确保所选技能全局开启（供 Agent 模式使用）",
+    "skillsPlaceholder": "搜索并选择技能",
+    "skillsEmpty": "暂无已安装技能",
+    "namePlaceholder": "请输入角色名称",
     "avatarPlaceholder": "头像（表情或 URL）",
-    "descriptionPlaceholder": "简介",
-    "systemPromptPlaceholder": "系统提示词",
-    "openingMessagePlaceholder": "开场白",
+    "descriptionPlaceholder": "简要描述这个角色的用途",
+    "systemPromptPlaceholder": "定义角色的系统提示词（必填）",
+    "openingMessagePlaceholder": "进入会话时展示的开场白（可选）",
     "openingQuestionsPlaceholder": "开场问题，每行一个",
     "openingQuestionPlaceholder": "输入一个开场问题",
     "addOpeningQuestion": "添加问题",
     "removeOpeningQuestion": "删除问题",
     "tagsPlaceholder": "标签，用逗号分隔",
-    "addTag": "添加标签"
+    "addTag": "添加标签",
+    "validation": {
+      "nameRequired": "请输入角色名称",
+      "systemPromptRequired": "请输入系统提示词",
+      "failed": "校验失败：{{detail}}"
+    }
   },
   "agent": {
     "askUserPlaceholder": "输入您的回答...",

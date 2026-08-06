@@ -35,6 +35,8 @@ const roles: Role[] = [
     avatar_value: '🌐',
     temperature: 0.2,
     top_p: 0.8,
+    enabled_mcp_server_ids: [],
+    enabled_skill_names: [],
     source_kind: 'local',
     source_ref: null,
     created_at: 1,
@@ -96,6 +98,18 @@ vi.mock('react-i18next', () => ({
         'roles.openingQuestions': '开场问题',
         'roles.tags': '标签',
         'roles.modelParams': '模型参数',
+        'roles.capabilities': '能力绑定',
+        'roles.mcpServers': 'MCP 服务器',
+        'roles.mcpServersHint': 'MCP 提示',
+        'roles.mcpServersPlaceholder': '搜索并选择 MCP 服务器',
+        'roles.mcpEmpty': '暂无已启用的 MCP 服务器',
+        'roles.skills': '技能',
+        'roles.skillsHint': '技能提示',
+        'roles.skillsPlaceholder': '搜索并选择技能',
+        'roles.skillsEmpty': '暂无已安装技能',
+        'roles.validation.nameRequired': '请输入角色名称',
+        'roles.validation.systemPromptRequired': '请输入系统提示词',
+        'roles.saveSuccess': '角色已保存',
         'roles.edit': '编辑',
         'roles.delete': '删除',
         'roles.deleteConfirm': '删除角色？',
@@ -115,6 +129,10 @@ vi.mock('@/components/shared/IconEditor', () => ({
 
 vi.mock('@/components/common/ModelParamSliders', () => ({
   ModelParamSliders: () => <div>model-param-sliders</div>,
+}));
+
+vi.mock('@/components/shared/McpServerIcon', () => ({
+  McpServerIcon: () => <span>mcp-icon</span>,
 }));
 
 vi.mock('@/hooks/useResolvedAvatarSrc', () => ({
@@ -175,6 +193,26 @@ vi.mock('@/stores', () => ({
     };
     return selector ? selector(state) : state;
   },
+  useMcpStore: (selector?: (state: any) => unknown) => {
+    const state = {
+      servers: [],
+      ensureServersLoaded: vi.fn().mockResolvedValue(undefined),
+    };
+    return selector ? selector(state) : state;
+  },
+  useSkillStore: Object.assign(
+    (selector?: (state: any) => unknown) => {
+      const state = {
+        skills: [],
+        ensureSkillsLoaded: vi.fn().mockResolvedValue(undefined),
+        toggleSkill: vi.fn().mockResolvedValue(undefined),
+      };
+      return selector ? selector(state) : state;
+    },
+    {
+      getState: () => ({ skills: [] }),
+    },
+  ),
 }));
 
 describe('RolesPage', () => {
@@ -306,5 +344,57 @@ describe('RolesPage', () => {
     expect(screen.getByText('标签')).toBeInTheDocument();
     expect(screen.getByText('开场问题')).toBeInTheDocument();
     expect(screen.getByText('模型参数')).toBeInTheDocument();
+  });
+
+  it('keeps role editor header and footer fixed while body scrolls', async () => {
+    const user = userEvent.setup();
+
+    render(<RolesPage />);
+    await user.click(screen.getByRole('button', { name: '新建角色' }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    // antd 6 uses .ant-modal-container (header/footer fixed; body scrolls).
+    const container = document.querySelector('.ant-modal-container') as HTMLElement | null;
+    const body = document.querySelector('.ant-modal-body') as HTMLElement | null;
+    expect(container).toBeTruthy();
+    expect(body).toBeTruthy();
+    expect(container!.style.maxHeight).toBe('calc(100vh - 48px)');
+    expect(container!.style.display).toBe('flex');
+    expect(container!.style.flexDirection).toBe('column');
+    expect(body!.style.overflowY).toBe('auto');
+    expect(body!.style.flex).toMatch(/^1\b/);
+  });
+
+  it('uses multi-select controls for MCP and skills', async () => {
+    const user = userEvent.setup();
+
+    render(<RolesPage />);
+    await user.click(screen.getByRole('button', { name: '新建角色' }));
+
+    expect(screen.getByText('MCP 服务器')).toBeInTheDocument();
+    expect(screen.getByText('技能')).toBeInTheDocument();
+    // Capability multi-selects use combobox role (searchable Select).
+    const comboboxes = screen.getAllByRole('combobox');
+    expect(comboboxes.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('shows localized validation when saving an empty role', async () => {
+    const user = userEvent.setup();
+
+    render(<RolesPage />);
+    await user.click(screen.getByRole('button', { name: '新建角色' }));
+
+    // antd may insert letter-spacing spaces in Chinese button labels (e.g. "保 存").
+    const saveButton = Array.from(document.querySelectorAll('button')).find((btn) => {
+      const text = (btn.textContent || '').replace(/\s+/g, '');
+      return text === '保存' || text === 'Save' || text === 'common.save' || text === 'OK';
+    });
+    expect(saveButton).toBeTruthy();
+    await user.click(saveButton!);
+
+    expect(mocks.createRole).not.toHaveBeenCalled();
+    expect(screen.getAllByText('请输入角色名称').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('请输入系统提示词').length).toBeGreaterThan(0);
   });
 });

@@ -291,6 +291,18 @@
       "userMessages": "User Messages",
       "assistantMessages": "AI Messages",
       "avgSpeed": "Avg Speed"
+    },
+    "role": {
+      "title": "Switch role",
+      "apply": "Apply",
+      "new": "New",
+      "manage": "Manage roles →"
+    },
+    "skill": {
+      "title": "Skills",
+      "searchPlaceholder": "Search skills",
+      "empty": "No skills yet. Install some on the Skills page.",
+      "manage": "Manage skills →"
     }
   },
   "gateway": {
@@ -1727,7 +1739,7 @@
     "installSuccess": "Role installed",
     "searchPlaceholder": "Search roles",
     "empty": "No roles",
-    "emptyDesc": "No roles yet",
+    "emptyDesc": "Create a role or install one from the marketplace to switch personas quickly",
     "marketplaceEmpty": "No marketplace roles",
     "avatar": "Avatar",
     "name": "Role name",
@@ -1737,17 +1749,37 @@
     "openingQuestions": "Opening questions",
     "tags": "Tags",
     "modelParams": "Model parameters",
-    "namePlaceholder": "Role name",
+    "namePlaceholder": "Enter a role name",
     "avatarPlaceholder": "Avatar (emoji or URL)",
-    "descriptionPlaceholder": "Description",
-    "systemPromptPlaceholder": "System prompt",
-    "openingMessagePlaceholder": "Opening message",
+    "descriptionPlaceholder": "Briefly describe what this role is for",
+    "systemPromptPlaceholder": "Define the system prompt for this role (required)",
+    "openingMessagePlaceholder": "Opening message shown when starting a chat (optional)",
     "openingQuestionsPlaceholder": "Opening questions, one per line",
     "openingQuestionPlaceholder": "Enter an opening question",
     "addOpeningQuestion": "Add question",
     "removeOpeningQuestion": "Remove question",
     "tagsPlaceholder": "Tags, comma separated",
-    "addTag": "Add tag"
+    "addTag": "Add tag",
+    "capabilities": "Capabilities",
+    "mcpServers": "MCP servers",
+    "mcpServersHint": "Applying this role enables selected MCP servers (a non-empty list replaces the current chat selection)",
+    "mcpEmpty": "No enabled MCP servers",
+    "skills": "Skills",
+    "skillsHint": "Applying this role ensures selected skills are enabled globally for Agent mode",
+    "skillsEmpty": "No installed skills",
+    "mcpServersPlaceholder": "Search and select MCP servers",
+    "skillsPlaceholder": "Search and select skills",
+    "installFailed": "Failed to install role",
+    "saveSuccess": "Role saved",
+    "saveFailed": "Failed to save role",
+    "deleteSuccess": "Role deleted",
+    "deleteFailed": "Failed to delete role",
+    "notFound": "Role not found",
+    "validation": {
+      "nameRequired": "Role name is required",
+      "systemPromptRequired": "System prompt is required",
+      "failed": "Validation failed: {{detail}}"
+    }
   },
   "agent": {
     "askUserPlaceholder": "Type your answer...",

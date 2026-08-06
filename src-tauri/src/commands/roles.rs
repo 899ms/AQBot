@@ -356,6 +356,8 @@ fn entry_to_create_input(entry: RoleMarketplaceEntry) -> Result<CreateRoleInput,
         avatar_value: entry.avatar_value,
         temperature: entry.temperature,
         top_p: entry.top_p,
+        enabled_mcp_server_ids: Vec::new(),
+        enabled_skill_names: Vec::new(),
         source_kind: Some(entry.source_kind),
         source_ref: Some(entry.source_ref),
     })

@@ -40,6 +40,7 @@ mod m20260702_000001_add_inline_media_failures;
 mod m20260723_000001_add_image_adapter_support;
 mod m20260724_000001_add_model_metadata;
 mod m20260725_000001_add_provider_aws_region;
+mod m20260806_000001_add_role_capability_bindings;
 
 pub struct Migrator;
 
@@ -87,6 +88,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260723_000001_add_image_adapter_support::Migration),
             Box::new(m20260724_000001_add_model_metadata::Migration),
             Box::new(m20260725_000001_add_provider_aws_region::Migration),
+            Box::new(m20260806_000001_add_role_capability_bindings::Migration),
         ]
     }
 }
@@ -248,7 +250,14 @@ mod tests {
             manager.has_table("roles").await.expect("check roles table"),
             "missing roles table"
         );
-        for column in ["temperature", "top_p", "avatar_type", "avatar_value"] {
+        for column in [
+            "temperature",
+            "top_p",
+            "avatar_type",
+            "avatar_value",
+            "enabled_mcp_server_ids_json",
+            "enabled_skill_names_json",
+        ] {
             assert!(
                 manager
                     .has_column("roles", column)
@@ -359,7 +368,14 @@ mod tests {
             .expect("run sqlite migrations");
 
         let manager = SchemaManager::new(&db);
-        for column in ["temperature", "top_p", "avatar_type", "avatar_value"] {
+        for column in [
+            "temperature",
+            "top_p",
+            "avatar_type",
+            "avatar_value",
+            "enabled_mcp_server_ids_json",
+            "enabled_skill_names_json",
+        ] {
             assert!(
                 manager
                     .has_column("roles", column)

@@ -1053,6 +1053,8 @@ export interface Role {
   avatar_value: string | null;
   temperature: number | null;
   top_p: number | null;
+  enabled_mcp_server_ids: string[];
+  enabled_skill_names: string[];
   source_kind: string;
   source_ref: string | null;
   created_at: number;
@@ -1071,6 +1073,8 @@ export interface CreateRoleInput {
   avatar_value?: string | null;
   temperature?: number | null;
   top_p?: number | null;
+  enabled_mcp_server_ids?: string[];
+  enabled_skill_names?: string[];
   source_kind?: string | null;
   source_ref?: string | null;
 }
@@ -1087,6 +1091,8 @@ export interface UpdateRoleInput {
   avatar_value?: string | null;
   temperature?: number | null;
   top_p?: number | null;
+  enabled_mcp_server_ids?: string[];
+  enabled_skill_names?: string[];
 }
 
 export interface MarketplaceRole {

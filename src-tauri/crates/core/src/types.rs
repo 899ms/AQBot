@@ -731,6 +731,10 @@ pub struct Role {
     pub avatar_value: Option<String>,
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
+    #[serde(default)]
+    pub enabled_mcp_server_ids: Vec<String>,
+    #[serde(default)]
+    pub enabled_skill_names: Vec<String>,
     pub source_kind: String,
     pub source_ref: Option<String>,
     pub created_at: i64,
@@ -750,6 +754,10 @@ pub struct CreateRoleInput {
     pub avatar_value: Option<String>,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
+    #[serde(default)]
+    pub enabled_mcp_server_ids: Vec<String>,
+    #[serde(default)]
+    pub enabled_skill_names: Vec<String>,
     pub source_kind: Option<String>,
     pub source_ref: Option<String>,
 }
@@ -774,6 +782,8 @@ pub struct UpdateRoleInput {
     pub temperature: Option<Option<f64>>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub top_p: Option<Option<f64>>,
+    pub enabled_mcp_server_ids: Option<Vec<String>>,
+    pub enabled_skill_names: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -2097,6 +2097,8 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
         avatar_value: input.avatar_value ?? input.avatar ?? null,
         temperature: input.temperature ?? null,
         top_p: input.top_p ?? null,
+        enabled_mcp_server_ids: input.enabled_mcp_server_ids ?? [],
+        enabled_skill_names: input.enabled_skill_names ?? [],
         source_kind: input.source_kind ?? 'local',
         source_ref: input.source_ref ?? null,
         created_at: now,
@@ -2149,7 +2151,14 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
       const entry = MARKETPLACE_ROLES.find((role) => role.source_ref === sourceRef);
       if (!entry) throw new Error('Role source not found');
       const now = nowTs();
-      const role = { ...entry, id: genId(), created_at: now, updated_at: now };
+      const role = {
+        ...entry,
+        id: genId(),
+        enabled_mcp_server_ids: [],
+        enabled_skill_names: [],
+        created_at: now,
+        updated_at: now,
+      };
       setStore('roles', [role, ...getStore<any[]>('roles', [])]);
       return role as T;
     }
