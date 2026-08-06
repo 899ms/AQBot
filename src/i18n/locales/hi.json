@@ -696,6 +696,7 @@
     "proxyType": "प्रॉक्सी प्रकार",
     "proxyAddress": "प्रॉक्सी पता",
     "proxyPort": "प्रॉक्सी पोर्ट",
+    "proxyFollow": "वैश्विक सेटिंग्स का पालन करें",
     "proxyNone": "कोई नहीं",
     "proxySystem": "सिस्टम प्रॉक्सी",
     "proxyHttp": "HTTP",

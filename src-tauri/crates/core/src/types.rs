@@ -66,7 +66,7 @@ pub struct ProviderKey {
     pub created_at: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderProxyConfig {
     pub proxy_type: Option<String>,
     pub proxy_address: Option<String>,
@@ -107,6 +107,82 @@ impl ProviderProxyConfig {
                 proxy_port: global_settings.proxy_port,
             }),
         }
+    }
+}
+
+#[cfg(test)]
+mod provider_proxy_config_tests {
+    use super::{AppSettings, ProviderProxyConfig};
+
+    fn global_with_proxy(proxy_type: Option<&str>) -> AppSettings {
+        let mut settings = AppSettings::default();
+        settings.proxy_type = proxy_type.map(str::to_string);
+        settings.proxy_address = Some("127.0.0.1".to_string());
+        settings.proxy_port = Some(7890);
+        settings
+    }
+
+    fn provider_proxy(proxy_type: Option<&str>) -> Option<ProviderProxyConfig> {
+        Some(ProviderProxyConfig {
+            proxy_type: proxy_type.map(str::to_string),
+            proxy_address: Some("10.0.0.1".to_string()),
+            proxy_port: Some(1080),
+        })
+    }
+
+    #[test]
+    fn resolve_follows_global_when_provider_config_is_none() {
+        let global = global_with_proxy(Some("system"));
+        let resolved = ProviderProxyConfig::resolve(&None, &global);
+        assert_eq!(
+            resolved.and_then(|c| c.proxy_type),
+            Some("system".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_follows_global_when_provider_proxy_type_is_null() {
+        let global = global_with_proxy(Some("http"));
+        let resolved = ProviderProxyConfig::resolve(&provider_proxy(None), &global);
+        assert_eq!(
+            resolved,
+            Some(ProviderProxyConfig {
+                proxy_type: Some("http".to_string()),
+                proxy_address: Some("127.0.0.1".to_string()),
+                proxy_port: Some(7890),
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_provider_none_disables_even_when_global_is_system() {
+        let global = global_with_proxy(Some("system"));
+        let resolved = ProviderProxyConfig::resolve(&provider_proxy(Some("none")), &global);
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn resolve_provider_system_overrides_global_none() {
+        let global = global_with_proxy(None);
+        let resolved = ProviderProxyConfig::resolve(&provider_proxy(Some("system")), &global);
+        assert_eq!(
+            resolved.and_then(|c| c.proxy_type),
+            Some("system".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_provider_http_overrides_global() {
+        let global = global_with_proxy(Some("system"));
+        let resolved = ProviderProxyConfig::resolve(&provider_proxy(Some("http")), &global);
+        assert_eq!(
+            resolved,
+            Some(ProviderProxyConfig {
+                proxy_type: Some("http".to_string()),
+                proxy_address: Some("10.0.0.1".to_string()),
+                proxy_port: Some(1080),
+            })
+        );
     }
 }
 

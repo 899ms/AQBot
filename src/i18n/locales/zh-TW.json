@@ -707,6 +707,7 @@
     "proxyType": "代理類型",
     "proxyAddress": "代理位址",
     "proxyPort": "代理連接埠",
+    "proxyFollow": "跟隨全域設定",
     "proxyNone": "不使用代理",
     "proxySystem": "使用系統代理",
     "proxyHttp": "HTTP",

@@ -707,6 +707,7 @@
     "proxyType": "Proxy Type",
     "proxyAddress": "Proxy Address",
     "proxyPort": "Proxy Port",
+    "proxyFollow": "Follow Global Settings",
     "proxyNone": "None",
     "proxySystem": "System Proxy",
     "proxyHttp": "HTTP",

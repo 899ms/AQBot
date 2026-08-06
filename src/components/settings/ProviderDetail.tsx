@@ -1386,6 +1386,9 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
   if (!provider) return null;
 
   const providerWebsite = getBuiltinProviderWebsite(provider.builtin_id);
+  // UI value: null/missing proxy_type means "follow global"; "none" is explicit disable.
+  const proxyTypeValue = provider.proxy_config?.proxy_type ?? 'follow';
+  const needsProxyAddress = proxyTypeValue === 'http' || proxyTypeValue === 'socks5';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -2095,21 +2098,42 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
               <Form layout="vertical" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 <Form.Item label={t('settings.proxyType')} style={{ marginBottom: 0 }}>
                   <Select
-                    value={provider.proxy_config?.proxy_type ?? 'none'}
-                    onChange={(val) =>
+                    value={proxyTypeValue}
+                    onChange={(val) => {
+                      if (val === 'follow') {
+                        updateProvider(providerId, {
+                          proxy_config: {
+                            proxy_type: null,
+                            proxy_address: null,
+                            proxy_port: null,
+                          },
+                        });
+                        return;
+                      }
+                      if (val === 'none' || val === 'system') {
+                        updateProvider(providerId, {
+                          proxy_config: {
+                            proxy_type: val,
+                            proxy_address: null,
+                            proxy_port: null,
+                          },
+                        });
+                        return;
+                      }
                       updateProvider(providerId, {
                         proxy_config: {
-                          proxy_type: val === 'none' ? null : val,
+                          proxy_type: val,
                           proxy_address: provider.proxy_config?.proxy_address ?? null,
                           proxy_port: provider.proxy_config?.proxy_port ?? null,
                         },
-                      })
-                    }
+                      });
+                    }}
                     options={[
+                      { label: t('settings.proxyFollow'), value: 'follow' },
                       { label: t('settings.proxyNone'), value: 'none' },
                       { label: t('settings.proxySystem'), value: 'system' },
-                      { label: 'HTTP', value: 'http' },
-                      { label: 'SOCKS5', value: 'socks5', disabled: isBedrock },
+                      { label: t('settings.proxyHttp'), value: 'http' },
+                      { label: t('settings.proxySocks5'), value: 'socks5', disabled: isBedrock },
                     ]}
                   />
                 </Form.Item>
@@ -2127,7 +2151,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                       })
                     }
                     placeholder="127.0.0.1"
-                    disabled={provider.proxy_config?.proxy_type === 'system'}
+                    disabled={!needsProxyAddress}
                   />
                 </Form.Item>
                 <Form.Item label={t('settings.proxyPort')} style={{ marginBottom: 0 }}>
@@ -2147,7 +2171,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                     min={1}
                     max={65535}
                     style={{ width: '100%' }}
-                    disabled={provider.proxy_config?.proxy_type === 'system'}
+                    disabled={!needsProxyAddress}
                   />
                 </Form.Item>
               </Form>

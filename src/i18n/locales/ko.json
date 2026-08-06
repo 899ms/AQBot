@@ -696,6 +696,7 @@
     "proxyType": "프록시 유형",
     "proxyAddress": "프록시 주소",
     "proxyPort": "프록시 포트",
+    "proxyFollow": "전역 설정 따르기",
     "proxyNone": "없음",
     "proxySystem": "시스템 프록시",
     "proxyHttp": "HTTP",

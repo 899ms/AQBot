@@ -1420,4 +1420,72 @@ describe('ProviderDetail', () => {
       );
     });
   });
+
+  async function openProviderProxyPanel() {
+    await userEvent.click(screen.getByText('settings.providerProxy'));
+    await screen.findByText('settings.proxyType');
+  }
+
+  it('defaults provider proxy type to follow global when proxy_config is null', async () => {
+    provider.proxy_config = null;
+
+    render(
+      <App>
+        <ProviderDetail providerId="provider-1" />
+      </App>,
+    );
+
+    await openProviderProxyPanel();
+
+    expect(screen.getByText('settings.proxyFollow')).toBeInTheDocument();
+    expect(screen.queryByText('settings.proxyNone')).not.toBeInTheDocument();
+  });
+
+  it('saves explicit none when user disables provider proxy', async () => {
+    provider.proxy_config = null;
+
+    render(
+      <App>
+        <ProviderDetail providerId="provider-1" />
+      </App>,
+    );
+
+    await openProviderProxyPanel();
+    await userEvent.click(screen.getByText('settings.proxyFollow'));
+    await userEvent.click(await screen.findByText('settings.proxyNone'));
+
+    expect(mocks.updateProvider).toHaveBeenCalledWith('provider-1', {
+      proxy_config: {
+        proxy_type: 'none',
+        proxy_address: null,
+        proxy_port: null,
+      },
+    });
+  });
+
+  it('saves null proxy_type when user chooses follow global', async () => {
+    provider.proxy_config = {
+      proxy_type: 'none',
+      proxy_address: null,
+      proxy_port: null,
+    };
+
+    render(
+      <App>
+        <ProviderDetail providerId="provider-1" />
+      </App>,
+    );
+
+    await openProviderProxyPanel();
+    await userEvent.click(screen.getByText('settings.proxyNone'));
+    await userEvent.click(await screen.findByText('settings.proxyFollow'));
+
+    expect(mocks.updateProvider).toHaveBeenCalledWith('provider-1', {
+      proxy_config: {
+        proxy_type: null,
+        proxy_address: null,
+        proxy_port: null,
+      },
+    });
+  });
 });

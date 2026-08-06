@@ -696,6 +696,7 @@
     "proxyType": "نوع الوكيل",
     "proxyAddress": "عنوان الوكيل",
     "proxyPort": "منفذ الوكيل",
+    "proxyFollow": "اتباع الإعدادات العامة",
     "proxyNone": "لا شيء",
     "proxySystem": "وكيل النظام",
     "proxyHttp": "HTTP",

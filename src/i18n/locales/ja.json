@@ -696,6 +696,7 @@
     "proxyType": "プロキシタイプ",
     "proxyAddress": "プロキシアドレス",
     "proxyPort": "プロキシポート",
+    "proxyFollow": "グローバル設定に従う",
     "proxyNone": "なし",
     "proxySystem": "システムプロキシ",
     "proxyHttp": "HTTP",

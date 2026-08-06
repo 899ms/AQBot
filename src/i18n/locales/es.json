@@ -696,6 +696,7 @@
     "proxyType": "Tipo de proxy",
     "proxyAddress": "Dirección del proxy",
     "proxyPort": "Puerto del proxy",
+    "proxyFollow": "Seguir configuración global",
     "proxyNone": "Ninguno",
     "proxySystem": "Proxy del sistema",
     "proxyHttp": "HTTP",
