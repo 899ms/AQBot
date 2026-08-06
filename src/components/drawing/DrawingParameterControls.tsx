@@ -15,8 +15,11 @@ import type {
   ImageParameterDescriptor,
 } from '@/types';
 import {
+  getDrawingParameterAutoCompleteOption,
   getDrawingParameterLabel,
   getDrawingParameterOption,
+  getDrawingParameterValueLabel,
+  resolveDrawingParameterProtocolValue,
 } from '@/lib/drawingParameterPresentation';
 import { DrawingReferenceUploader } from './DrawingReferenceUploader';
 import type {
@@ -33,8 +36,21 @@ interface FieldProps {
   providerOptions: Array<{ label: ReactNode; value: string }>;
   secondaryTextColor: string;
   translate: (key: string, fallback: string) => string;
+  /** Extra control rendered immediately after the field label (e.g. model compat notice). */
+  labelAccessory?: ReactNode;
   onChange: (field: DrawingParamField, value: unknown) => void;
   onProviderChange: (providerId: string) => void;
+}
+
+function formLabel(text: string, accessory?: ReactNode): ReactNode {
+  if (!accessory) return text;
+  // Keep the chip tight against the label text (not right-aligned).
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span>{text}</span>
+      {accessory}
+    </span>
+  );
 }
 
 export function DrawingParameterField({
@@ -45,6 +61,7 @@ export function DrawingParameterField({
   providerOptions,
   secondaryTextColor,
   translate,
+  labelAccessory,
   onChange,
   onProviderChange,
 }: FieldProps) {
@@ -53,7 +70,7 @@ export function DrawingParameterField({
   switch (field.type) {
     case 'modelSelect':
       return (
-        <Form.Item label={label}>
+        <Form.Item label={formLabel(label, labelAccessory)}>
           <Select
             value={settings.modelId}
             options={toSelectOptions(context.modelOptions, translate)}
@@ -76,15 +93,26 @@ export function DrawingParameterField({
       );
     case 'select':
       if (descriptor?.kind === 'string') {
+        const parameterKey = descriptor.key;
+        const protocolValue = field.key
+          ? String(settings[field.key] ?? descriptor.default ?? '')
+          : '';
         return (
           <Form.Item label={label}>
             <AutoComplete
-              value={field.key ? String(settings[field.key] ?? descriptor.default ?? '') : ''}
-              options={descriptor.options.map((value) => ({
-                label: String(value),
-                value: String(value),
-              }))}
-              onChange={(value) => onChange(field, value)}
+              value={getDrawingParameterValueLabel(parameterKey, protocolValue, translate)}
+              options={descriptor.options.map((value) => (
+                getDrawingParameterAutoCompleteOption(parameterKey, value, translate)
+              ))}
+              onChange={(displayValue) => onChange(
+                field,
+                resolveDrawingParameterProtocolValue(
+                  parameterKey,
+                  displayValue,
+                  descriptor.options,
+                  translate,
+                ),
+              )}
             />
           </Form.Item>
         );
@@ -207,12 +235,23 @@ export function DrawingDynamicParameters({
         />
       ) : (
         <AutoComplete
-          value={String(values[parameter.key] ?? parameter.default ?? '')}
-          options={parameter.options.map((value) => ({
-            label: String(value),
-            value: String(value),
-          }))}
-          onChange={(value) => onChange(parameter.key, value)}
+          value={getDrawingParameterValueLabel(
+            parameter.key,
+            values[parameter.key] ?? parameter.default ?? '',
+            translate,
+          )}
+          options={parameter.options.map((value) => (
+            getDrawingParameterAutoCompleteOption(parameter.key, value, translate)
+          ))}
+          onChange={(displayValue) => onChange(
+            parameter.key,
+            resolveDrawingParameterProtocolValue(
+              parameter.key,
+              displayValue,
+              parameter.options,
+              translate,
+            ),
+          )}
         />
       )}
     </Form.Item>

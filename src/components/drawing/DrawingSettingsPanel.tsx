@@ -11,6 +11,7 @@ import {
 import {
   getDrawingWarningDescription,
   getDrawingWarningTitle,
+  splitDrawingWarnings,
 } from '@/lib/drawingWarnings';
 import { SmartProviderIcon } from '@/lib/providerIcons';
 import { useUIStore } from '@/stores/uiStore';
@@ -19,6 +20,7 @@ import {
   DrawingDynamicParameters,
   DrawingParameterField,
 } from './DrawingParameterControls';
+import { DrawingModelCompatibilityNotice } from './DrawingModelCompatibilityNotice';
 import type {
   DrawingParamField,
   DrawingParamOption,
@@ -190,6 +192,19 @@ export function DrawingSettingsPanel({
     patch(next);
   };
 
+  const { compatibilityNotices, blockWarnings } = splitDrawingWarnings(
+    selectedTarget?.descriptor.warnings,
+  );
+  const modelCompatibilityAccessory = compatibilityNotices.length > 0 && selectedTarget
+    ? (
+      <DrawingModelCompatibilityNotice
+        warnings={compatibilityNotices}
+        modelId={selectedTarget.model_id}
+        translate={translateWarning}
+      />
+    )
+    : undefined;
+
   const renderField = (field: DrawingParamField) => (
     <DrawingParameterField
       key={field.id}
@@ -200,6 +215,7 @@ export function DrawingSettingsPanel({
       providerOptions={providerSelectOptions}
       secondaryTextColor={token.colorTextSecondary}
       translate={translateOption}
+      labelAccessory={field.type === 'modelSelect' ? modelCompatibilityAccessory : undefined}
       onChange={patchField}
       onProviderChange={(providerId) => {
         const targetModelId = targets?.find(
@@ -260,13 +276,17 @@ export function DrawingSettingsPanel({
             )}
           />
         )}
-        {selectedTarget?.descriptor.warnings.map((warning) => (
+        {blockWarnings.map((warning) => (
           <Alert
             key={warning.code}
             type="warning"
             showIcon
             style={{ marginBottom: 12 }}
-            title={getDrawingWarningTitle(warning, selectedTarget.model_id, translateWarning)}
+            title={getDrawingWarningTitle(
+              warning,
+              selectedTarget?.model_id ?? settings.modelId,
+              translateWarning,
+            )}
             description={getDrawingWarningDescription(warning, translateWarning)}
           />
         ))}

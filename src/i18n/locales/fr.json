@@ -1751,9 +1751,9 @@
   },
   "imageProtocol": {
     "title": "Protocole d’image",
-    "grokAutoDetectDescription": "Le modèle actuel utilise xAI Images par défaut. Vous pouvez le remplacer ci-dessous.",
-    "autoDetectDescription": "La détection automatique choisit un adaptateur intégré selon le fournisseur et l’ID du modèle.",
-    "adapterProfile": "Profil d’adaptateur",
+    "grokAutoDetectDescription": "This model is detected as xAI Images by default. You can override below. Protocol and parameter presets are independent.",
+    "autoDetectDescription": "The adapter chooses the request protocol; the fallback profile chooses parameter UI and validation. The real model id is always sent as-is.",
+    "adapterProfile": "Adapter preset (protocol)",
     "autoDetect": "Détection automatique",
     "capabilityOverrides": "Remplacement des capacités (laisser vide pour utiliser les valeurs du profil)",
     "operation": {
@@ -1779,7 +1779,10 @@
     "extraBody": "Corps supplémentaire (objet JSON)",
     "fieldResponseMapping": "Mappage des champs et réponses (objet JSON)",
     "jsonObjectRequired": "Doit être un objet JSON",
-    "invalidJson": "JSON du protocole d’image non valide"
+    "invalidJson": "JSON du protocole d’image non valide",
+    "paramProfile": "Drawing parameter fallback profile",
+    "paramProfileHint": "Affects only the parameter panel and validation. Does not change the request protocol or the real model id. Leave empty to use the adapter default (OpenAI Images defaults to gpt-image-2).",
+    "paramProfileAuto": "Auto (adapter default)"
   },
   "drawing": {
     "title": "Drawing",
@@ -1904,7 +1907,9 @@
       "deprecated_model": "This image model is deprecated and scheduled to shut down. Compatible endpoints remain available.",
       "deadline": "Deadline: {{deadline}}",
       "replacement": "Suggested model: {{modelId}}",
-      "separator": " · "
+      "separator": " · ",
+      "using_fallback_profile": "{{modelId}} has no verified image parameter profile; using the adapter default parameter preset.",
+      "compatibilityTitle": "Compatibility notice"
     },
     "referenceImageParamName": "Third-party image parameter name",
     "referenceImageParamNameHint": "Only for third-party compatible APIs; official OpenAI uses images/image[] automatically."

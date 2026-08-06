@@ -41,12 +41,6 @@ const PARAMETER_KEY_ALIASES: Record<string, string> = {
   referenceImageMode: 'reference_image_mode',
 };
 
-const FORMAT_LABELS: Record<string, string> = {
-  png: 'PNG',
-  jpeg: 'JPEG',
-  webp: 'WEBP',
-};
-
 const OPTION_LABELS: Record<string, Record<string, LocalizedLabel>> = {
   background: {
     opaque: { key: 'drawing.option.background.opaque', fallback: 'Opaque' },
@@ -54,6 +48,11 @@ const OPTION_LABELS: Record<string, Record<string, LocalizedLabel>> = {
       key: 'drawing.option.background.transparent',
       fallback: 'Transparent',
     },
+  },
+  output_format: {
+    png: { key: 'drawing.option.outputFormat.png', fallback: 'PNG' },
+    jpeg: { key: 'drawing.option.outputFormat.jpeg', fallback: 'JPEG' },
+    webp: { key: 'drawing.option.outputFormat.webp', fallback: 'WEBP' },
   },
   person_generation: {
     allow_adult: {
@@ -109,9 +108,6 @@ export function getDrawingParameterValueLabel(
   const canonicalKey = canonicalParameterKey(parameterKey);
   const stringValue = String(value);
   if (stringValue === 'auto') return t('drawing.option.auto', 'Auto');
-  if (canonicalKey === 'output_format' && FORMAT_LABELS[stringValue]) {
-    return FORMAT_LABELS[stringValue];
-  }
   const localized = OPTION_LABELS[canonicalKey]?.[stringValue];
   if (localized) return t(localized.key, localized.fallback);
   return stringValue;
@@ -126,4 +122,43 @@ export function getDrawingParameterOption(
     label: getDrawingParameterValueLabel(parameterKey, value, t),
     value,
   };
+}
+
+/**
+ * AutoComplete fills the input with option `value`. Use the localized label as the
+ * option value so dropdown + input show i18n text, then reverse-map on change.
+ */
+export function getDrawingParameterAutoCompleteOption(
+  parameterKey: string,
+  protocolValue: unknown,
+  t: DrawingParameterTranslate,
+) {
+  const label = getDrawingParameterValueLabel(parameterKey, protocolValue, t);
+  return {
+    value: label,
+    label,
+  };
+}
+
+/**
+ * Map an AutoComplete input (localized label or raw protocol value) back to the
+ * protocol value expected by the image API. Free-form sizes pass through unchanged.
+ */
+export function resolveDrawingParameterProtocolValue(
+  parameterKey: string,
+  input: string,
+  knownOptions: readonly unknown[],
+  t: DrawingParameterTranslate,
+): string {
+  if (knownOptions.length === 0) return input;
+
+  for (const option of knownOptions) {
+    if (String(option) === input) return String(option);
+  }
+  for (const option of knownOptions) {
+    if (getDrawingParameterValueLabel(parameterKey, option, t) === input) {
+      return String(option);
+    }
+  }
+  return input;
 }

@@ -2,6 +2,7 @@ import { Alert, Checkbox, Form, Input, InputNumber, Select, Typography } from 'a
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { ImageAdapterConfig, ProviderType } from '@/types';
+import { IMAGE_PARAM_PROFILES } from '@/types';
 
 interface Props {
   value: ImageAdapterConfig | null | undefined;
@@ -14,6 +15,26 @@ function isXaiImageModel(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
   return normalized.startsWith('grok-imagine') || normalized.startsWith('grok-image');
 }
+
+const PARAM_PROFILE_LABELS: Record<string, string> = {
+  openai_gpt_image_2: 'gpt-image-2 (OpenAI)',
+  openai_gpt_image_legacy: 'gpt-image-1.x (OpenAI)',
+  openai_dalle_2: 'DALL·E 2',
+  openai_dalle_3: 'DALL·E 3',
+  xai_imagine: 'Grok Imagine (xAI)',
+  gemini_3_1_flash: 'Gemini 3.1 Flash Image',
+  gemini_3_1_flash_lite: 'Gemini 3.1 Flash Lite Image',
+  gemini_3_pro: 'Gemini 3 Pro Image',
+  gemini_2_5: 'Gemini 2.5 Flash Image',
+  imagen_4: 'Imagen 4',
+  imagen_4_ultra: 'Imagen 4 Ultra',
+  imagen_4_fast: 'Imagen 4 Fast',
+  glm_image: 'GLM Image',
+  cogview: 'CogView',
+  siliconflow_kolors: 'SiliconFlow Kolors',
+  siliconflow_qwen: 'SiliconFlow Qwen Image',
+  siliconflow_qwen_edit: 'SiliconFlow Qwen Image Edit',
+};
 
 export function ImageProtocolEditor({
   value,
@@ -63,17 +84,17 @@ export function ImageProtocolEditor({
           {isXaiImageModel(modelId) || providerType === 'xai'
             ? t(
               'imageProtocol.grokAutoDetectDescription',
-              '当前模型默认识别为 xAI Images，可在下方显式覆盖。',
+              '当前模型默认识别为 xAI Images，可在下方显式覆盖。协议与参数预设相互独立。',
             )
             : t(
               'imageProtocol.autoDetectDescription',
-              '自动识别会根据服务商类型和模型 ID 选择内置适配器。',
+              '适配器决定请求协议；参数兜底模型决定参数面板与校验。真实 model id 始终原样发送。',
             )}
         </Typography.Text>
       </div>
 
       <Form layout="vertical" size="small">
-        <Form.Item label={t('imageProtocol.adapterProfile', '适配器预设')}>
+        <Form.Item label={t('imageProtocol.adapterProfile', '适配器预设（协议）')}>
           <Select
             value={config.adapter_id ?? ''}
             options={[
@@ -86,6 +107,28 @@ export function ImageProtocolEditor({
               { value: 'generic_json', label: 'Generic JSON' },
             ]}
             onChange={(adapterId) => patch({ adapter_id: adapterId || null })}
+          />
+        </Form.Item>
+        <Form.Item
+          label={t('imageProtocol.paramProfile', '绘画参数兜底模型')}
+          extra={t(
+            'imageProtocol.paramProfileHint',
+            '只影响参数面板与校验范围，不改变请求协议和真实 model id。留空则按适配器默认预设（OpenAI 协议默认 gpt-image-2）。',
+          )}
+        >
+          <Select
+            value={config.param_profile ?? ''}
+            options={[
+              {
+                value: '',
+                label: t('imageProtocol.paramProfileAuto', '自动（适配器默认）'),
+              },
+              ...IMAGE_PARAM_PROFILES.map((id) => ({
+                value: id,
+                label: t(`imageProtocol.paramProfile.${id}`, PARAM_PROFILE_LABELS[id] ?? id),
+              })),
+            ]}
+            onChange={(profileId) => patch({ param_profile: profileId || null })}
           />
         </Form.Item>
         <Form.Item

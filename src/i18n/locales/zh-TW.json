@@ -1751,9 +1751,9 @@
   },
   "imageProtocol": {
     "title": "圖片協議",
-    "grokAutoDetectDescription": "目前模型預設識別為 xAI Images，可在下方明確覆寫。",
-    "autoDetectDescription": "自動識別會根據服務商類型和模型 ID 選擇內建轉接器。",
-    "adapterProfile": "轉接器預設",
+    "grokAutoDetectDescription": "目前模型預設識別為 xAI Images，可在下方顯式覆蓋。協定與參數預設相互獨立。",
+    "autoDetectDescription": "適配器決定請求協定；參數兜底模型決定參數面板與校驗。真實 model id 始終原樣傳送。",
+    "adapterProfile": "適配器預設（協定）",
     "autoDetect": "自動識別",
     "capabilityOverrides": "能力覆寫（留空使用轉接器預設值）",
     "operation": {
@@ -1779,7 +1779,10 @@
     "extraBody": "附加請求內容（JSON 物件）",
     "fieldResponseMapping": "欄位與回應映射（JSON 物件）",
     "jsonObjectRequired": "必須是 JSON 物件",
-    "invalidJson": "圖片協議 JSON 無效"
+    "invalidJson": "圖片協議 JSON 無效",
+    "paramProfile": "繪畫參數兜底模型",
+    "paramProfileHint": "只影響參數面板與校驗範圍，不改變請求協定和真實 model id。留空則按適配器預設（OpenAI 協定預設 gpt-image-2）。",
+    "paramProfileAuto": "自動（適配器預設）"
   },
   "drawing": {
     "title": "Drawing",
@@ -1904,7 +1907,9 @@
       "deprecated_model": "該圖片模型已棄用並計畫下線。相容端點仍可使用。",
       "deadline": "截止日期：{{deadline}}",
       "replacement": "建議模型：{{modelId}}",
-      "separator": "；"
+      "separator": "；",
+      "using_fallback_profile": "{{modelId}} 尚未驗證圖片參數設定，已使用適配器預設參數設定。",
+      "compatibilityTitle": "相容提示"
     },
     "referenceImageParamName": "第三方圖片參數名",
     "referenceImageParamNameHint": "僅用於第三方相容介面；官方 OpenAI 會自動使用 images/image[]"

@@ -117,17 +117,12 @@ async fn submit_openai(
     config: &ImageAdapterConfig,
 ) -> Result<ImageSubmission> {
     let family = image_model_profile("openai_images", &request.model, config).family;
-    if matches!(
-        family,
-        ImageModelFamily::DallE2 | ImageModelFamily::DallE3 | ImageModelFamily::Unknown
-    ) {
+    // Only strip fields that the resolved family truly does not support.
+    // Unknown/proxy models now fall back to gpt-image-2 params and keep size/quality.
+    if matches!(family, ImageModelFamily::DallE2 | ImageModelFamily::DallE3) {
         request.output_format.clear();
         request.background = None;
         request.output_compression = None;
-    }
-    if matches!(family, ImageModelFamily::Unknown) {
-        request.size.clear();
-        request.quality.clear();
     }
     let client = OpenAIImagesClient::new();
     let output = match request.operation {

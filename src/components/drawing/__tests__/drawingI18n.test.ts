@@ -48,6 +48,8 @@ describe('drawing i18n', () => {
         },
         warning: {
           unknown_image_profile: expect.any(String),
+          using_fallback_profile: expect.any(String),
+          compatibilityTitle: expect.any(String),
           legacy_model: expect.any(String),
           retired_model: expect.any(String),
           deprecated_model: expect.any(String),
@@ -61,6 +63,9 @@ describe('drawing i18n', () => {
         grokAutoDetectDescription: expect.any(String),
         autoDetectDescription: expect.any(String),
         adapterProfile: expect.any(String),
+        paramProfile: expect.any(String),
+        paramProfileHint: expect.any(String),
+        paramProfileAuto: expect.any(String),
         autoDetect: expect.any(String),
         capabilityOverrides: expect.any(String),
         operation: {

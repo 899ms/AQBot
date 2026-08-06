@@ -207,11 +207,12 @@ pub(super) fn submit_url(
             "/images/edits".to_string()
         }
         "xai_images" | "glm_images" | "siliconflow_images" => "/images/generations".to_string(),
-        "generic_json" => {
-            return Err(AQBotError::Validation(
-                "Generic image adapter requires an endpoint".into(),
-            ))
+        // generic_json defaults to OpenAI-compatible image paths so proxy setups
+        // work without forcing a manual endpoint; users can still override.
+        "generic_json" if request.operation != super::ImageOperation::Generate => {
+            "/images/edits".to_string()
         }
+        "generic_json" => "/images/generations".to_string(),
         _ => "/images/generations".to_string(),
     };
     Ok(endpoint_url(ctx, &suffix))
@@ -397,6 +398,22 @@ mod tests {
             )
             .unwrap(),
             "https://example.com/v1/custom/images"
+        );
+
+        // Without an explicit endpoint, generic_json falls back to OpenAI-compatible paths.
+        assert_eq!(
+            submit_url(
+                "generic_json",
+                &ctx,
+                &request(ImageOperation::Generate),
+                &config,
+            )
+            .unwrap(),
+            "https://example.com/v1/images/generations"
+        );
+        assert_eq!(
+            submit_url("generic_json", &ctx, &request(ImageOperation::Edit), &config).unwrap(),
+            "https://example.com/v1/images/edits"
         );
     }
 }

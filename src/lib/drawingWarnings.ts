@@ -8,6 +8,8 @@ export type DrawingWarningTranslate = (
 const WARNING_DEFAULTS: Record<string, string> = {
   unknown_image_profile:
     '{{modelId}} has no verified image parameter profile; only conservative text-to-image requests are enabled.',
+  using_fallback_profile:
+    '{{modelId}} has no verified image parameter profile; using the adapter default parameter preset.',
   legacy_model:
     '{{modelId}} is a legacy image model; use {{replacement}} for new work.',
   retired_model:
@@ -77,4 +79,25 @@ export function getDrawingWarningDescription(
     defaultValue: ' · ',
   });
   return parts.join(separator);
+}
+
+/** Soft profile/compat notices shown inline next to the model label (not full-width alerts). */
+const COMPATIBILITY_NOTICE_CODES = new Set([
+  'using_fallback_profile',
+  'unknown_image_profile',
+]);
+
+export function isDrawingCompatibilityNotice(warning: ImageModelWarning): boolean {
+  return COMPATIBILITY_NOTICE_CODES.has(warning.code);
+}
+
+export function splitDrawingWarnings(warnings: ImageModelWarning[] | undefined | null): {
+  compatibilityNotices: ImageModelWarning[];
+  blockWarnings: ImageModelWarning[];
+} {
+  const list = warnings ?? [];
+  return {
+    compatibilityNotices: list.filter(isDrawingCompatibilityNotice),
+    blockWarnings: list.filter((warning) => !isDrawingCompatibilityNotice(warning)),
+  };
 }

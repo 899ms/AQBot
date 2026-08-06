@@ -34,17 +34,21 @@ fn xai_payload_omits_undeclared_openai_parameters() {
 }
 
 #[test]
-fn unknown_openai_model_uses_conservative_request_body() {
+fn unknown_openai_model_uses_gpt_image_fallback_request_body() {
     let body = build_request_body(
         "openai_images",
         &request(),
         &ImageAdapterConfig::default(),
     )
-    .expect("build conservative OpenAI body");
+    .expect("build OpenAI fallback body");
 
+    // Unverified model ids under openai_images fall back to gpt-image-2 params.
     assert_eq!(body["model"], "test-model");
     assert_eq!(body["prompt"], "draw a cat");
-    assert_eq!(body.as_object().unwrap().len(), 2);
+    assert_eq!(body["n"], 2);
+    assert_eq!(body["size"], "1024x1024");
+    assert_eq!(body["quality"], "high");
+    assert_eq!(body["output_format"], "png");
 }
 
 #[test]

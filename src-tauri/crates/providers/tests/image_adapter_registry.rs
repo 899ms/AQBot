@@ -117,30 +117,84 @@ fn capability_overrides_can_narrow_but_not_expand_a_profile() {
 }
 
 #[test]
-fn generic_models_are_conservative_without_an_explicit_descriptor() {
+fn custom_vendor_models_default_to_openai_images_with_gpt_image_params() {
     let registry = ImageAdapterRegistry::new();
     let adapter = registry
         .resolve(&ProviderType::Custom, "vendor-image-model", None)
-        .expect("custom image model should resolve to generic adapter");
+        .expect("custom image model should resolve to openai_images");
     let descriptor = adapter.descriptor(
         "vendor-image-model",
         &ImageAdapterConfig::default(),
     );
 
-    assert_eq!(adapter.id(), "generic_json");
-    assert_eq!(descriptor.operations, vec![ImageOperation::Generate]);
-    assert!(descriptor.parameters.is_empty());
-    assert_eq!(descriptor.max_batch_size, 1);
-    assert_eq!(descriptor.max_reference_images, 0);
+    assert_eq!(adapter.id(), "openai_images");
+    assert!(descriptor.operations.contains(&ImageOperation::Generate));
+    assert!(descriptor.operations.contains(&ImageOperation::Edit));
+    assert!(!descriptor.parameters.is_empty());
+    assert!(descriptor
+        .parameters
+        .iter()
+        .any(|parameter| parameter.key == "size"));
+    assert_eq!(descriptor.max_batch_size, 10);
+    assert!(
+        descriptor
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "using_fallback_profile"),
+        "unverified model should soft-warn about fallback profile"
+    );
+}
+
+#[test]
+fn custom_gemini_named_model_on_openai_compat_proxy_uses_openai_protocol() {
+    let registry = ImageAdapterRegistry::new();
+    let adapter = registry
+        .resolve_with_host(
+            &ProviderType::Custom,
+            "gemini-3.1-flash-image",
+            None,
+            Some("https://proxy.example.com/v1"),
+        )
+        .expect("gemini-named model on custom proxy should resolve");
+    let descriptor = adapter.descriptor(
+        "gemini-3.1-flash-image",
+        &ImageAdapterConfig::default(),
+    );
+
+    assert_eq!(adapter.id(), "openai_images");
+    assert!(descriptor
+        .parameters
+        .iter()
+        .any(|parameter| parameter.key == "size"));
+    assert!(descriptor.operations.contains(&ImageOperation::Edit));
+}
+
+#[test]
+fn explicit_param_profile_overrides_model_name_matching() {
+    let registry = ImageAdapterRegistry::new();
+    let adapter = registry
+        .resolve(&ProviderType::OpenAI, "my-proxy-image", None)
+        .expect("openai provider should resolve");
+    let config = ImageAdapterConfig {
+        param_profile: Some("xai_imagine".into()),
+        ..Default::default()
+    };
+    let descriptor = adapter.descriptor("my-proxy-image", &config);
+    let keys: Vec<_> = descriptor
+        .parameters
+        .iter()
+        .map(|parameter| parameter.key.as_str())
+        .collect();
+    assert!(keys.contains(&"aspect_ratio"), "{keys:?}");
+    assert!(keys.contains(&"resolution"), "{keys:?}");
+    assert!(descriptor.warnings.is_empty());
 }
 
 #[test]
 fn generic_descriptor_override_explicitly_enables_extra_capabilities() {
     let registry = ImageAdapterRegistry::new();
-    let adapter = registry
-        .resolve(&ProviderType::Custom, "vendor-image-model", None)
-        .expect("custom image model should resolve");
     let config = ImageAdapterConfig {
+        adapter_id: Some("generic_json".into()),
         descriptor_override: Some(ImageModelDescriptor {
             adapter_id: "ignored".into(),
             operations: vec![ImageOperation::Generate, ImageOperation::Edit],
@@ -158,9 +212,28 @@ fn generic_descriptor_override_explicitly_enables_extra_capabilities() {
         }),
         ..Default::default()
     };
+    let adapter = registry
+        .resolve(&ProviderType::Custom, "vendor-image-model", Some(&config))
+        .expect("explicit generic adapter should resolve");
     let descriptor = adapter.descriptor("vendor-image-model", &config);
 
     assert_eq!(descriptor.adapter_id, "generic_json");
     assert!(descriptor.operations.contains(&ImageOperation::Edit));
     assert_eq!(descriptor.parameters[0].key, "style");
+}
+
+#[test]
+fn custom_mapping_without_adapter_id_keeps_generic_json() {
+    let registry = ImageAdapterRegistry::new();
+    let config = ImageAdapterConfig {
+        mapping: aqbot_providers::image_adapters::GenericImageMapping {
+            images_path: Some("/data".into()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let adapter = registry
+        .resolve(&ProviderType::Custom, "vendor-image-model", Some(&config))
+        .expect("mapping-only config should keep generic_json");
+    assert_eq!(adapter.id(), "generic_json");
 }

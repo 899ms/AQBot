@@ -2,12 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   getDrawingWarningDescription,
   getDrawingWarningTitle,
+  isDrawingCompatibilityNotice,
+  splitDrawingWarnings,
 } from '../drawingWarnings';
 import type { ImageModelWarning } from '@/types';
 
 const labels: Record<string, string> = {
   'drawing.warning.unknown_image_profile':
     '{{modelId}} 尚未验证图片参数配置，当前仅允许保守的文生图请求。',
+  'drawing.warning.using_fallback_profile':
+    '{{modelId}} 尚未验证图片参数配置，已使用适配器默认参数预设。',
+  'drawing.warning.compatibilityTitle': '兼容提示',
   'drawing.warning.legacy_model':
     '{{modelId}} 是旧版图片模型；新项目请使用 {{replacement}}。',
   'drawing.warning.retired_model':
@@ -44,6 +49,20 @@ describe('drawingWarnings', () => {
     expect(getDrawingWarningDescription(warning, translate)).toBeUndefined();
   });
 
+  it('localizes fallback parameter profile notices', () => {
+    const warning: ImageModelWarning = {
+      code: 'using_fallback_profile',
+      message:
+        'gemini-3.1-flash-image has no verified image parameter profile; using fallback parameter preset `openai_gpt_image_2`.',
+      deadline: null,
+      replacement_model_id: null,
+    };
+
+    expect(getDrawingWarningTitle(warning, 'gemini-3.1-flash-image', translate)).toBe(
+      'gemini-3.1-flash-image 尚未验证图片参数配置，已使用适配器默认参数预设。',
+    );
+  });
+
   it('localizes deadline and replacement metadata', () => {
     const warning: ImageModelWarning = {
       code: 'retired_model',
@@ -71,5 +90,26 @@ describe('drawingWarnings', () => {
     expect(getDrawingWarningTitle(warning, 'any-model', translate)).toBe(
       'Backend-only English warning.',
     );
+  });
+
+  it('classifies soft profile notices for compact model-label UI', () => {
+    const fallback: ImageModelWarning = {
+      code: 'using_fallback_profile',
+      message: 'fallback',
+      deadline: null,
+      replacement_model_id: null,
+    };
+    const retired: ImageModelWarning = {
+      code: 'retired_model',
+      message: 'retired',
+      deadline: null,
+      replacement_model_id: null,
+    };
+    expect(isDrawingCompatibilityNotice(fallback)).toBe(true);
+    expect(isDrawingCompatibilityNotice(retired)).toBe(false);
+    expect(splitDrawingWarnings([fallback, retired])).toEqual({
+      compatibilityNotices: [fallback],
+      blockWarnings: [retired],
+    });
   });
 });

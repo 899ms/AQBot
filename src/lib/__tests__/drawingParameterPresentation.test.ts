@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getDrawingParameterAutoCompleteOption,
   getDrawingParameterLabel,
   getDrawingParameterOption,
+  resolveDrawingParameterProtocolValue,
 } from '../drawingParameterPresentation';
 
 const labels: Record<string, string> = {
@@ -17,6 +19,7 @@ const labels: Record<string, string> = {
   'drawing.option.quality.low': '低',
   'drawing.option.background.opaque': '不透明',
   'drawing.option.background.transparent': '透明',
+  'drawing.option.outputFormat.png': 'PNG',
   'drawing.option.referenceImageMode.base64': 'Base64',
   'drawing.option.referenceImageFormat.object': '对象数组',
   'drawing.option.personGeneration.allowAdult': '允许成人',
@@ -70,5 +73,23 @@ describe('drawing parameter presentation', () => {
       .toBe('允许成人');
     expect(getDrawingParameterOption('person_generation', 'dont_allow', translate).label)
       .toBe('不允许');
+  });
+
+  it('maps auto-complete display labels back to protocol values', () => {
+    const sizeOptions = ['auto', '1024x1024', '1536x1024'];
+    expect(getDrawingParameterAutoCompleteOption('size', 'auto', translate)).toEqual({
+      value: '自动',
+      label: '自动',
+    });
+    expect(resolveDrawingParameterProtocolValue('size', '自动', sizeOptions, translate))
+      .toBe('auto');
+    expect(resolveDrawingParameterProtocolValue('size', 'auto', sizeOptions, translate))
+      .toBe('auto');
+    expect(resolveDrawingParameterProtocolValue('size', '1024x1024', sizeOptions, translate))
+      .toBe('1024x1024');
+    expect(resolveDrawingParameterProtocolValue('size', '2048x1024', sizeOptions, translate))
+      .toBe('2048x1024');
+    expect(resolveDrawingParameterProtocolValue('quality', '标准', ['auto', 'standard', 'hd'], translate))
+      .toBe('standard');
   });
 });

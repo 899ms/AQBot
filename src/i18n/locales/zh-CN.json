@@ -1818,9 +1818,9 @@
   },
   "imageProtocol": {
     "title": "图片协议",
-    "grokAutoDetectDescription": "当前模型默认识别为 xAI Images，可在下方显式覆盖。",
-    "autoDetectDescription": "自动识别会根据服务商类型和模型 ID 选择内置适配器。",
-    "adapterProfile": "适配器预设",
+    "grokAutoDetectDescription": "当前模型默认识别为 xAI Images，可在下方显式覆盖。协议与参数预设相互独立。",
+    "autoDetectDescription": "适配器决定请求协议；参数兜底模型决定参数面板与校验。真实 model id 始终原样发送。",
+    "adapterProfile": "适配器预设（协议）",
     "autoDetect": "自动识别",
     "capabilityOverrides": "能力覆盖（留空使用适配器预设值）",
     "operation": {
@@ -1846,7 +1846,10 @@
     "extraBody": "附加请求体（JSON 对象）",
     "fieldResponseMapping": "字段与响应映射（JSON 对象）",
     "jsonObjectRequired": "必须是 JSON 对象",
-    "invalidJson": "图片协议 JSON 无效"
+    "invalidJson": "图片协议 JSON 无效",
+    "paramProfile": "绘画参数兜底模型",
+    "paramProfileHint": "只影响参数面板与校验范围，不改变请求协议和真实 model id。留空则按适配器默认预设（OpenAI 协议默认 gpt-image-2）。",
+    "paramProfileAuto": "自动（适配器默认）"
   },
   "drawing": {
     "title": "绘画",
@@ -1971,7 +1974,9 @@
       "deprecated_model": "该图片模型已弃用并计划下线。兼容端点仍可使用。",
       "deadline": "截止日期：{{deadline}}",
       "replacement": "建议模型：{{modelId}}",
-      "separator": "；"
+      "separator": "；",
+      "using_fallback_profile": "{{modelId}} 尚未验证图片参数配置，已使用适配器默认参数预设。",
+      "compatibilityTitle": "兼容提示"
     },
     "referenceImageParamName": "第三方图片参数名",
     "referenceImageParamNameHint": "仅用于第三方兼容接口；官方 OpenAI 会自动使用 images/image[]"

@@ -53,7 +53,7 @@ impl ImageAdapterRegistry {
         let id = config
             .and_then(|value| value.adapter_id.as_deref())
             .filter(|id| !id.is_empty())
-            .unwrap_or_else(|| infer_adapter_id(provider_type, model_id, api_host));
+            .unwrap_or_else(|| infer_adapter_id(provider_type, model_id, api_host, config));
         self.adapters.get(id).cloned()
     }
 
@@ -78,31 +78,66 @@ fn is_xai_api_host(api_host: &str) -> bool {
     api_host.to_ascii_lowercase().contains("api.x.ai")
 }
 
+fn is_official_gemini_host(api_host: &str) -> bool {
+    api_host
+        .to_ascii_lowercase()
+        .contains("generativelanguage.googleapis.com")
+}
+
+fn looks_like_gemini_image_model(model_id: &str) -> bool {
+    let normalized = model_id.to_ascii_lowercase();
+    normalized.contains("gemini") && normalized.contains("image")
+        || normalized.starts_with("imagen-")
+        || normalized.contains("nano-banana")
+}
+
+/// True when the user configured a custom generic request/response mapping.
+pub fn has_custom_image_mapping(config: &ImageAdapterConfig) -> bool {
+    let mapping = &config.mapping;
+    !mapping.request_fields.is_empty()
+        || mapping.images_path.is_some()
+        || mapping.image_url_path.is_some()
+        || mapping.image_base64_path.is_some()
+        || mapping.image_mime_type_path.is_some()
+        || mapping.task_id_path.is_some()
+        || mapping.status_path.is_some()
+        || !mapping.success_statuses.is_empty()
+        || !mapping.failure_statuses.is_empty()
+        || !mapping.pending_statuses.is_empty()
+}
+
 fn infer_adapter_id(
     provider_type: &ProviderType,
     model_id: &str,
     api_host: Option<&str>,
+    config: Option<&ImageAdapterConfig>,
 ) -> &'static str {
     let normalized = model_id.to_ascii_lowercase();
+    // Preserve explicit generic setups that only set a mapping (no adapter_id).
+    if config.is_some_and(has_custom_image_mapping) {
+        return "generic_json";
+    }
     if is_xai_image_model(&normalized) {
         return "xai_images";
     }
     if api_host.is_some_and(is_xai_api_host) {
         return "xai_images";
     }
+    // Official Gemini host + Gemini/Imagen model names → native Gemini adapter.
+    // Proxy hosts keep OpenAI Images so OpenAI-compatible Gemini relays work.
+    if api_host.is_some_and(is_official_gemini_host) && looks_like_gemini_image_model(&normalized)
+    {
+        return "gemini_images";
+    }
     match provider_type {
         ProviderType::XAI => "xai_images",
         ProviderType::GLM => "glm_images",
         ProviderType::SiliconFlow => "siliconflow_images",
         ProviderType::Gemini => "gemini_images",
-        ProviderType::Custom
-            if normalized.starts_with("gpt-image-") || normalized.starts_with("dall-e-") =>
-        {
-            "openai_images"
-        }
-        ProviderType::Custom => "generic_json",
-        ProviderType::OpenAI => "openai_images",
-        _ => "generic_json",
+        // OpenAI-compatible platforms (including Custom) default to OpenAI Images.
+        // generic_json is only used when the user picks it or supplies a custom mapping.
+        ProviderType::Custom | ProviderType::OpenAI => "openai_images",
+        _ => "openai_images",
     }
 }
 

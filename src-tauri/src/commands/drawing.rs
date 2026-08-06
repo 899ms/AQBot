@@ -1136,15 +1136,46 @@ fn apply_legacy_image_paths(
     generation_path: &str,
     edit_path: &str,
 ) {
-    if matches!(target.adapter.id(), "gemini_images" | "generic_json") {
-        return;
+    let adapter_id = target.adapter.id();
+    let gen = generation_path.trim();
+    let edit = edit_path.trim();
+    // Drawing UI always ships stock OpenAI paths as defaults. For Gemini native
+    // adapters those would clobber generateContent/interactions endpoints, so only
+    // apply non-stock paths. For OpenAI-compatible adapters (including generic_json),
+    // always apply when the model has no explicit endpoint.
+    if target.config.endpoint.is_none() && !gen.is_empty() {
+        let apply = if adapter_id == "gemini_images" {
+            !is_stock_openai_image_path(gen)
+        } else {
+            true
+        };
+        if apply {
+            target.config.endpoint = Some(gen.to_string());
+        }
     }
-    if target.config.endpoint.is_none() && !generation_path.trim().is_empty() {
-        target.config.endpoint = Some(generation_path.trim().to_string());
+    if target.config.edit_endpoint.is_none() && !edit.is_empty() {
+        let apply = if adapter_id == "gemini_images" {
+            !is_stock_openai_image_path(edit)
+        } else {
+            true
+        };
+        if apply {
+            target.config.edit_endpoint = Some(edit.to_string());
+        }
     }
-    if target.config.edit_endpoint.is_none() && !edit_path.trim().is_empty() {
-        target.config.edit_endpoint = Some(edit_path.trim().to_string());
-    }
+}
+
+fn is_stock_openai_image_path(path: &str) -> bool {
+    let normalized = path.trim().trim_end_matches('/');
+    matches!(
+        normalized,
+        "/images/generations"
+            | "/v1/images/generations"
+            | "images/generations"
+            | "/images/edits"
+            | "/v1/images/edits"
+            | "images/edits"
+    )
 }
 
 fn validate_target_request(
@@ -2338,6 +2369,57 @@ mod tests {
             assert_eq!(fetched.images[0].mime_type, "image/png");
             assert!(fetched.images[0].storage_path.ends_with(".png"));
         }
+    }
+
+    #[test]
+    fn custom_gemini_named_model_builds_openai_compat_drawing_target() {
+        let provider = ProviderConfig {
+            id: "yi-cpa".into(),
+            name: "yi cpa".into(),
+            provider_type: ProviderType::Custom,
+            api_host: "https://proxy.example.com/v1".into(),
+            api_path: None,
+            aws_region: None,
+            enabled: true,
+            models: vec![Model {
+                provider_id: "yi-cpa".into(),
+                model_id: "gemini-3.1-flash-image".into(),
+                name: "gemini-3.1-flash-image".into(),
+                group_name: None,
+                model_type: ModelType::Image,
+                capabilities: Vec::new(),
+                context_window: None,
+                max_output_tokens: None,
+                enabled: true,
+                param_overrides: None,
+                image_config: None,
+                metadata_state: None,
+            }],
+            keys: Vec::new(),
+            proxy_config: None,
+            custom_headers: None,
+            icon: None,
+            builtin_id: None,
+            sort_order: 0,
+            created_at: 0,
+            updated_at: 0,
+        };
+
+        let target = build_drawing_target(&provider, &provider.models[0])
+            .expect("custom gemini-named model should be available via OpenAI Images");
+        assert_eq!(target.adapter_id, "openai_images");
+        assert!(target.descriptor.operations.contains(&ImageOperation::Generate));
+        assert!(target.descriptor.operations.contains(&ImageOperation::Edit));
+        assert!(target
+            .descriptor
+            .parameters
+            .iter()
+            .any(|parameter| parameter.key == "size"));
+        assert!(target
+            .descriptor
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "using_fallback_profile"));
     }
 
     #[test]

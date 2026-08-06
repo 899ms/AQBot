@@ -22,10 +22,15 @@ vi.mock('react-i18next', () => ({
         'drawing.aspectRatio': '宽高比',
         'drawing.resolution': '分辨率',
         'drawing.batchCount': '批量张数',
+        'drawing.size': '尺寸',
+        'drawing.option.auto': '自动',
         'drawing.warning.retired_model':
           '{{modelId}} 是已退役的预览模型。兼容代理仍可继续请求。',
         'drawing.warning.unknown_image_profile':
           '{{modelId}} 尚未验证图片参数配置，当前仅允许保守的文生图请求。',
+        'drawing.warning.using_fallback_profile':
+          '{{modelId}} 尚未验证图片参数配置，已使用适配器默认参数预设。',
+        'drawing.warning.compatibilityTitle': '兼容提示',
         'drawing.warning.deadline': '截止日期：{{deadline}}',
         'drawing.warning.replacement': '建议模型：{{modelId}}',
         'drawing.warning.separator': '；',
@@ -351,25 +356,23 @@ describe('DrawingSettingsPanel', () => {
     expect(screen.getByText('模型')).toBeDefined();
   });
 
-  it('localizes unknown image profile warnings for models without a verified profile', () => {
+  it('shows fallback profile notices as a compact model-label warning with popover detail', async () => {
     render(
       <DrawingSettingsPanel
         settings={{ ...settingsFixture, modelId: 'vendor-image-model' }}
         providers={providersFixture}
         targets={[{
           ...xaiTarget,
-          adapter_id: 'generic_json',
+          adapter_id: 'openai_images',
           model_id: 'vendor-image-model',
           model_name: 'vendor-image-model',
           descriptor: {
             ...xaiTarget.descriptor,
-            adapter_id: 'generic_json',
-            parameters: [],
-            max_reference_images: 0,
+            adapter_id: 'openai_images',
             warnings: [{
-              code: 'unknown_image_profile',
+              code: 'using_fallback_profile',
               message:
-                'vendor-image-model has no verified image parameter profile; only conservative text-to-image requests are enabled.',
+                'vendor-image-model has no verified image parameter profile; using fallback parameter preset `openai_gpt_image_2`.',
               deadline: null,
               replacement_model_id: null,
             }],
@@ -379,9 +382,24 @@ describe('DrawingSettingsPanel', () => {
       />,
     );
 
+    // No full-width alert body by default.
     expect(
-      screen.getByText(
-        'vendor-image-model 尚未验证图片参数配置，当前仅允许保守的文生图请求。',
+      screen.queryByText(
+        'vendor-image-model 尚未验证图片参数配置，已使用适配器默认参数预设。',
+      ),
+    ).toBeNull();
+
+    const modelItem = screen.getByText('模型').closest('.ant-form-item');
+    const notice = within(modelItem as HTMLElement).getByRole('button', {
+      name: '兼容提示',
+    });
+    // Title is visible on the chip button itself (not only in popover).
+    expect(within(notice).getByText('兼容提示')).toBeDefined();
+
+    await userEvent.hover(notice);
+    expect(
+      await screen.findByText(
+        'vendor-image-model 尚未验证图片参数配置，已使用适配器默认参数预设。',
       ),
     ).toBeDefined();
   });
@@ -467,6 +485,9 @@ describe('DrawingSettingsPanel', () => {
 
     const sizeItem = screen.getByText('尺寸').closest('.ant-form-item');
     const input = within(sizeItem as HTMLElement).getByRole('combobox');
+    // Protocol value `auto` is shown with localized label.
+    expect((input as HTMLInputElement).value).toBe('自动');
+
     fireEvent.change(input, { target: { value: '2048x1024' } });
 
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -476,6 +497,40 @@ describe('DrawingSettingsPanel', () => {
           size: '2048x1024',
         }),
       },
+    }));
+  });
+
+  it('maps localized size option labels back to protocol values', () => {
+    const onChange = vi.fn();
+    const sizeTarget: DrawingTarget = {
+      ...xaiTarget,
+      descriptor: {
+        ...xaiTarget.descriptor,
+        parameters: [{
+          key: 'size',
+          kind: 'string',
+          default: 'auto',
+          options: ['auto', '1024x1024'],
+          min: null,
+          max: null,
+        }],
+      },
+    };
+    render(
+      <DrawingSettingsPanel
+        settings={{ ...settingsFixture, size: '1024x1024' }}
+        providers={providersFixture}
+        targets={[sizeTarget]}
+        onChange={onChange}
+      />,
+    );
+
+    const sizeItem = screen.getByText('尺寸').closest('.ant-form-item');
+    const input = within(sizeItem as HTMLElement).getByRole('combobox');
+    fireEvent.change(input, { target: { value: '自动' } });
+
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      size: 'auto',
     }));
   });
 });

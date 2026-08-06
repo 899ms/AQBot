@@ -1751,9 +1751,9 @@
   },
   "imageProtocol": {
     "title": "بروتوكول الصور",
-    "grokAutoDetectDescription": "يستخدم النموذج الحالي xAI Images افتراضيًا، ويمكن تغييره أدناه.",
-    "autoDetectDescription": "يختار الاكتشاف التلقائي محوّلًا مدمجًا حسب نوع الموفّر ومعرّف النموذج.",
-    "adapterProfile": "ملف المحوّل",
+    "grokAutoDetectDescription": "This model is detected as xAI Images by default. You can override below. Protocol and parameter presets are independent.",
+    "autoDetectDescription": "The adapter chooses the request protocol; the fallback profile chooses parameter UI and validation. The real model id is always sent as-is.",
+    "adapterProfile": "Adapter preset (protocol)",
     "autoDetect": "اكتشاف تلقائي",
     "capabilityOverrides": "تجاوز الإمكانات (اتركه فارغًا لاستخدام قيم الملف الافتراضية)",
     "operation": {
@@ -1779,7 +1779,10 @@
     "extraBody": "نص طلب إضافي (كائن JSON)",
     "fieldResponseMapping": "ربط الحقول والاستجابات (كائن JSON)",
     "jsonObjectRequired": "يجب أن يكون كائن JSON",
-    "invalidJson": "JSON بروتوكول الصور غير صالح"
+    "invalidJson": "JSON بروتوكول الصور غير صالح",
+    "paramProfile": "Drawing parameter fallback profile",
+    "paramProfileHint": "Affects only the parameter panel and validation. Does not change the request protocol or the real model id. Leave empty to use the adapter default (OpenAI Images defaults to gpt-image-2).",
+    "paramProfileAuto": "Auto (adapter default)"
   },
   "drawing": {
     "title": "Drawing",
@@ -1904,7 +1907,9 @@
       "deprecated_model": "This image model is deprecated and scheduled to shut down. Compatible endpoints remain available.",
       "deadline": "Deadline: {{deadline}}",
       "replacement": "Suggested model: {{modelId}}",
-      "separator": " · "
+      "separator": " · ",
+      "using_fallback_profile": "{{modelId}} has no verified image parameter profile; using the adapter default parameter preset.",
+      "compatibilityTitle": "Compatibility notice"
     },
     "referenceImageParamName": "Third-party image parameter name",
     "referenceImageParamNameHint": "Only for third-party compatible APIs; official OpenAI uses images/image[] automatically."

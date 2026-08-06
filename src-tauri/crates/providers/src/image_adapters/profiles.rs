@@ -47,38 +47,87 @@ pub(crate) struct ImageModelProfile {
     pub audited_at: &'static str,
 }
 
+/// Built-in parameter presets users can select as a fallback schema.
+pub const BUILTIN_PARAM_PROFILES: &[&str] = &[
+    "openai_gpt_image_2",
+    "openai_gpt_image_legacy",
+    "openai_dalle_2",
+    "openai_dalle_3",
+    "xai_imagine",
+    "gemini_3_1_flash",
+    "gemini_3_1_flash_lite",
+    "gemini_3_pro",
+    "gemini_2_5",
+    "imagen_4",
+    "imagen_4_ultra",
+    "imagen_4_fast",
+    "glm_image",
+    "cogview",
+    "siliconflow_kolors",
+    "siliconflow_qwen",
+    "siliconflow_qwen_edit",
+];
+
+/// Resolve the parameter/capability profile for an image model.
+///
+/// Priority:
+/// 1. `descriptor_override` (full custom schema)
+/// 2. explicit `param_profile` preset
+/// 3. family match from `(adapter_id, model_id)`
+/// 4. adapter default profile (never an empty conservative shell)
 pub(crate) fn image_model_profile(
     adapter_id: &str,
     model_id: &str,
     config: &ImageAdapterConfig,
 ) -> ImageModelProfile {
-    if adapter_id == "generic_json" {
-        if let Some(override_descriptor) = &config.descriptor_override {
-            let mut descriptor = override_descriptor.clone();
-            descriptor.adapter_id = adapter_id.to_string();
-            apply_operation_overrides(&mut descriptor, config);
-            return ImageModelProfile {
-                family: ImageModelFamily::Generic,
-                descriptor,
-                api_mode: ImageApiMode::Auto,
-                official_docs: None,
-                audited_at: PROFILE_AUDITED_AT,
-            };
-        }
-        return profile(
-            adapter_id,
-            ImageModelFamily::Generic,
-            vec![ImageOperation::Generate],
-            vec![],
-            1,
-            0,
-            unknown_warning(model_id),
-            config,
-        );
+    // 1. Full descriptor override (any adapter)
+    if let Some(override_descriptor) = &config.descriptor_override {
+        let mut descriptor = override_descriptor.clone();
+        descriptor.adapter_id = adapter_id.to_string();
+        apply_operation_overrides(&mut descriptor, config);
+        return ImageModelProfile {
+            family: ImageModelFamily::Generic,
+            descriptor,
+            api_mode: ImageApiMode::Auto,
+            official_docs: None,
+            audited_at: PROFILE_AUDITED_AT,
+        };
     }
 
+    // 2. Explicit param profile preset
+    if let Some(profile_id) = config
+        .param_profile
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if let Some(family) = family_from_param_profile(profile_id) {
+            return profile_for_family(adapter_id, model_id, family, config);
+        }
+    }
+
+    // 3. Verified family match under the active adapter
+    let matched = match_family(adapter_id, model_id);
+    if !matches!(
+        matched,
+        ImageModelFamily::Unknown | ImageModelFamily::Generic
+    ) {
+        return profile_for_family(adapter_id, model_id, matched, config);
+    }
+
+    // 4. Adapter default — usable OpenAI-style (or vendor) params, soft notice only
+    let default_family = adapter_default_family(adapter_id);
+    let mut profile = profile_for_family(adapter_id, model_id, default_family, config);
+    let preset_id = param_profile_id_for_family(default_family);
+    if profile.descriptor.warnings.is_empty() {
+        profile.descriptor.warnings = fallback_profile_warning(model_id, preset_id);
+    }
+    profile
+}
+
+fn match_family(adapter_id: &str, model_id: &str) -> ImageModelFamily {
     let normalized = model_id.trim().to_ascii_lowercase();
-    let family = match adapter_id {
+    match adapter_id {
         "openai_images" if normalized.starts_with("gpt-image-2") => ImageModelFamily::OpenAiGpt2,
         "openai_images" if normalized.starts_with("gpt-image-") => {
             ImageModelFamily::OpenAiGptLegacy
@@ -116,8 +165,64 @@ pub(crate) fn image_model_profile(
         "siliconflow_images" if normalized.contains("qwen-image") => ImageModelFamily::SiliconQwen,
         "siliconflow_images" if normalized.contains("kolors") => ImageModelFamily::SiliconKolors,
         _ => ImageModelFamily::Unknown,
-    };
-    profile_for_family(adapter_id, model_id, family, config)
+    }
+}
+
+fn adapter_default_family(adapter_id: &str) -> ImageModelFamily {
+    match adapter_id {
+        "openai_images" | "generic_json" => ImageModelFamily::OpenAiGpt2,
+        "xai_images" => ImageModelFamily::XaiImagine,
+        "gemini_images" => ImageModelFamily::Gemini31Flash,
+        "glm_images" => ImageModelFamily::GlmImage,
+        "siliconflow_images" => ImageModelFamily::SiliconKolors,
+        _ => ImageModelFamily::OpenAiGpt2,
+    }
+}
+
+fn family_from_param_profile(profile_id: &str) -> Option<ImageModelFamily> {
+    match profile_id {
+        "openai_gpt_image_2" => Some(ImageModelFamily::OpenAiGpt2),
+        "openai_gpt_image_legacy" => Some(ImageModelFamily::OpenAiGptLegacy),
+        "openai_dalle_2" => Some(ImageModelFamily::DallE2),
+        "openai_dalle_3" => Some(ImageModelFamily::DallE3),
+        "xai_imagine" => Some(ImageModelFamily::XaiImagine),
+        "gemini_3_1_flash" => Some(ImageModelFamily::Gemini31Flash),
+        "gemini_3_1_flash_lite" => Some(ImageModelFamily::Gemini31FlashLite),
+        "gemini_3_pro" => Some(ImageModelFamily::Gemini3Pro),
+        "gemini_2_5" => Some(ImageModelFamily::Gemini25),
+        "imagen_4" => Some(ImageModelFamily::Imagen4Standard),
+        "imagen_4_ultra" => Some(ImageModelFamily::Imagen4Ultra),
+        "imagen_4_fast" => Some(ImageModelFamily::Imagen4Fast),
+        "glm_image" => Some(ImageModelFamily::GlmImage),
+        "cogview" => Some(ImageModelFamily::CogView),
+        "siliconflow_kolors" => Some(ImageModelFamily::SiliconKolors),
+        "siliconflow_qwen" => Some(ImageModelFamily::SiliconQwen),
+        "siliconflow_qwen_edit" => Some(ImageModelFamily::SiliconQwenEdit),
+        _ => None,
+    }
+}
+
+fn param_profile_id_for_family(family: ImageModelFamily) -> &'static str {
+    match family {
+        ImageModelFamily::OpenAiGpt2 => "openai_gpt_image_2",
+        ImageModelFamily::OpenAiGptLegacy => "openai_gpt_image_legacy",
+        ImageModelFamily::DallE2 => "openai_dalle_2",
+        ImageModelFamily::DallE3 => "openai_dalle_3",
+        ImageModelFamily::XaiImagine => "xai_imagine",
+        ImageModelFamily::Gemini31Flash => "gemini_3_1_flash",
+        ImageModelFamily::Gemini31FlashLite => "gemini_3_1_flash_lite",
+        ImageModelFamily::Gemini3Pro => "gemini_3_pro",
+        ImageModelFamily::Gemini25 => "gemini_2_5",
+        ImageModelFamily::Imagen4Standard => "imagen_4",
+        ImageModelFamily::Imagen4Ultra => "imagen_4_ultra",
+        ImageModelFamily::Imagen4Fast => "imagen_4_fast",
+        ImageModelFamily::GlmImage => "glm_image",
+        ImageModelFamily::CogView => "cogview",
+        ImageModelFamily::SiliconKolors => "siliconflow_kolors",
+        ImageModelFamily::SiliconQwen => "siliconflow_qwen",
+        ImageModelFamily::SiliconQwenEdit => "siliconflow_qwen_edit",
+        ImageModelFamily::Generic | ImageModelFamily::Unknown => "openai_gpt_image_2",
+    }
 }
 
 fn profile_for_family(
@@ -406,16 +511,17 @@ fn profile_for_family(
                 config,
             )
         }
-        ImageModelFamily::Generic | ImageModelFamily::Unknown => profile(
-            adapter_id,
-            family,
-            generate,
-            vec![],
-            1,
-            0,
-            unknown_warning(model_id),
-            config,
-        ),
+        // Unreachable via resolve path: Unknown/Generic always map to an adapter default.
+        // Kept for exhaustiveness if a caller forces these families.
+        ImageModelFamily::Generic | ImageModelFamily::Unknown => {
+            let default_family = adapter_default_family(adapter_id);
+            let mut resolved = profile_for_family(adapter_id, model_id, default_family, config);
+            if resolved.descriptor.warnings.is_empty() {
+                resolved.descriptor.warnings =
+                    fallback_profile_warning(model_id, param_profile_id_for_family(default_family));
+            }
+            resolved
+        }
     }
 }
 
@@ -602,11 +708,11 @@ fn imagen_warning() -> Vec<ImageModelWarning> {
     }]
 }
 
-fn unknown_warning(model_id: &str) -> Vec<ImageModelWarning> {
+fn fallback_profile_warning(model_id: &str, profile_id: &str) -> Vec<ImageModelWarning> {
     vec![ImageModelWarning {
-        code: "unknown_image_profile".into(),
+        code: "using_fallback_profile".into(),
         message: format!(
-            "{model_id} has no verified image parameter profile; only conservative text-to-image requests are enabled."
+            "{model_id} has no verified image parameter profile; using fallback parameter preset `{profile_id}`."
         ),
         deadline: None,
         replacement_model_id: None,
@@ -969,6 +1075,44 @@ mod tests {
         assert_eq!(dalle3.descriptor.max_batch_size, 1);
         assert_eq!(gpt2.audited_at, PROFILE_AUDITED_AT);
         assert_eq!(gpt2.official_docs, Some(OPENAI_IMAGE_DOCS));
+    }
+
+    #[test]
+    fn openai_compat_proxy_model_uses_gpt_image_fallback_params() {
+        let config = ImageAdapterConfig::default();
+        let profile = image_model_profile("openai_images", "gemini-3.1-flash-image", &config);
+        assert_eq!(profile.family, ImageModelFamily::OpenAiGpt2);
+        assert!(profile.descriptor.operations.contains(&ImageOperation::Edit));
+        assert!(profile
+            .descriptor
+            .parameters
+            .iter()
+            .any(|parameter| parameter.key == "size"));
+        assert_eq!(
+            profile.descriptor.warnings[0].code,
+            "using_fallback_profile"
+        );
+
+        let mut request = request("gemini-3.1-flash-image");
+        request.size = "1024x1024".into();
+        request.quality = "auto".into();
+        assert!(validate_profile_request("openai_images", &request, 0, &config).is_ok());
+    }
+
+    #[test]
+    fn explicit_param_profile_selects_builtin_schema() {
+        let config = ImageAdapterConfig {
+            param_profile: Some("gemini_3_1_flash".into()),
+            ..Default::default()
+        };
+        let profile = image_model_profile("openai_images", "my-custom-relay", &config);
+        assert_eq!(profile.family, ImageModelFamily::Gemini31Flash);
+        assert!(profile
+            .descriptor
+            .parameters
+            .iter()
+            .any(|parameter| parameter.key == "aspect_ratio"));
+        assert!(profile.descriptor.warnings.is_empty());
     }
 
     #[test]

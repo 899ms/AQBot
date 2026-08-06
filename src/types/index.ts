@@ -259,7 +259,32 @@ export interface ImageAdapterConfig {
   operation_overrides?: ImageOperation[] | null;
   gemini_api_mode?: 'auto' | 'interactions' | 'generate_content' | 'predict';
   descriptor_override?: ImageModelDescriptor | null;
+  /** Built-in parameter schema preset, e.g. `openai_gpt_image_2`. */
+  param_profile?: string | null;
 }
+
+/** Built-in drawing parameter presets (must stay aligned with backend). */
+export const IMAGE_PARAM_PROFILES = [
+  'openai_gpt_image_2',
+  'openai_gpt_image_legacy',
+  'openai_dalle_2',
+  'openai_dalle_3',
+  'xai_imagine',
+  'gemini_3_1_flash',
+  'gemini_3_1_flash_lite',
+  'gemini_3_pro',
+  'gemini_2_5',
+  'imagen_4',
+  'imagen_4_ultra',
+  'imagen_4_fast',
+  'glm_image',
+  'cogview',
+  'siliconflow_kolors',
+  'siliconflow_qwen',
+  'siliconflow_qwen_edit',
+] as const;
+
+export type ImageParamProfileId = (typeof IMAGE_PARAM_PROFILES)[number];
 
 export type ModelCatalogSourcePreference = 'builtin' | 'online';
 export type ModelCatalogSource = 'builtin' | 'network' | 'cache' | 'unavailable';

@@ -113,6 +113,10 @@ pub struct ImageAdapterConfig {
     #[serde(default)]
     pub gemini_api_mode: ImageApiMode,
     pub descriptor_override: Option<ImageModelDescriptor>,
+    /// Built-in parameter schema preset (e.g. `openai_gpt_image_2`).
+    /// Decouples UI/validation parameters from the wire adapter and real model id.
+    #[serde(default)]
+    pub param_profile: Option<String>,
 }
 
 impl Default for ImageAdapterConfig {
@@ -132,6 +136,7 @@ impl Default for ImageAdapterConfig {
             operation_overrides: None,
             gemini_api_mode: ImageApiMode::Auto,
             descriptor_override: None,
+            param_profile: None,
         }
     }
 }

@@ -1751,9 +1751,9 @@
   },
   "imageProtocol": {
     "title": "画像プロトコル",
-    "grokAutoDetectDescription": "現在のモデルは既定で xAI Images として認識されます。下で明示的に変更できます。",
-    "autoDetectDescription": "自動検出は、プロバイダーの種類とモデル ID から組み込みアダプターを選択します。",
-    "adapterProfile": "アダプタープロファイル",
+    "grokAutoDetectDescription": "このモデルは既定で xAI Images として認識されます。下で上書きできます。プロトコルとパラメータプリセットは独立しています。",
+    "autoDetectDescription": "アダプタはリクエストプロトコルを決め、フォールバックプロファイルはパラメータ UI と検証を決めます。実際の model id はそのまま送信されます。",
+    "adapterProfile": "アダプタプリセット（プロトコル）",
     "autoDetect": "自動検出",
     "capabilityOverrides": "機能の上書き（空欄の場合はプロファイルの既定値を使用）",
     "operation": {
@@ -1779,7 +1779,10 @@
     "extraBody": "追加リクエスト本文（JSON オブジェクト）",
     "fieldResponseMapping": "フィールドとレスポンスのマッピング（JSON オブジェクト）",
     "jsonObjectRequired": "JSON オブジェクトである必要があります",
-    "invalidJson": "画像プロトコルの JSON が無効です"
+    "invalidJson": "画像プロトコルの JSON が無効です",
+    "paramProfile": "描画パラメータのフォールバックプロファイル",
+    "paramProfileHint": "パラメータ UI と検証のみに影響します。リクエストプロトコルと実際の model id は変更しません。空の場合はアダプタ既定（OpenAI Images は gpt-image-2）を使用します。",
+    "paramProfileAuto": "自動（アダプタ既定）"
   },
   "drawing": {
     "title": "Drawing",
@@ -1904,7 +1907,9 @@
       "deprecated_model": "この画像モデルは非推奨で停止予定です。互換エンドポイントでは引き続き利用できます。",
       "deadline": "期限：{{deadline}}",
       "replacement": "推奨モデル：{{modelId}}",
-      "separator": " · "
+      "separator": " · ",
+      "using_fallback_profile": "{{modelId}} には検証済みの画像パラメータプロファイルがありません。アダプタ既定のパラメータプリセットを使用します。",
+      "compatibilityTitle": "互換性のヒント"
     },
     "referenceImageParamName": "サードパーティ画像パラメータ名",
     "referenceImageParamNameHint": "サードパーティ互換 API 向け。公式 OpenAI は images/image[] を自動使用します。"
