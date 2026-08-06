@@ -8,10 +8,12 @@ use std::thread;
 use std::time::Duration;
 
 use axuielement::async_api::AXNotificationStream;
+use axuielement::ax_action::AX_PRESS_ACTION;
 use axuielement::ax_attribute::{
-    AX_BOUNDS_FOR_RANGE_PARAMETERIZED_ATTRIBUTE, AX_FOCUSED_UI_ELEMENT_ATTRIBUTE,
-    AX_FOCUSED_WINDOW_ATTRIBUTE, AX_PARENT_ATTRIBUTE, AX_SELECTED_TEXT_ATTRIBUTE,
-    AX_SELECTED_TEXT_RANGE_ATTRIBUTE, AX_TITLE_ATTRIBUTE,
+    AX_BOUNDS_FOR_RANGE_PARAMETERIZED_ATTRIBUTE, AX_ENABLED_ATTRIBUTE,
+    AX_FOCUSED_UI_ELEMENT_ATTRIBUTE, AX_FOCUSED_WINDOW_ATTRIBUTE, AX_IDENTIFIER_ATTRIBUTE,
+    AX_MENU_BAR_ATTRIBUTE, AX_MENU_ITEM_CMD_CHAR_ATTRIBUTE, AX_PARENT_ATTRIBUTE,
+    AX_SELECTED_TEXT_ATTRIBUTE, AX_SELECTED_TEXT_RANGE_ATTRIBUTE, AX_TITLE_ATTRIBUTE,
 };
 use axuielement::ax_notification::{
     AX_FOCUSED_UI_ELEMENT_CHANGED_NOTIFICATION, AX_FOCUSED_WINDOW_CHANGED_NOTIFICATION,
@@ -26,18 +28,20 @@ use core_foundation::{base::TCFType, runloop::CFRunLoop};
 use core_foundation_sys::mach_port::CFMachPortRef;
 use core_foundation_sys::runloop::{kCFRunLoopCommonModes, CFRunLoopRef, CFRunLoopStop};
 use core_graphics::event::{
-    CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
-    CallbackResult, EventField,
+    CGEvent, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+    CGEventType, CallbackResult, EventField, KeyCode,
 };
+use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 use core_graphics::geometry::CGPoint;
 use objc2::{
     rc::Retained,
     runtime::{AnyObject, ProtocolObject},
 };
 use objc2_app_kit::{
-    NSApplicationActivationPolicy, NSRunningApplication, NSWorkspace, NSWorkspaceApplicationKey,
-    NSWorkspaceDidActivateApplicationNotification, NSWorkspaceDidDeactivateApplicationNotification,
-    NSWorkspaceDidHideApplicationNotification, NSWorkspaceDidTerminateApplicationNotification,
+    NSApplicationActivationPolicy, NSPasteboard, NSPasteboardTypeString, NSRunningApplication,
+    NSWorkspace, NSWorkspaceApplicationKey, NSWorkspaceDidActivateApplicationNotification,
+    NSWorkspaceDidDeactivateApplicationNotification, NSWorkspaceDidHideApplicationNotification,
+    NSWorkspaceDidTerminateApplicationNotification,
 };
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol, NSString};
 use tokio::sync::{
@@ -58,6 +62,25 @@ const MAX_SELECTION_ANCESTORS: usize = 16;
 /// with AX notifications still take their faster event-driven path, and the
 /// controller drops re-announcements of the selection that is already live.
 const SELECTION_PROBE_DELAYS_MS: [u64; 3] = [80, 150, 400];
+/// Poll the pasteboard after menu/shortcut copy. SelectedTextKit uses ~5ms
+/// intervals and ~200ms total; WeChat occasionally needs a bit longer.
+const CLIPBOARD_FALLBACK_INTERVAL_MS: u64 = 5;
+const CLIPBOARD_FALLBACK_TIMEOUT_MS: u64 = 350;
+/// Depth limit when searching the app menu bar for the Copy item.
+const COPY_MENU_SEARCH_MAX_DEPTH: usize = 6;
+const COPY_MENU_SEARCH_MAX_NODES: usize = 256;
+/// Apps known to omit AXSelectedText for custom-drawn message lists. For these
+/// we escalate to clipboard fallback after the first AX miss instead of waiting
+/// for the full probe budget.
+const WEAK_AX_SOURCE_APP_MARKERS: &[&str] = &[
+    "wechat",
+    "xinwechat",
+    "weixin",
+    "wework",
+    "wwmax",
+    "tencent.xinwechat",
+    "tencent.wework",
+];
 const AX_SELECTED_TEXT_MARKER_RANGE_ATTRIBUTE: &str = "AXSelectedTextMarkerRange";
 const AX_STRING_FOR_TEXT_MARKER_RANGE_PARAMETERIZED_ATTRIBUTE: &str = "AXStringForTextMarkerRange";
 const AX_TEXT_MARKER_RANGE_FOR_UNORDERED_TEXT_MARKERS_PARAMETERIZED_ATTRIBUTE: &str =
@@ -65,6 +88,13 @@ const AX_TEXT_MARKER_RANGE_FOR_UNORDERED_TEXT_MARKERS_PARAMETERIZED_ATTRIBUTE: &
 const AX_NEXT_TEXT_MARKER_FOR_TEXT_MARKER_PARAMETERIZED_ATTRIBUTE: &str =
     "AXNextTextMarkerForTextMarker";
 const AX_BOUNDS_FOR_TEXT_MARKER_RANGE_PARAMETERIZED_ATTRIBUTE: &str = "AXBoundsForTextMarkerRange";
+const AX_FRAME_ATTRIBUTE: &str = "AXFrame";
+/// Standard AppKit selector identifier for Edit → Copy.
+const COPY_MENU_IDENTIFIER: &str = "copy:";
+const COPY_MENU_TITLES: &[&str] = &[
+    "Copy", "拷贝", "复制", "拷貝", "複製", "コピー", "복사", "Copier", "Copiar", "Copia",
+    "Kopieren", "Копировать",
+];
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
@@ -923,45 +953,103 @@ fn probe_selection(
                 .element_attribute(AX_FOCUSED_UI_ELEMENT_ATTRIBUTE)
                 .ok()
                 .flatten();
+            let pointer = ScreenPoint {
+                x: point.x,
+                y: point.y,
+            };
             let found = emit_selection_from_candidates_with_pointer(
                 active,
                 std::iter::once(element).chain(focused),
                 sender,
-                Some(ScreenPoint {
-                    x: point.x,
-                    y: point.y,
-                }),
+                Some(pointer),
                 // Chromium/WebKit may still be propagating the selection; only the
-                // final failed attempt is allowed to mean "deselected".
-                is_last_probe_attempt(attempt),
+                // final failed attempt is allowed to mean "deselected" — and even
+                // then clipboard fallback may still recover WeChat-like UIs.
+                false,
             );
-            if !found && !is_last_probe_attempt(attempt) {
+            if found {
+                return;
+            }
+            let escalate_clipboard = is_last_probe_attempt(attempt)
+                || (attempt == 0 && is_weak_ax_source_app(&active.info.source_app));
+            if !escalate_clipboard {
                 tracing::debug!(
                     pid = active.info.pid,
                     attempt,
                     "macOS selection probe found no selection yet; retrying"
                 );
                 schedule_selection_probe(mac_sender, point, attempt + 1);
+                return;
+            }
+            // Weak-AX apps (WeChat, some Electron shells) expose no selected text.
+            // Fall back to Edit → Copy / Cmd+C and read the pasteboard.
+            if try_clipboard_selection_fallback(active, pointer, sender) {
+                return;
+            }
+            if is_last_probe_attempt(attempt) {
+                tracing::debug!(
+                    pid = active.info.pid,
+                    "macOS selection probe exhausted AX and clipboard fallbacks"
+                );
+                let _ = sender.send(PlatformEvent::Clear);
+            } else {
+                schedule_selection_probe(mac_sender, point, attempt + 1);
             }
         }
         Ok(None) => {
-            // Do not Clear: empty hit-tests include toolbar clicks and UI chrome.
-            // Real deselection is delivered via AX SelectedTextChanged / outside click.
+            // Empty hit-tests include toolbar clicks and UI chrome. Still try the
+            // clipboard path on the last attempt (or early for WeChat) when we
+            // already know which app owns the selection.
             tracing::debug!(
                 pid = active.as_ref().map(|value| value.info.pid),
-                "Ignoring macOS selection probe with no hit-test element"
+                attempt,
+                "macOS selection probe hit-test returned no element"
             );
-            schedule_selection_probe(mac_sender, point, attempt + 1);
+            finish_probe_without_hit(active, point, attempt, sender, mac_sender);
         }
         Err(error) => {
             tracing::debug!(
                 pid = active.as_ref().map(|value| value.info.pid),
+                attempt,
                 %error,
                 "Could not hit-test the macOS selection endpoint"
             );
-            schedule_selection_probe(mac_sender, point, attempt + 1);
+            finish_probe_without_hit(active, point, attempt, sender, mac_sender);
         }
     }
+}
+
+fn finish_probe_without_hit(
+    active: &Option<ActiveApplication>,
+    point: LogicalPoint,
+    attempt: usize,
+    sender: &UnboundedSender<PlatformEvent>,
+    mac_sender: &UnboundedSender<MacSignal>,
+) {
+    let pointer = ScreenPoint {
+        x: point.x,
+        y: point.y,
+    };
+    if let Some(active) = active.as_ref() {
+        let escalate_clipboard = is_last_probe_attempt(attempt)
+            || (attempt == 0 && is_weak_ax_source_app(&active.info.source_app));
+        if escalate_clipboard && try_clipboard_selection_fallback(active, pointer, sender) {
+            return;
+        }
+    }
+    if is_last_probe_attempt(attempt) {
+        // Do not Clear: empty hit-tests often mean chrome/toolbar clicks, not
+        // a real deselect. AX notifications still clear real deselections.
+        return;
+    }
+    schedule_selection_probe(mac_sender, point, attempt + 1);
+}
+
+fn is_weak_ax_source_app(source_app: &str) -> bool {
+    let lowered = source_app.to_ascii_lowercase();
+    WEAK_AX_SOURCE_APP_MARKERS
+        .iter()
+        .any(|marker| lowered.contains(marker))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1092,37 +1180,73 @@ fn read_range_selection(element: &AXUIElement) -> Option<SelectionPayload> {
     if !is_actionable_selection_text(&text) {
         return None;
     }
+    // Prefer range + bounds when the app exposes them; WeChat and similar UIs
+    // often return SelectedText without a usable range/bounds. Keep the text.
     let range = match element.range_attribute(AX_SELECTED_TEXT_RANGE_ATTRIBUTE) {
-        Ok(range) => range?,
+        Ok(range) => range.filter(|value| value.length > 0),
         Err(error) => {
             trace_ax_read_error(element, AX_SELECTED_TEXT_RANGE_ATTRIBUTE, &error);
-            return None;
+            None
         }
     };
-    if range.length <= 0 {
-        return None;
+    let rect = range.and_then(|range| {
+        let first_character = AXValue::from_range(first_character_range(range)?)?;
+        match element.parameterized_attribute(
+            AX_BOUNDS_FOR_RANGE_PARAMETERIZED_ATTRIBUTE,
+            &first_character,
+        ) {
+            Ok(value) => usable_selection_rect(value?.as_rect()?),
+            Err(error) => {
+                trace_ax_read_error(element, AX_BOUNDS_FOR_RANGE_PARAMETERIZED_ATTRIBUTE, &error);
+                None
+            }
+        }
+    });
+    Some(match (range, rect) {
+        (Some(range), Some(rect)) => SelectionPayload {
+            text,
+            range_signature: format!("range:{}:{}", range.location, range.length),
+            anchor: ScreenRect {
+                x: rect.origin.x,
+                y: rect.origin.y,
+                width: rect.size.width,
+                height: rect.size.height,
+            },
+            anchor_kind: SelectionAnchorKind::SelectionRect,
+        },
+        _ => text_only_selection_payload(element, text),
+    })
+}
+
+fn text_only_selection_payload(element: &AXUIElement, text: String) -> SelectionPayload {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    SelectionPayload {
+        text,
+        range_signature: format!("text:{:016x}", hasher.finish()),
+        anchor: element_frame_anchor(element).unwrap_or(ScreenRect {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        }),
+        anchor_kind: SelectionAnchorKind::SelectionRect,
     }
-    let first_character = AXValue::from_range(first_character_range(range)?)?;
-    let rect = match element.parameterized_attribute(
-        AX_BOUNDS_FOR_RANGE_PARAMETERIZED_ATTRIBUTE,
-        &first_character,
-    ) {
+}
+
+fn element_frame_anchor(element: &AXUIElement) -> Option<ScreenRect> {
+    let rect = match element.attribute(AX_FRAME_ATTRIBUTE) {
         Ok(value) => usable_selection_rect(value?.as_rect()?)?,
         Err(error) => {
-            trace_ax_read_error(element, AX_BOUNDS_FOR_RANGE_PARAMETERIZED_ATTRIBUTE, &error);
+            trace_ax_read_error(element, AX_FRAME_ATTRIBUTE, &error);
             return None;
         }
     };
-    Some(SelectionPayload {
-        text,
-        range_signature: format!("range:{}:{}", range.location, range.length),
-        anchor: ScreenRect {
-            x: rect.origin.x,
-            y: rect.origin.y,
-            width: rect.size.width,
-            height: rect.size.height,
-        },
-        anchor_kind: SelectionAnchorKind::SelectionRect,
+    Some(ScreenRect {
+        x: rect.origin.x,
+        y: rect.origin.y,
+        width: rect.size.width.max(1.0),
+        height: rect.size.height.max(1.0),
     })
 }
 
@@ -1168,18 +1292,271 @@ fn read_marker_selection(element: &AXUIElement) -> Option<SelectionPayload> {
     }
     let rect = first_marker_rect(element, &selected_range)
         .or_else(|| marker_range_rect(element, &selected_range))
-        .and_then(usable_selection_rect)?;
-    Some(SelectionPayload {
-        text,
-        range_signature: marker_range_signature(&selected_range),
-        anchor: ScreenRect {
-            x: rect.origin.x,
-            y: rect.origin.y,
-            width: rect.size.width,
-            height: rect.size.height,
+        .and_then(usable_selection_rect);
+    Some(match rect {
+        Some(rect) => SelectionPayload {
+            text,
+            range_signature: marker_range_signature(&selected_range),
+            anchor: ScreenRect {
+                x: rect.origin.x,
+                y: rect.origin.y,
+                width: rect.size.width,
+                height: rect.size.height,
+            },
+            anchor_kind: SelectionAnchorKind::SelectionRect,
         },
-        anchor_kind: SelectionAnchorKind::SelectionRect,
+        None => text_only_selection_payload(element, text),
     })
+}
+
+/// Last-resort selection reader for apps that do not expose AX selected text
+/// (notably WeChat). Strategy order mirrors Easydict/SelectedTextKit:
+/// 1. AXPress Edit → Copy when the menu item is enabled
+/// 2. Full synthetic ⌘C key sequence
+/// Then read the pasteboard and restore the previous text contents.
+fn try_clipboard_selection_fallback(
+    active: &ActiveApplication,
+    pointer: ScreenPoint,
+    sender: &UnboundedSender<PlatformEvent>,
+) -> bool {
+    let Some(snapshot) = snapshot_pasteboard() else {
+        tracing::debug!(
+            pid = active.info.pid,
+            "macOS clipboard fallback could not snapshot the pasteboard"
+        );
+        return false;
+    };
+
+    let mut obtained = None;
+    if let Some(copy_item) = find_enabled_copy_menu_item(&active.element) {
+        tracing::debug!(
+            pid = active.info.pid,
+            "macOS clipboard fallback trying Edit → Copy menu action"
+        );
+        if copy_item.perform_action(AX_PRESS_ACTION).is_ok() {
+            obtained = wait_for_pasteboard_text(&snapshot);
+        } else {
+            tracing::debug!(
+                pid = active.info.pid,
+                "macOS clipboard fallback menu AXPress failed"
+            );
+        }
+    } else {
+        tracing::debug!(
+            pid = active.info.pid,
+            "macOS clipboard fallback found no enabled Copy menu item"
+        );
+    }
+
+    if obtained.is_none() {
+        tracing::debug!(
+            pid = active.info.pid,
+            "macOS clipboard fallback trying synthetic Cmd+C"
+        );
+        // Re-snapshot so a failed menu press that dirtied the pasteboard does
+        // not poison the change-count wait for the shortcut path.
+        let snapshot_for_shortcut = snapshot_pasteboard().unwrap_or_else(|| PasteboardSnapshot {
+            change_count: snapshot.change_count,
+            text: snapshot.text.clone(),
+        });
+        if !post_command_copy() {
+            restore_pasteboard(&snapshot);
+            tracing::debug!(
+                pid = active.info.pid,
+                "macOS clipboard fallback failed to post Cmd+C"
+            );
+            return false;
+        }
+        obtained = wait_for_pasteboard_text(&snapshot_for_shortcut);
+    }
+
+    let Some(text) = obtained else {
+        restore_pasteboard(&snapshot);
+        tracing::debug!(
+            pid = active.info.pid,
+            "macOS clipboard fallback did not observe a pasteboard change"
+        );
+        return false;
+    };
+    restore_pasteboard(&snapshot);
+    if !is_actionable_selection_text(&text) {
+        return false;
+    }
+    tracing::debug!(
+        pid = active.info.pid,
+        text_len = text.chars().count(),
+        "macOS clipboard selection fallback succeeded"
+    );
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    let observation = selection_observation(
+        active,
+        SelectionPayload {
+            text,
+            range_signature: format!("clipboard:{:016x}", hasher.finish()),
+            anchor: ScreenRect {
+                x: pointer.x,
+                y: pointer.y,
+                width: 1.0,
+                height: 1.0,
+            },
+            anchor_kind: SelectionAnchorKind::Pointer,
+        },
+    );
+    let _ = sender.send(PlatformEvent::Selection(observation));
+    true
+}
+
+struct PasteboardSnapshot {
+    change_count: isize,
+    text: Option<String>,
+}
+
+fn snapshot_pasteboard() -> Option<PasteboardSnapshot> {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    let change_count = pasteboard.changeCount();
+    let text = pasteboard
+        .stringForType(unsafe { NSPasteboardTypeString })
+        .map(|value| value.to_string());
+    Some(PasteboardSnapshot {
+        change_count,
+        text,
+    })
+}
+
+fn restore_pasteboard(snapshot: &PasteboardSnapshot) {
+    let pasteboard = NSPasteboard::generalPasteboard();
+    pasteboard.clearContents();
+    if let Some(text) = snapshot.text.as_ref() {
+        let ns_text = NSString::from_str(text);
+        let _ = pasteboard.setString_forType(&ns_text, unsafe { NSPasteboardTypeString });
+    }
+}
+
+fn wait_for_pasteboard_text(snapshot: &PasteboardSnapshot) -> Option<String> {
+    let mut elapsed = 0u64;
+    while elapsed < CLIPBOARD_FALLBACK_TIMEOUT_MS {
+        thread::sleep(Duration::from_millis(CLIPBOARD_FALLBACK_INTERVAL_MS));
+        elapsed = elapsed.saturating_add(CLIPBOARD_FALLBACK_INTERVAL_MS);
+        let pasteboard = NSPasteboard::generalPasteboard();
+        if pasteboard.changeCount() == snapshot.change_count {
+            continue;
+        }
+        // changeCount can advance before the string type is published; keep polling.
+        let Some(text) = pasteboard
+            .stringForType(unsafe { NSPasteboardTypeString })
+            .map(|value| value.to_string())
+        else {
+            continue;
+        };
+        if is_actionable_selection_text(&text) {
+            return Some(text);
+        }
+    }
+    None
+}
+
+/// Full ⌘C sequence (Command down → C down/up with Command flag → Command up).
+/// Flag-only C events are ignored by some custom-rendered apps including WeChat.
+fn post_command_copy() -> bool {
+    let Ok(source) = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).or_else(|_| {
+        CGEventSource::new(CGEventSourceStateID::HIDSystemState)
+    }) else {
+        return false;
+    };
+    let Ok(cmd_down) = CGEvent::new_keyboard_event(source.clone(), KeyCode::COMMAND, true) else {
+        return false;
+    };
+    let Ok(c_down) = CGEvent::new_keyboard_event(source.clone(), KeyCode::ANSI_C, true) else {
+        return false;
+    };
+    let Ok(c_up) = CGEvent::new_keyboard_event(source.clone(), KeyCode::ANSI_C, false) else {
+        return false;
+    };
+    let Ok(cmd_up) = CGEvent::new_keyboard_event(source, KeyCode::COMMAND, false) else {
+        return false;
+    };
+    cmd_down.set_flags(CGEventFlags::CGEventFlagCommand);
+    c_down.set_flags(CGEventFlags::CGEventFlagCommand);
+    c_up.set_flags(CGEventFlags::CGEventFlagCommand);
+    cmd_up.set_flags(CGEventFlags::CGEventFlagNull);
+    cmd_down.post(CGEventTapLocation::HID);
+    c_down.post(CGEventTapLocation::HID);
+    c_up.post(CGEventTapLocation::HID);
+    cmd_up.post(CGEventTapLocation::HID);
+    true
+}
+
+/// Locate an enabled Edit → Copy menu item via AX (identifier `copy:` preferred).
+fn find_enabled_copy_menu_item(application: &AXUIElement) -> Option<AXUIElement> {
+    let menu_bar = application
+        .element_attribute(AX_MENU_BAR_ATTRIBUTE)
+        .ok()
+        .flatten()?;
+    let mut stack: Vec<(AXUIElement, usize)> = match menu_bar.children() {
+        Ok(children) => {
+            // Prefer the typical Edit menu (index 3) first, then the rest.
+            let mut ordered = Vec::with_capacity(children.len());
+            if children.len() > 3 {
+                ordered.push((children[3].clone(), 0));
+            }
+            for (index, child) in children.into_iter().enumerate() {
+                if index != 3 {
+                    ordered.push((child, 0));
+                }
+            }
+            ordered
+        }
+        Err(_) => return None,
+    };
+    let mut visited = 0usize;
+    while let Some((element, depth)) = stack.pop() {
+        if visited >= COPY_MENU_SEARCH_MAX_NODES || depth > COPY_MENU_SEARCH_MAX_DEPTH {
+            continue;
+        }
+        visited += 1;
+        if is_copy_menu_item(&element) {
+            let enabled = element
+                .bool_attribute(AX_ENABLED_ATTRIBUTE)
+                .ok()
+                .flatten()
+                .unwrap_or(true);
+            if enabled {
+                return Some(element);
+            }
+            continue;
+        }
+        if let Ok(children) = element.children() {
+            for child in children.into_iter().rev() {
+                stack.push((child, depth + 1));
+            }
+        }
+    }
+    None
+}
+
+fn is_copy_menu_item(element: &AXUIElement) -> bool {
+    if element
+        .string_attribute(AX_IDENTIFIER_ATTRIBUTE)
+        .ok()
+        .flatten()
+        .is_some_and(|id| id == COPY_MENU_IDENTIFIER)
+    {
+        return true;
+    }
+    let cmd_char = element
+        .string_attribute(AX_MENU_ITEM_CMD_CHAR_ATTRIBUTE)
+        .ok()
+        .flatten()
+        .map(|value| value.to_ascii_uppercase());
+    if cmd_char.as_deref() != Some("C") {
+        return false;
+    }
+    element
+        .string_attribute(AX_TITLE_ATTRIBUTE)
+        .ok()
+        .flatten()
+        .is_some_and(|title| COPY_MENU_TITLES.iter().any(|known| title == *known))
 }
 
 fn ordered_marker_range(
@@ -1362,10 +1739,10 @@ mod macos_tests {
 
     use super::{
         event_tap_disable_reason, first_character_range, first_value_in_ancestor_chain,
-        first_value_in_candidate_chains, is_bundled_app_executable, marker_range_signature,
-        permission_action, screen_point_from_cg, selection_probe_action, usable_selection_rect,
-        workspace_signal, MacSignal, MonitorLifecycle, PermissionAction, SelectionProbeAction,
-        WorkspaceApplication, WorkspaceEventKind,
+        first_value_in_candidate_chains, is_bundled_app_executable, is_weak_ax_source_app,
+        marker_range_signature, permission_action, screen_point_from_cg, selection_probe_action,
+        usable_selection_rect, workspace_signal, MacSignal, MonitorLifecycle, PermissionAction,
+        SelectionProbeAction, WorkspaceApplication, WorkspaceEventKind,
     };
     use axuielement::{AXPoint, AXRange, AXRect, AXSize, AXTextMarkerRange};
     use core_graphics::event::CGEventType;
@@ -1424,6 +1801,15 @@ mod macos_tests {
             selection_probe_action(Some(42), Some(7), 7),
             SelectionProbeAction::Ignore
         );
+    }
+
+    #[test]
+    fn wechat_bundle_ids_are_treated_as_weak_ax_sources() {
+        assert!(is_weak_ax_source_app("com.tencent.xinWeChat"));
+        assert!(is_weak_ax_source_app("com.tencent.WeWorkMac"));
+        assert!(is_weak_ax_source_app("WeChat"));
+        assert!(!is_weak_ax_source_app("com.apple.TextEdit"));
+        assert!(!is_weak_ax_source_app("com.google.Chrome"));
     }
 
     #[test]
