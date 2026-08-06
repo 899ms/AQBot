@@ -500,7 +500,8 @@ fn post_wm_copy() -> bool {
             return false;
         }
         // WM_COPY is handled by standard edit controls; custom UIs may ignore it.
-        let _ = SendMessageW(hwnd, WM_COPY, WPARAM(0), LPARAM(0));
+        // windows 0.62+ takes Option for unused WPARAM/LPARAM (None == 0).
+        let _ = SendMessageW(hwnd, WM_COPY, None, None);
         true
     }
 }
