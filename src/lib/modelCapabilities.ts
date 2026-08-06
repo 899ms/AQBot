@@ -35,6 +35,11 @@ export function supportsReasoning(model: Pick<Model, 'capabilities'> | null | un
   return modelHasCapability(model, 'Reasoning');
 }
 
+/** Whether the model can accept provider tool / function-calling payloads (MCP, etc.). */
+export function supportsFunctionCalling(model: Pick<Model, 'capabilities'> | null | undefined): boolean {
+  return modelHasCapability(model, 'FunctionCalling');
+}
+
 export function findModelByIds(
   providers: ProviderConfig[],
   providerId: string | null | undefined,

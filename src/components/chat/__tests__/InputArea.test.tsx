@@ -173,6 +173,8 @@ vi.mock('@/lib/modelCapabilities', () => ({
   findModelByIds: (providers: typeof providerState.providers, providerId: string, modelId: string) =>
     providers.find((provider) => provider.id === providerId)?.models.find((model) => model.model_id === modelId) ?? null,
   supportsReasoning: (model: { capabilities?: string[] } | null | undefined) => model?.capabilities?.includes('Reasoning') ?? false,
+  supportsFunctionCalling: (model: { capabilities?: string[] } | null | undefined) =>
+    model?.capabilities?.includes('FunctionCalling') ?? false,
   modelHasCapability: (model: { capabilities?: string[] } | null | undefined, capability: string) =>
     model?.capabilities?.includes(capability) ?? false,
 }));

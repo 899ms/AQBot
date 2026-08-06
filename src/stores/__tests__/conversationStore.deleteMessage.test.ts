@@ -11,6 +11,7 @@ vi.mock('@/lib/invoke', () => ({
 
 vi.mock('@/lib/modelCapabilities', () => ({
   supportsReasoning: () => false,
+  supportsFunctionCalling: () => true,
   findModelByIds: () => null,
 }));
 

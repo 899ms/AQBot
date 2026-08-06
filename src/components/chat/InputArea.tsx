@@ -5,7 +5,7 @@ import { Paperclip, Trash2, Mic, Eraser, Scissors, Globe, Brain, Atom, Plug, Sli
 import { useTranslation } from 'react-i18next';
 import { useConversationStore, useProviderStore, useSettingsStore, useSearchStore, useMcpStore, useMemoryStore, useKnowledgeStore } from '@/stores';
 import { useUIStore } from '@/stores/uiStore';
-import { findModelByIds, supportsReasoning, modelHasCapability } from '@/lib/modelCapabilities';
+import { findModelByIds, supportsReasoning, supportsFunctionCalling, modelHasCapability } from '@/lib/modelCapabilities';
 import {
   coerceReasoningOptionKey,
   legacyThinkingBudgetToOptionKey,
@@ -915,12 +915,13 @@ export function InputArea() {
     return { usedTokens, maxTokens, percent };
   }, [messages, currentModel?.context_window, activeConversation?.system_prompt, serverContextUsage]);
 
-  const { hasRealtimeVoice, hasReasoning, hasVision } = React.useMemo(() => ({
+  const { hasRealtimeVoice, hasReasoning, hasVision, hasFunctionCalling } = React.useMemo(() => ({
     hasRealtimeVoice: activeConversation
       ? !!findModelByIds(providers, activeConversation.provider_id, activeConversation.model_id)?.capabilities.includes('RealtimeVoice')
       : false,
     hasReasoning: supportsReasoning(currentModel),
     hasVision: modelHasCapability(currentModel, 'Vision'),
+    hasFunctionCalling: supportsFunctionCalling(currentModel),
   }), [activeConversation, currentModel, providers]);
   const documentAttachmentReadingEnabled = settings.document_attachment_reading_enabled ?? false;
   const canAttachFiles = hasVision || documentAttachmentReadingEnabled;
@@ -1718,16 +1719,41 @@ export function InputArea() {
               placement="topLeft"
               content={mcpPopoverContent}
               arrow={false}
-              open={mcpPopoverOpen}
-              onOpenChange={setMcpPopoverOpen}
+              open={hasFunctionCalling ? mcpPopoverOpen : false}
+              onOpenChange={(open) => {
+                if (!hasFunctionCalling) return;
+                setMcpPopoverOpen(open);
+              }}
             >
-              <Tooltip title={t('chat.mcp.title')} open={mcpPopoverOpen ? false : undefined}>
-                <Badge count={enabledMcpServerIds.filter((id) => mcpServers.some((s) => s.id === id && s.enabled)).length} size="small" offset={[-4, 4]} color={token.colorPrimary}>
+              <Tooltip
+                title={
+                  hasFunctionCalling
+                    ? t('chat.mcp.title')
+                    : t('chat.mcp.unsupported', '当前模型不支持工具调用，已禁用 MCP')
+                }
+                open={mcpPopoverOpen ? false : undefined}
+              >
+                <Badge
+                  count={
+                    hasFunctionCalling
+                      ? enabledMcpServerIds.filter((id) => mcpServers.some((s) => s.id === id && s.enabled)).length
+                      : 0
+                  }
+                  size="small"
+                  offset={[-4, 4]}
+                  color={token.colorPrimary}
+                >
                 <Button
                   type="text"
                   size="small"
                   icon={<Plug size={14} />}
-                  style={enabledMcpServerIds.some((id) => mcpServers.some((s) => s.id === id && s.enabled)) ? { color: token.colorPrimary } : undefined}
+                  disabled={!hasFunctionCalling}
+                  style={
+                    hasFunctionCalling
+                    && enabledMcpServerIds.some((id) => mcpServers.some((s) => s.id === id && s.enabled))
+                      ? { color: token.colorPrimary }
+                      : undefined
+                  }
                 />
                 </Badge>
               </Tooltip>

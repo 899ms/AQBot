@@ -71,6 +71,103 @@ async fn resolve_command_provider_id(
         .map_err(|e| e.to_string())
 }
 
+/// Whether the model can accept provider tool / function-calling payloads.
+/// Unknown models default to `true` so legacy records keep previous behavior.
+fn model_supports_function_calling(model: Option<&Model>) -> bool {
+    model
+        .map(|m| m.capabilities.contains(&ModelCapability::FunctionCalling))
+        .unwrap_or(true)
+}
+
+#[cfg(test)]
+mod function_calling_gate_tests {
+    use super::*;
+
+    fn sample_model(capabilities: Vec<ModelCapability>) -> Model {
+        Model {
+            provider_id: "p".into(),
+            model_id: "m".into(),
+            name: "m".into(),
+            group_name: None,
+            model_type: ModelType::Chat,
+            capabilities,
+            context_window: None,
+            max_output_tokens: None,
+            enabled: true,
+            param_overrides: None,
+            image_config: None,
+            metadata_state: None,
+        }
+    }
+
+    #[test]
+    fn unknown_model_defaults_to_allowing_tools() {
+        assert!(model_supports_function_calling(None));
+    }
+
+    #[test]
+    fn model_without_function_calling_disallows_tools() {
+        let model = sample_model(vec![ModelCapability::TextChat]);
+        assert!(!model_supports_function_calling(Some(&model)));
+    }
+
+    #[test]
+    fn model_with_function_calling_allows_tools() {
+        let model = sample_model(vec![
+            ModelCapability::TextChat,
+            ModelCapability::FunctionCalling,
+        ]);
+        assert!(model_supports_function_calling(Some(&model)));
+    }
+}
+
+/// Load MCP tools only when the model supports FunctionCalling.
+/// Persisted MCP selections are kept; runtime injection is forced off otherwise.
+async fn load_mcp_tools_for_model(
+    db: &DatabaseConnection,
+    enabled_mcp_server_ids: Option<Vec<String>>,
+    model: Option<&Model>,
+) -> (Vec<String>, Option<Vec<ChatTool>>) {
+    let mcp_ids = enabled_mcp_server_ids.unwrap_or_default();
+    if mcp_ids.is_empty() {
+        return (mcp_ids, None);
+    }
+    if !model_supports_function_calling(model) {
+        tracing::info!(
+            "[mcp] Skipping tool injection: model does not support FunctionCalling (mcp_ids={:?})",
+            mcp_ids
+        );
+        return (Vec::new(), None);
+    }
+
+    let mut all_tools = Vec::new();
+    for server_id in &mcp_ids {
+        if let Ok(descriptors) =
+            aqbot_core::repo::mcp_server::list_tools_for_server(db, server_id).await
+        {
+            for td in descriptors {
+                let parameters: Option<serde_json::Value> = td
+                    .input_schema_json
+                    .as_ref()
+                    .and_then(|s| serde_json::from_str(s).ok());
+                all_tools.push(ChatTool {
+                    r#type: "function".to_string(),
+                    function: ChatToolFunction {
+                        name: td.name,
+                        description: td.description,
+                        parameters,
+                    },
+                });
+            }
+        }
+    }
+    if all_tools.is_empty() {
+        (mcp_ids, None)
+    } else {
+        (mcp_ids, Some(all_tools))
+    }
+}
+
 /// Resolve effective system prompt with priority: Conversation → Category → Global Default
 async fn resolve_system_prompt(
     db: &DatabaseConnection,
@@ -4380,38 +4477,13 @@ pub async fn send_message(
             .and_then(|s| serde_json::from_str(s).ok()),
     };
 
-    // 6. Load MCP tools for enabled servers
-    let mcp_ids = enabled_mcp_server_ids.unwrap_or_default();
-    let tools: Option<Vec<ChatTool>> = if mcp_ids.is_empty() {
-        None
-    } else {
-        let mut all_tools = Vec::new();
-        for server_id in &mcp_ids {
-            if let Ok(descriptors) =
-                aqbot_core::repo::mcp_server::list_tools_for_server(&state.sea_db, server_id).await
-            {
-                for td in descriptors {
-                    let parameters: Option<serde_json::Value> = td
-                        .input_schema_json
-                        .as_ref()
-                        .and_then(|s| serde_json::from_str(s).ok());
-                    all_tools.push(ChatTool {
-                        r#type: "function".to_string(),
-                        function: ChatToolFunction {
-                            name: td.name,
-                            description: td.description,
-                            parameters,
-                        },
-                    });
-                }
-            }
-        }
-        if all_tools.is_empty() {
-            None
-        } else {
-            Some(all_tools)
-        }
-    };
+    // 6. Load MCP tools for enabled servers (skipped when model lacks FunctionCalling)
+    let (mcp_ids, tools) = load_mcp_tools_for_model(
+        &state.sea_db,
+        enabled_mcp_server_ids,
+        resolved_model.as_ref(),
+    )
+    .await;
 
     // 7. Spawn streaming in background
     // Convert all remaining system messages to user messages if model doesn't support system role
@@ -4692,38 +4764,13 @@ pub async fn regenerate_message(
             .and_then(|s| serde_json::from_str(s).ok()),
     };
 
-    // Load MCP tools for enabled servers
-    let mcp_ids = enabled_mcp_server_ids.unwrap_or_default();
-    let tools: Option<Vec<ChatTool>> = if mcp_ids.is_empty() {
-        None
-    } else {
-        let mut all_tools = Vec::new();
-        for server_id in &mcp_ids {
-            if let Ok(descriptors) =
-                aqbot_core::repo::mcp_server::list_tools_for_server(&state.sea_db, server_id).await
-            {
-                for td in descriptors {
-                    let parameters: Option<serde_json::Value> = td
-                        .input_schema_json
-                        .as_ref()
-                        .and_then(|s| serde_json::from_str(s).ok());
-                    all_tools.push(ChatTool {
-                        r#type: "function".to_string(),
-                        function: ChatToolFunction {
-                            name: td.name,
-                            description: td.description,
-                            parameters,
-                        },
-                    });
-                }
-            }
-        }
-        if all_tools.is_empty() {
-            None
-        } else {
-            Some(all_tools)
-        }
-    };
+    // Load MCP tools (skipped when model lacks FunctionCalling)
+    let (mcp_ids, tools) = load_mcp_tools_for_model(
+        &state.sea_db,
+        enabled_mcp_server_ids,
+        resolved_regen_model.as_ref(),
+    )
+    .await;
 
     let regen_model_overrides = resolved_regen_model.and_then(|m| m.param_overrides);
     let use_max_completion_tokens = regen_model_overrides
@@ -5013,37 +5060,13 @@ pub async fn regenerate_with_model(
             .and_then(|s| serde_json::from_str(s).ok()),
     };
 
-    let mcp_ids = enabled_mcp_server_ids.unwrap_or_default();
-    let tools: Option<Vec<ChatTool>> = if mcp_ids.is_empty() {
-        None
-    } else {
-        let mut all_tools = Vec::new();
-        for server_id in &mcp_ids {
-            if let Ok(descriptors) =
-                aqbot_core::repo::mcp_server::list_tools_for_server(&state.sea_db, server_id).await
-            {
-                for td in descriptors {
-                    let parameters: Option<serde_json::Value> = td
-                        .input_schema_json
-                        .as_ref()
-                        .and_then(|s| serde_json::from_str(s).ok());
-                    all_tools.push(ChatTool {
-                        r#type: "function".to_string(),
-                        function: ChatToolFunction {
-                            name: td.name,
-                            description: td.description,
-                            parameters,
-                        },
-                    });
-                }
-            }
-        }
-        if all_tools.is_empty() {
-            None
-        } else {
-            Some(all_tools)
-        }
-    };
+    // Load MCP tools (skipped when target model lacks FunctionCalling)
+    let (mcp_ids, tools) = load_mcp_tools_for_model(
+        &state.sea_db,
+        enabled_mcp_server_ids,
+        resolved_target_model.as_ref(),
+    )
+    .await;
 
     let rwm_overrides = resolved_target_model.and_then(|m| m.param_overrides);
     let use_max_completion_tokens = rwm_overrides

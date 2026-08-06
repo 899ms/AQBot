@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef, memo } from 'react'
 import { Button, Input, App, theme, Tooltip, Checkbox, Dropdown, Empty } from 'antd'
 import { MessageSquarePlus, Search, Archive, ListTodo, Trash2, Pencil, Share, Pin, PinOff, Loader, X, Undo2, ArrowLeft, FileImage, FileCode, FileType, FileText, FolderPlus, FolderOpen, GripVertical, ChevronRight, MessageSquareText, Sparkles } from 'lucide-react'
-import { exportAsMarkdown, exportAsText, exportAsPNG, exportAsJSON } from '@/lib/exportChat'
+import { exportAsMarkdown, exportAsText, exportMessagesAsPNG, exportAsJSON } from '@/lib/exportChat'
 import { invoke } from '@/lib/invoke'
 import type { ConversationItemType } from '@ant-design/x/es/conversations/interface'
 import { useTranslation } from 'react-i18next'
@@ -162,9 +162,6 @@ export function ChatSidebar() {
   const togglePin = useConversationStore((s) => s.togglePin)
   const toggleArchive = useConversationStore((s) => s.toggleArchive)
   const archivedConversations = useConversationStore((s) => s.archivedConversations)
-  const messagesLoading = useConversationStore((s) => s.loading)
-  const hasOlderMessages = useConversationStore((s) => s.hasOlderMessages)
-  const hasNewerMessages = useConversationStore((s) => s.hasNewerMessages)
   const fetchArchivedConversations = useConversationStore((s) => s.fetchArchivedConversations)
   const batchDelete = useConversationStore((s) => s.batchDelete)
   const batchArchive = useConversationStore((s) => s.batchArchive)
@@ -938,23 +935,17 @@ export function ChatSidebar() {
 
   const buildExportChildren = useCallback(
     (convId: string, title: string) => {
-      const canExportRenderedPng = convId === activeConversationId
-        && !messagesLoading
-        && !hasOlderMessages
-        && !hasNewerMessages
       return [
       {
         key: 'export-png',
-        label: canExportRenderedPng
-          ? t('chat.exportPng')
-          : <Tooltip title={t('chat.exportPngRequiresFullConversation', '仅当前完整加载的对话可导出 PNG')}>{t('chat.exportPng')}</Tooltip>,
+        label: t('chat.exportPng'),
         icon: <FileImage size={14} />,
-        disabled: !canExportRenderedPng,
         onClick: async () => {
           try {
-            const el = document.querySelector('[data-message-area]') as HTMLElement
-            if (!el) { messageApi.warning(t('chat.noMessages')); return }
-            const ok = await exportAsPNG(el, title)
+            const msgs = await invoke<Message[]>('list_messages', { conversationId: convId })
+            const shareable = msgs.filter((m) => m.role === 'user' || m.role === 'assistant')
+            if (shareable.length === 0) { messageApi.warning(t('chat.noMessages')); return }
+            const ok = await exportMessagesAsPNG(shareable, title, { includeThinking: false })
             if (ok) messageApi.success(t('chat.exportSuccess'))
           } catch (e) {
             console.error('Export PNG failed:', e)
@@ -1012,7 +1003,7 @@ export function ChatSidebar() {
       },
       ]
     },
-    [activeConversationId, hasNewerMessages, hasOlderMessages, messageApi, messagesLoading, t],
+    [messageApi, t],
   )
 
   const menuConfig = useCallback<ConversationMenuFactory>(

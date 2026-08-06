@@ -221,10 +221,15 @@
       "input": "输入参数",
       "output": "执行结果"
     },
+    "shareSelectMessages": "选择消息分享…",
+    "shareSelectNone": "请先选择要分享的消息",
+    "shareSelectedCount": "已选 {{count}} 条",
+    "shareSelectAll": "全选",
     "mcp": {
       "title": "MCP 工具",
       "noServers": "请先在设置中配置并启用 MCP 服务器",
-      "goConfig": "前往配置 →"
+      "goConfig": "前往配置 →",
+      "unsupported": "当前模型不支持工具调用，已禁用 MCP"
     },
     "role": {
       "title": "切换角色",

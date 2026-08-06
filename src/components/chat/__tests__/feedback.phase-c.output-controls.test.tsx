@@ -32,6 +32,17 @@ describe('Phase C output control regressions', () => {
     expect(source).toContain("key: 'export-json-no-thinking'");
   });
 
+  it('supports multi-select message share and data-driven PNG export', () => {
+    const chatView = readSource('src/components/chat/ChatView.tsx');
+    const exportChat = readSource('src/lib/exportChat.ts');
+
+    expect(chatView).toContain("key: 'select-share'");
+    expect(chatView).toContain('exportMessagesAsPNG');
+    expect(chatView).toContain('shareSelectMode');
+    expect(exportChat).toContain('exportMessagesAsPNG');
+    expect(exportChat).toContain('prepareClonedExportRoot');
+  });
+
   it('lets export helpers optionally strip thinking content before saving or copying', () => {
     const source = readSource('src/lib/exportChat.ts');
 

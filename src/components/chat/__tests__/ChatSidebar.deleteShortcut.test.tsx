@@ -269,6 +269,7 @@ vi.mock('@/lib/exportChat', () => ({
   exportAsMarkdown: vi.fn(),
   exportAsText: vi.fn(),
   exportAsPNG: vi.fn(),
+  exportMessagesAsPNG: vi.fn(),
   exportAsJSON: vi.fn(),
 }));
 

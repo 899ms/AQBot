@@ -1,8 +1,8 @@
 import React, { useMemo, useCallback, useRef, useState, useEffect, useSyncExternalStore } from 'react';
 import { CloseCircleFilled, SyncOutlined } from '@ant-design/icons';
-import { Typography, Button, Dropdown, Input, App, Avatar, Alert, Popconfirm, Popover, theme, Tag, Image, Tooltip, Modal, Spin } from 'antd';
+import { Typography, Button, Dropdown, Input, App, Avatar, Alert, Popconfirm, Popover, theme, Tag, Image, Tooltip, Modal, Spin, Checkbox } from 'antd';
 import type { InputRef } from 'antd';
-import { Pencil, Share2, FileImage, FileCode, FileText, FileType, Bot, Lightbulb, Code, Languages, Copy, Check, RotateCcw, User, Trash2, ChevronLeft, ChevronRight, ChevronDown, Scissors, Paperclip, AlertCircle, X, ArrowDown, ArrowUp, ArrowLeftRight, Zap, Sparkles, TextCursorInput, GitBranch, ChartNoAxesColumn, MessageSquare, ArrowUpRight, ArrowDownRight, Coins, Clock, Timer, Download, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { Pencil, Share2, FileImage, FileCode, FileText, FileType, Bot, Lightbulb, Code, Languages, Copy, Check, RotateCcw, User, Trash2, ChevronLeft, ChevronRight, ChevronDown, Scissors, Paperclip, AlertCircle, X, ArrowDown, ArrowUp, ArrowLeftRight, Zap, Sparkles, TextCursorInput, GitBranch, ChartNoAxesColumn, MessageSquare, ArrowUpRight, ArrowDownRight, Coins, Clock, Timer, Download, PanelLeftClose, PanelLeftOpen, ListChecks } from 'lucide-react';
 import { ModelIcon } from '@lobehub/icons';
 import { getConvIcon } from '@/lib/convIcon';
 import { getRoleIntro } from '@/lib/roleIntro';
@@ -1805,7 +1805,7 @@ function AssistantFooter({
 
 // ── Export helpers ──────────────────────────────────────────────────────
 
-import { copyTranscript, exportAsPNG, exportAsMarkdown, exportAsJSON, exportAsText } from '@/lib/exportChat';
+import { copyTranscript, exportMessagesAsPNG, exportAsMarkdown, exportAsJSON, exportAsText } from '@/lib/exportChat';
 
 // ── Stats Popover ──────────────────────────────────────────────────────
 
@@ -2177,6 +2177,10 @@ export function ChatView() {
   const [cardBranchTitle, setCardBranchTitle] = useState('');
   const [cardBranchSaving, setCardBranchSaving] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  /** Multi-select messages for share/export */
+  const [shareSelectMode, setShareSelectMode] = useState(false);
+  const [selectedShareMessageIds, setSelectedShareMessageIds] = useState<string[]>([]);
+  const [shareExporting, setShareExporting] = useState(false);
   const titleInputRef = useRef<InputRef>(null);
   const skipTitleSaveRef = useRef(false);
 
@@ -2195,7 +2199,16 @@ export function ChatView() {
     setPreviewPayload(null);
     setMermaidPreviewOpen(false);
     setMermaidPreviewSvg(null);
+    setShareSelectMode(false);
+    setSelectedShareMessageIds([]);
+    setShareExporting(false);
   });
+
+  // Leave share-select mode when switching conversations
+  useEffect(() => {
+    setShareSelectMode(false);
+    setSelectedShareMessageIds([]);
+  }, [activeConversationId]);
 
   // ── Stats popover state ─────────────────────────────────────────────
   const [statsOpen, setStatsOpen] = useState(false);
@@ -2685,8 +2698,88 @@ export function ChatView() {
     return complete;
   }, [activeConversationId, hasNewerMessages, hasOlderMessages, messages]);
 
+  const shareableMessages = useMemo(
+    () => messages.filter((m) => m.role === 'user' || m.role === 'assistant'),
+    [messages],
+  );
+
+  const exitShareSelectMode = useCallback(() => {
+    setShareSelectMode(false);
+    setSelectedShareMessageIds([]);
+  }, []);
+
+  const enterShareSelectMode = useCallback(() => {
+    setShareSelectMode(true);
+    setSelectedShareMessageIds([]);
+  }, []);
+
+  const toggleShareMessage = useCallback((messageId: string) => {
+    setSelectedShareMessageIds((prev) => (
+      prev.includes(messageId)
+        ? prev.filter((id) => id !== messageId)
+        : [...prev, messageId]
+    ));
+  }, []);
+
+  const selectAllShareMessages = useCallback(() => {
+    setSelectedShareMessageIds(shareableMessages.map((m) => m.id));
+  }, [shareableMessages]);
+
+  const getSelectedShareMessagesOrdered = useCallback(() => {
+    const selected = new Set(selectedShareMessageIds);
+    return shareableMessages.filter((m) => selected.has(m.id));
+  }, [selectedShareMessageIds, shareableMessages]);
+
+  const exportSelectedShare = useCallback(async (format: 'png' | 'md' | 'copy-md') => {
+    const selected = getSelectedShareMessagesOrdered();
+    if (selected.length === 0) {
+      messageApi.warning(t('chat.shareSelectNone', '请先选择要分享的消息'));
+      return;
+    }
+    const title = activeConversation?.title ?? 'chat';
+    setShareExporting(true);
+    try {
+      if (format === 'png') {
+        const ok = await exportMessagesAsPNG(selected, title, { includeThinking: false });
+        if (ok) {
+          messageApi.success(t('chat.exportSuccess'));
+          exitShareSelectMode();
+        }
+      } else if (format === 'md') {
+        const ok = await exportAsMarkdown(selected, title, { includeThinking: false });
+        if (ok) {
+          messageApi.success(t('chat.exportSuccess'));
+          exitShareSelectMode();
+        }
+      } else {
+        const ok = await copyTranscript(selected, title, 'markdown', { includeThinking: false });
+        if (ok) {
+          messageApi.success(t('chat.copied'));
+          exitShareSelectMode();
+        }
+      }
+    } catch (e) {
+      console.error('Share selected messages failed:', e);
+      messageApi.error(t('chat.exportFailed'));
+    } finally {
+      setShareExporting(false);
+    }
+  }, [activeConversation?.title, exitShareSelectMode, getSelectedShareMessagesOrdered, messageApi, t]);
+
   const exportMenuItems = useMemo(
     () => [
+      {
+        key: 'select-share',
+        label: t('chat.shareSelectMessages', '选择消息分享…'),
+        icon: <ListChecks size={14} />,
+        onClick: () => {
+          if (shareableMessages.length === 0) {
+            messageApi.warning(t('chat.noMessages'));
+            return;
+          }
+          enterShareSelectMode();
+        },
+      },
       {
         key: 'copy-md',
         label: t('chat.copyMarkdown', '复制 Markdown'),
@@ -2706,7 +2799,11 @@ export function ChatView() {
         icon: <FileImage size={14} />,
         onClick: async () => {
           try {
-            const ok = await exportAsPNG(messageAreaRef.current, activeConversation?.title ?? 'chat');
+            // Data-driven PNG avoids viewport clipping and action-icon layout bugs.
+            const transcript = await loadCompleteTranscript();
+            const shareable = transcript.filter((m) => m.role === 'user' || m.role === 'assistant');
+            if (shareable.length === 0) { messageApi.warning(t('chat.noMessages')); return; }
+            const ok = await exportMessagesAsPNG(shareable, activeConversation?.title ?? 'chat', { includeThinking: false });
             if (ok) messageApi.success(t('chat.exportSuccess'));
           } catch (e) { console.error('Export PNG failed:', e); messageApi.error(t('chat.exportFailed')); }
         },
@@ -2790,7 +2887,7 @@ export function ChatView() {
         },
       },
     ],
-    [activeConversation, loadCompleteTranscript, messageApi, t],
+    [activeConversation, enterShareSelectMode, loadCompleteTranscript, messageApi, shareableMessages.length, t],
   );
 
   // ── Welcome prompt items ───────────────────────────────────────────
@@ -3578,6 +3675,13 @@ export function ChatView() {
       header: (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {shareSelectMode && msg && (
+              <Checkbox
+                checked={selectedShareMessageIds.includes(msg.id)}
+                onChange={() => toggleShareMessage(msg.id)}
+                onClick={(e) => e.stopPropagation()}
+              />
+            )}
             <Typography.Text style={{ fontSize: 13 }}>{profile.name || t('chat.you')}</Typography.Text>
             {msg && (
               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
@@ -3587,7 +3691,7 @@ export function ChatView() {
           </div>
         </div>
       ),
-      footer: (
+      footer: shareSelectMode ? null : (
         <Actions
           items={[
             {
@@ -3651,7 +3755,7 @@ export function ChatView() {
         />
       ),
     };
-  }, [activeConversationId, codeBlockDarkTheme, codeBlockLightTheme, codeBlockThemes, deleteMessageGroup, formatTime, getBubbleVariant, handleEditMessage, isDarkMode, messageApi, messageById, profile.name, regenerateMessage, settings.code_font_family, settings.render_user_markdown, t, token.colorError, token.colorPrimary, userAvatar]);
+  }, [activeConversationId, codeBlockDarkTheme, codeBlockLightTheme, codeBlockThemes, deleteMessageGroup, formatTime, getBubbleVariant, handleEditMessage, isDarkMode, messageApi, messageById, profile.name, regenerateMessage, selectedShareMessageIds, settings.code_font_family, settings.render_user_markdown, shareSelectMode, t, toggleShareMessage, token.colorError, token.colorPrimary, userAvatar]);
 
   const renderStreamingStatusIndicator = useCallback((
     activity: StreamActivity | undefined,
@@ -3989,11 +4093,18 @@ export function ChatView() {
         return renderContentNode(baseRenderContent);
       },
       header: (() => {
-        if (isNonTabsMultiModel) return null;
+        if (isNonTabsMultiModel && !shareSelectMode) return null;
         const { modelName, providerName } = getModelDisplayInfo(msg?.model_id, msg?.provider_id);
         return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {shareSelectMode && msg && (
+                <Checkbox
+                  checked={selectedShareMessageIds.includes(msg.id)}
+                  onChange={() => toggleShareMessage(msg.id)}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              )}
               {providerName && (
                 <Tag style={{ fontSize: 11, margin: 0, padding: '0 4px', lineHeight: '18px', color: token.colorPrimary, backgroundColor: token.colorPrimaryBg, border: 'none' }}>{providerName}</Tag>
               )}
@@ -4014,7 +4125,7 @@ export function ChatView() {
           </div>
         );
       })(),
-      footer: msg && activeConversationId ? (
+      footer: shareSelectMode ? null : msg && activeConversationId ? (
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {footerLoading && !isNonTabsMultiModel && (
             <div
@@ -4056,7 +4167,7 @@ export function ChatView() {
         </div>
       ) : null,
     };
-  }, [activeConversation, activeConversationId, activeMessages, agentPendingPermissions, agentToolCalls, aiContentNodesById, assistantByParentId, codeBlockDarkTheme, codeBlockLightTheme, codeBlockThemes, currentMessageVersionsByParentId, deleteMessage, displayModeOverrides, displayVersionOverrides, formatTime, getBubbleVariant, getModelDisplayInfo, handleBranchDisplayedVersion, handleDisplayModeOverride, handleDisplayVersionOverride, handleEditMessage, handleGeneratedVersionCreated, handleMultiModelDetected, handleRegenerateDisplayedVersion, handleSetContextVersion, handleSwitchDisplayedVersionModel, isDarkMode, messageById, messages, multiModelDoneMessageIds, multiModelParentId, multiModelResponseParents, ragDisplayByMessageId, renderConvIconForChat, renderStreamingStatusIndicator, searchDisplayByMessageId, settings, streamActivityByMessageId, streaming, streamingMessageId, switchMessageVersion, t, token.colorPrimary, token.colorTextDescription]);
+  }, [activeConversation, activeConversationId, activeMessages, agentPendingPermissions, agentToolCalls, aiContentNodesById, assistantByParentId, codeBlockDarkTheme, codeBlockLightTheme, codeBlockThemes, currentMessageVersionsByParentId, deleteMessage, displayModeOverrides, displayVersionOverrides, formatTime, getBubbleVariant, getModelDisplayInfo, handleBranchDisplayedVersion, handleDisplayModeOverride, handleDisplayVersionOverride, handleEditMessage, handleGeneratedVersionCreated, handleMultiModelDetected, handleRegenerateDisplayedVersion, handleSetContextVersion, handleSwitchDisplayedVersionModel, isDarkMode, messageById, messages, multiModelDoneMessageIds, multiModelParentId, multiModelResponseParents, ragDisplayByMessageId, renderConvIconForChat, renderStreamingStatusIndicator, searchDisplayByMessageId, selectedShareMessageIds, settings, shareSelectMode, streamActivityByMessageId, streaming, streamingMessageId, switchMessageVersion, t, toggleShareMessage, token.colorPrimary, token.colorTextDescription]);
 
   const contextClearRole = useCallback((bubbleData: BubbleItemType) => {
     const msgId = String(bubbleData.content ?? '');
@@ -4502,6 +4613,83 @@ export function ChatView() {
                 overflowX: 'hidden',
               }}
             />
+            {shareSelectMode && (
+              <div
+                data-export-hide="true"
+                style={{
+                  position: 'absolute',
+                  left: '50%',
+                  bottom: 16,
+                  transform: 'translateX(-50%)',
+                  zIndex: 20,
+                  display: 'flex',
+                  flexDirection: 'row',
+                  flexWrap: 'nowrap',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '10px 14px',
+                  borderRadius: 12,
+                  background: token.colorBgElevated,
+                  boxShadow: token.boxShadowSecondary,
+                  border: `1px solid ${token.colorBorderSecondary}`,
+                  maxWidth: 'min(720px, calc(100% - 32px))',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <Typography.Text style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  {t('chat.shareSelectedCount', '已选 {{count}} 条', { count: selectedShareMessageIds.length })}
+                </Typography.Text>
+                <Button size="small" onClick={selectAllShareMessages}>
+                  {t('chat.shareSelectAll', '全选')}
+                </Button>
+                <Dropdown
+                  menu={{
+                    items: [
+                      {
+                        key: 'png',
+                        icon: <FileImage size={14} />,
+                        label: t('chat.exportPng'),
+                        disabled: selectedShareMessageIds.length === 0 || shareExporting,
+                        onClick: () => { void exportSelectedShare('png'); },
+                      },
+                      {
+                        key: 'md',
+                        icon: <FileCode size={14} />,
+                        label: t('chat.exportMd'),
+                        disabled: selectedShareMessageIds.length === 0 || shareExporting,
+                        onClick: () => { void exportSelectedShare('md'); },
+                      },
+                      {
+                        key: 'copy-md',
+                        icon: <Copy size={14} />,
+                        label: t('chat.copyMarkdown', '复制 Markdown'),
+                        disabled: selectedShareMessageIds.length === 0 || shareExporting,
+                        onClick: () => { void exportSelectedShare('copy-md'); },
+                      },
+                    ],
+                  }}
+                  placement="top"
+                  trigger={['click']}
+                  disabled={selectedShareMessageIds.length === 0 || shareExporting}
+                >
+                  <Button
+                    size="small"
+                    type="primary"
+                    icon={<FileImage size={14} />}
+                    loading={shareExporting}
+                    disabled={selectedShareMessageIds.length === 0}
+                  >
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      {t('chat.exportPng')}
+                      <ChevronDown size={12} />
+                    </span>
+                  </Button>
+                </Dropdown>
+                <Button size="small" icon={<X size={14} />} onClick={exitShareSelectMode}>
+                  {t('common.cancel', '取消')}
+                </Button>
+              </div>
+            )}
             <ChatScrollIndicator onUserScrollIntent={markUserScrollIntent} />
             <MinimapScrollProvider scrollTo={minimapScrollTo} scrollBoxRef={scrollBoxRef}>
               <ChatMinimap />

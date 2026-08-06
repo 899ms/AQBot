@@ -221,10 +221,15 @@
       "input": "Input",
       "output": "Output"
     },
+    "shareSelectMessages": "Select messages to share…",
+    "shareSelectNone": "Select messages to share first",
+    "shareSelectedCount": "{{count}} selected",
+    "shareSelectAll": "Select all",
     "mcp": {
       "title": "MCP Tools",
       "noServers": "Please configure and enable MCP servers in settings first",
-      "goConfig": "Go to Settings →"
+      "goConfig": "Go to Settings →",
+      "unsupported": "Current model does not support tool calling; MCP is disabled"
     },
     "contextCleared": "Context has been reset from here",
     "knowledge": {

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { invoke, listen, type UnlistenFn, isTauri } from '@/lib/invoke';
-import { supportsReasoning, findModelByIds } from '@/lib/modelCapabilities';
+import { supportsReasoning, supportsFunctionCalling, findModelByIds } from '@/lib/modelCapabilities';
 import { coerceReasoningOptionKey, resolveReasoningProfile } from '@/lib/reasoningProfile';
 import {
   applyMultiModelStreamError,
@@ -720,6 +720,36 @@ function getEffectiveThinkingLevel(get: () => ConversationState, conversationId:
   const profile = resolveReasoningProfile(provider?.provider_type, model);
   const optionKey = coerceReasoningOptionKey(profile, thinkingLevel);
   return optionKey === 'default' ? undefined : optionKey;
+}
+
+/**
+ * Runtime MCP fortify: keep persisted selections, but do not inject tools when
+ * the effective model lacks FunctionCalling.
+ */
+function getEffectiveMcpServerIds(
+  get: () => ConversationState,
+  opts: {
+    conversationId?: string | null;
+    providerId?: string | null;
+    modelId?: string | null;
+    mcpIds?: string[];
+  } = {},
+): string[] {
+  const mcpIds = opts.mcpIds ?? get().enabledMcpServerIds;
+  if (mcpIds.length === 0) return [];
+
+  let providerId = opts.providerId ?? null;
+  let modelId = opts.modelId ?? null;
+  if ((!providerId || !modelId) && opts.conversationId) {
+    const conversation = get().conversations.find((item) => item.id === opts.conversationId);
+    providerId = providerId ?? conversation?.provider_id ?? null;
+    modelId = modelId ?? conversation?.model_id ?? null;
+  }
+
+  const model = findModelByIds(useProviderStore.getState().providers, providerId, modelId);
+  // Only strip when we positively know the model cannot call tools.
+  if (model && !supportsFunctionCalling(model)) return [];
+  return mcpIds;
 }
 
 const RAG_DISPLAY_TAGS = new Set(['knowledge-retrieval', 'memory-retrieval']);
@@ -2569,7 +2599,10 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
         _streamPrefix = '';
       }
 
-      const mcpIds = capabilityIds.enabledMcpServerIds;
+      const mcpIds = getEffectiveMcpServerIds(get, {
+        conversationId,
+        mcpIds: capabilityIds.enabledMcpServerIds,
+      });
       const thinkingBudget = getEffectiveThinkingBudget(get, conversationId);
       const thinkingLevel = getEffectiveThinkingLevel(get, conversationId);
       const userMessage = await invoke<Message>('send_message', {
@@ -3107,7 +3140,10 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     try {
       await get().startStreamListening();
 
-      const rMcpIds = capabilityIds.enabledMcpServerIds;
+      const rMcpIds = getEffectiveMcpServerIds(get, {
+        conversationId,
+        mcpIds: capabilityIds.enabledMcpServerIds,
+      });
       const rThinkingBudget = getEffectiveThinkingBudget(get, conversationId);
       const rThinkingLevel = getEffectiveThinkingLevel(get, conversationId);
       const rKbIds = capabilityIds.enabledKnowledgeBaseIds;
@@ -3230,7 +3266,12 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     try {
       await get().startStreamListening();
 
-      const rMcpIds = capabilityIds.enabledMcpServerIds;
+      const rMcpIds = getEffectiveMcpServerIds(get, {
+        conversationId,
+        providerId,
+        modelId,
+        mcpIds: capabilityIds.enabledMcpServerIds,
+      });
       const rThinkingBudget = getEffectiveThinkingBudget(get, conversationId);
       const rThinkingLevel = getEffectiveThinkingLevel(get, conversationId);
       const rKbIds = capabilityIds.enabledKnowledgeBaseIds;
@@ -3354,7 +3395,6 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     if (remaining.length > 0) {
       _streamBuffer = null;
 
-      const mcpIds = get().enabledMcpServerIds;
       const thinkingBudget = getEffectiveThinkingBudget(get, conversationId);
       const thinkingLevel = getEffectiveThinkingLevel(get, conversationId);
       const kbIds = get().enabledKnowledgeBaseIds;
@@ -3363,6 +3403,11 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       const invocations = remaining.map((model) => {
         const streamId = createStreamId();
         _multiModelStreamIds.add(streamId);
+        const mcpIds = getEffectiveMcpServerIds(get, {
+          conversationId,
+          providerId: model.providerId,
+          modelId: model.modelId,
+        });
         return invoke('regenerate_with_model', {
           conversationId,
           streamId,
