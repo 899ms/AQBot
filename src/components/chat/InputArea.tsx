@@ -35,7 +35,13 @@ import { invoke } from '@/lib/invoke';
 import { usePageSuspendCleanup } from '@/components/layout/PageLifecycle';
 import { RoleSwitcherPopover } from './toolbar/RoleSwitcherPopover';
 import { SkillPickerPopover } from './toolbar/SkillPickerPopover';
-import { AttachmentChips } from './AttachmentChips';
+import {
+  AttachmentChips,
+  createComposerAttachment,
+  revokeComposerAttachment,
+  revokeComposerAttachments,
+  type ComposerAttachment,
+} from './AttachmentChips';
 import {
   createPastedSnippet,
   insertPasteTokenAtSelection,
@@ -129,7 +135,9 @@ export function InputArea() {
     const convId = useConversationStore.getState().activeConversationId;
     return convId ? _draftCache.get(convId) || '' : '';
   });
-  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<ComposerAttachment[]>([]);
+  const attachedFilesRef = useRef(attachedFiles);
+  attachedFilesRef.current = attachedFiles;
   const [pastedSnippets, setPastedSnippets] = useState<PastedSnippet[]>([]);
   const pastedSnippetSeqRef = useRef(0);
   const [voiceCallVisible, setVoiceCallVisible] = useState(false);
@@ -327,19 +335,21 @@ export function InputArea() {
     }
     setValue(next ? _draftCache.get(next) || '' : '');
     // Attachments and pasted snippets are composer-local and do not follow conversations.
+    revokeComposerAttachments(attachedFilesRef.current);
     setAttachedFiles([]);
     setPastedSnippets([]);
     pastedSnippetSeqRef.current = 0;
     prevConvIdRef.current = next;
   }, [activeConversationId]);
 
-  // Save draft on unmount (navigating away from chat page)
+  // Save draft on unmount (navigating away from chat page) and revoke attachment previews
   useEffect(() => {
     return () => {
       const convId = prevConvIdRef.current;
       if (convId && valueRef.current) {
         _draftCache.set(convId, valueRef.current);
       }
+      revokeComposerAttachments(attachedFilesRef.current);
     };
   }, []);
 
@@ -1008,17 +1018,17 @@ export function InputArea() {
   const handleSend = useCallback(async () => {
     if (loading) return;
 
-    const submittedFiles = attachedFiles;
+    const submittedAttachments = attachedFiles;
     const submittedSnippets = pastedSnippets;
     const mergedContent = mergePastedSnippetsIntoContent(value, submittedSnippets);
-    if (!mergedContent && submittedFiles.length === 0) return;
+    if (!mergedContent && submittedAttachments.length === 0) return;
 
     // Attachment-only messages need a minimal content marker so downstream pipelines stay valid.
     const finalContent = mergedContent || t('chat.attachmentOnlyMessage', '(attachment)');
     // Prefer human text for auto titles; fall back to snippet/file when the box is token-only.
     const titleSeed = value.replace(/\[\[paste:#\d+\]\]/g, '').trim()
       || submittedSnippets[0]?.content.slice(0, 80)
-      || submittedFiles[0]?.name
+      || submittedAttachments[0]?.file.name
       || 'New chat';
 
     try {
@@ -1041,11 +1051,15 @@ export function InputArea() {
       }
 
       let attachments: AttachmentInput[] | undefined;
-      if (submittedFiles.length > 0) {
-        attachments = await Promise.all(submittedFiles.map(fileToAttachmentInput));
+      if (submittedAttachments.length > 0) {
+        attachments = await Promise.all(
+          submittedAttachments.map((item) => fileToAttachmentInput(item.file)),
+        );
       }
 
       setValue('');
+      // Clear attachments without revoking yet — previews stay valid if send fails and we restore.
+      // On success, revoke after the request is accepted.
       setAttachedFiles([]);
       setPastedSnippets([]);
       pastedSnippetSeqRef.current = 0;
@@ -1065,9 +1079,10 @@ export function InputArea() {
       } else {
         await sendMessage(finalContent, attachments, searchEnabled ? searchProviderId : null);
       }
+      revokeComposerAttachments(submittedAttachments);
     } catch (e) {
       setValue((current) => current || value);
-      setAttachedFiles((current) => (current.length > 0 ? current : submittedFiles));
+      setAttachedFiles((current) => (current.length > 0 ? current : submittedAttachments));
       setPastedSnippets((current) => (current.length > 0 ? current : submittedSnippets));
       console.error('[handleSend] error:', e);
       messageApi.error(String(e));
@@ -1124,8 +1139,10 @@ export function InputArea() {
     if (allowed.length === 0) return;
     setAttachedFiles((prev) => {
       // Deduplicate by name+size+lastModified to avoid Tauri + HTML5 double-drop.
-      const keys = new Set(prev.map((f) => `${f.name}:${f.size}:${f.lastModified}`));
-      const unique = allowed.filter((f) => !keys.has(`${f.name}:${f.size}:${f.lastModified}`));
+      const keys = new Set(prev.map((item) => `${item.file.name}:${item.file.size}:${item.file.lastModified}`));
+      const unique = allowed
+        .filter((f) => !keys.has(`${f.name}:${f.size}:${f.lastModified}`))
+        .map((file) => createComposerAttachment(file));
       return unique.length > 0 ? [...prev, ...unique] : prev;
     });
   }, [documentAttachmentReadingEnabled, hasVision]);
@@ -1140,8 +1157,12 @@ export function InputArea() {
     }
   }, [addFiles]);
 
-  const removeFile = useCallback((index: number) => {
-    setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
+  const removeAttachment = useCallback((id: string) => {
+    setAttachedFiles((prev) => {
+      const target = prev.find((item) => item.id === id);
+      if (target) revokeComposerAttachment(target);
+      return prev.filter((item) => item.id !== id);
+    });
   }, []);
 
   const resizeTextareaToContent = useCallback(() => {
@@ -1501,9 +1522,9 @@ export function InputArea() {
       />
 
       <AttachmentChips
-        files={attachedFiles}
+        attachments={attachedFiles}
         snippets={pastedSnippets}
-        onRemoveFile={removeFile}
+        onRemoveAttachment={removeAttachment}
         onRemoveSnippet={removeSnippet}
       />
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Button, Modal, theme } from 'antd';
 import { Eye, FileText, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -9,28 +9,50 @@ function fileExtensionBadge(fileName: string): string {
   return ext.length > 5 ? ext.slice(0, 5) : ext;
 }
 
-function isImageFile(file: File): boolean {
+export function isImageFile(file: File): boolean {
   return file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i.test(file.name);
 }
 
-type FileChipProps = {
+/** Stable composer attachment: preview URL is created once on add and revoked on remove. */
+export type ComposerAttachment = {
+  id: string;
   file: File;
+  /** Pre-created object URL for image previews; null for non-images. */
+  previewUrl: string | null;
+};
+
+export function createComposerAttachment(file: File, id?: string): ComposerAttachment {
+  const attachmentId = id ?? (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`);
+  return {
+    id: attachmentId,
+    file,
+    previewUrl: isImageFile(file) ? URL.createObjectURL(file) : null,
+  };
+}
+
+export function revokeComposerAttachment(attachment: ComposerAttachment): void {
+  if (attachment.previewUrl) {
+    URL.revokeObjectURL(attachment.previewUrl);
+  }
+}
+
+export function revokeComposerAttachments(attachments: ComposerAttachment[]): void {
+  for (const attachment of attachments) {
+    revokeComposerAttachment(attachment);
+  }
+}
+
+type FileChipProps = {
+  attachment: ComposerAttachment;
   onRemove: () => void;
 };
 
-function FileChip({ file, onRemove }: FileChipProps) {
+const FileChip = memo(function FileChip({ attachment, onRemove }: FileChipProps) {
   const { token } = theme.useToken();
-  const isImage = isImageFile(file);
-  const [thumbUrl, setThumbUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!isImage) return;
-    const url = URL.createObjectURL(file);
-    setThumbUrl(url);
-    return () => {
-      URL.revokeObjectURL(url);
-    };
-  }, [file, isImage]);
+  const { file, previewUrl } = attachment;
+  const isImage = previewUrl != null || isImageFile(file);
 
   return (
     <span
@@ -43,9 +65,9 @@ function FileChip({ file, onRemove }: FileChipProps) {
         overflow: 'hidden',
       }}
     >
-      {isImage && thumbUrl ? (
+      {isImage && previewUrl ? (
         <img
-          src={thumbUrl}
+          src={previewUrl}
           alt=""
           width={40}
           height={40}
@@ -98,7 +120,7 @@ function FileChip({ file, onRemove }: FileChipProps) {
       />
     </span>
   );
-}
+});
 
 type SnippetBarProps = {
   snippet: PastedSnippet;
@@ -106,7 +128,7 @@ type SnippetBarProps = {
   onRemove: () => void;
 };
 
-function SnippetBar({ snippet, onPreview, onRemove }: SnippetBarProps) {
+const SnippetBar = memo(function SnippetBar({ snippet, onPreview, onRemove }: SnippetBarProps) {
   const { t } = useTranslation();
   const { token } = theme.useToken();
   const label = t('chat.pastedTextLabel', {
@@ -157,26 +179,26 @@ function SnippetBar({ snippet, onPreview, onRemove }: SnippetBarProps) {
       />
     </div>
   );
-}
+});
 
 export type AttachmentChipsProps = {
-  files: File[];
+  attachments: ComposerAttachment[];
   snippets: PastedSnippet[];
-  onRemoveFile: (index: number) => void;
+  onRemoveAttachment: (id: string) => void;
   onRemoveSnippet: (id: string) => void;
 };
 
-export function AttachmentChips({
-  files,
+export const AttachmentChips = memo(function AttachmentChips({
+  attachments,
   snippets,
-  onRemoveFile,
+  onRemoveAttachment,
   onRemoveSnippet,
 }: AttachmentChipsProps) {
   const { t } = useTranslation();
   const { token } = theme.useToken();
   const [previewSnippet, setPreviewSnippet] = useState<PastedSnippet | null>(null);
 
-  const hasContent = files.length > 0 || snippets.length > 0;
+  const hasContent = attachments.length > 0 || snippets.length > 0;
   const previewTitle = useMemo(() => {
     if (!previewSnippet) return '';
     return t('chat.pastedTextLabel', {
@@ -189,13 +211,13 @@ export function AttachmentChips({
 
   return (
     <div className="mb-2 flex flex-col gap-2">
-      {files.length > 0 && (
+      {attachments.length > 0 && (
         <div className="flex flex-wrap gap-2">
-          {files.map((file, idx) => (
+          {attachments.map((attachment) => (
             <FileChip
-              key={`${file.name}-${file.size}-${file.lastModified}-${idx}`}
-              file={file}
-              onRemove={() => onRemoveFile(idx)}
+              key={attachment.id}
+              attachment={attachment}
+              onRemove={() => onRemoveAttachment(attachment.id)}
             />
           ))}
         </div>
@@ -242,4 +264,4 @@ export function AttachmentChips({
       </Modal>
     </div>
   );
-}
+});
