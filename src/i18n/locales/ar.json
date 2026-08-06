@@ -536,7 +536,8 @@
         "explain": "شرح",
         "polish": "تحسين",
         "summarize": "تلخيص",
-        "copy": "نسخ"
+        "copy": "نسخ",
+        "search": "بحث"
       },
       "status": {
         "disabled": "معطل",
@@ -567,7 +568,17 @@
       "appFilterPickHint": "اختر التطبيقات من حوار النظام ثم أكّد القائمة.",
       "appFilterPickHintMac": "تم اختيار حزم .app. أزل الأخطاء أو أضف المزيد.",
       "appFilterPickHintWin": "تم اختيار .exe / .lnk. أزل الأخطاء أو أضف المزيد.",
-      "appFilterPickHintLinux": "تم اختيار .desktop. أزل الأخطاء أو أضف المزيد."
+      "appFilterPickHintLinux": "تم اختيار .desktop. أزل الأخطاء أو أضف المزيد.",
+      "searchEngine": "محرك البحث",
+      "searchUrl": "قالب رابط البحث",
+      "searchUrlHint": "يجب أن يكون رابط http(s) يحتوي على %s. يُرمّز النص المحدد ثم يستبدل %s ويُفتح في المتصفح الافتراضي.",
+      "searchUrlInvalid": "أدخل رابط http(s) صالحًا يحتوي على %s",
+      "searchPresets": {
+        "google": "Google",
+        "baidu": "Baidu",
+        "bing": "Bing",
+        "custom": "مخصص"
+      }
     },
     "title": "الإعدادات",
     "providers": "إدارة المزوّدين",

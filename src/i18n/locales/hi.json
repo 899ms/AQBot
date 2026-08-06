@@ -536,7 +536,8 @@
         "explain": "समझाएँ",
         "polish": "सुधार",
         "summarize": "सारांश",
-        "copy": "कॉपी"
+        "copy": "कॉपी",
+        "search": "खोजें"
       },
       "status": {
         "disabled": "अक्षम",
@@ -567,7 +568,17 @@
       "appFilterPickHint": "सिस्टम संवाद से ऐप चुनें, फिर सूची की पुष्टि करें।",
       "appFilterPickHintMac": ".app चुने गए। ग़लत हटाएँ या और जोड़ें।",
       "appFilterPickHintWin": ".exe / .lnk चुने गए। ग़लत हटाएँ या और जोड़ें।",
-      "appFilterPickHintLinux": ".desktop चुने गए। ग़लत हटाएँ या और जोड़ें।"
+      "appFilterPickHintLinux": ".desktop चुने गए। ग़लत हटाएँ या और जोड़ें।",
+      "searchEngine": "खोज इंजन",
+      "searchUrl": "खोज URL टेम्पलेट",
+      "searchUrlHint": "%s वाला http(s) URL होना चाहिए। चयनित पाठ URL-encoded होकर %s की जगह लगेगा और डिफ़ॉल्ट ब्राउज़र में खुलेगा।",
+      "searchUrlInvalid": "%s वाला मान्य http(s) URL दर्ज करें",
+      "searchPresets": {
+        "google": "Google",
+        "baidu": "Baidu",
+        "bing": "Bing",
+        "custom": "कस्टम"
+      }
     },
     "title": "सेटिंग्स",
     "providers": "प्रदाता प्रबंधन",

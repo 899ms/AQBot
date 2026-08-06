@@ -6,11 +6,30 @@ export const SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS = 5;
  */
 export type SelectionToolbarCustomIcon = string;
 export type SelectionToolbarBuiltinAiKey = 'translate' | 'explain' | 'polish' | 'summarize';
+export type SelectionToolbarBuiltinActionKey = 'copy' | 'search';
 export type SelectionToolbarTriggerMode = 'selection' | 'shortcut';
 export type SelectionToolbarDisplayMode = 'full' | 'compact';
 export type SelectionToolbarOverflowDirection = 'above' | 'below';
 
 export const SELECTION_TOOLBAR_DEFAULT_SHORTCUT = 'CmdOrCtrl+Shift+E';
+export const SELECTION_TOOLBAR_DEFAULT_SEARCH_URL = 'https://www.google.com/search?q=%s';
+
+/** Built-in search URL presets shown in settings (stored value is still a free-form template). */
+export const SELECTION_TOOLBAR_SEARCH_PRESETS = [
+  { id: 'google', url: 'https://www.google.com/search?q=%s' },
+  { id: 'baidu', url: 'https://www.baidu.com/s?wd=%s' },
+  { id: 'bing', url: 'https://www.bing.com/search?q=%s' },
+] as const;
+
+export type SelectionToolbarSearchPresetId =
+  | (typeof SELECTION_TOOLBAR_SEARCH_PRESETS)[number]['id']
+  | 'custom';
+
+export function matchSelectionToolbarSearchPreset(url: string): SelectionToolbarSearchPresetId {
+  const normalized = url.trim();
+  const preset = SELECTION_TOOLBAR_SEARCH_PRESETS.find((item) => item.url === normalized);
+  return preset?.id ?? 'custom';
+}
 
 export interface SelectionToolbarAiConfig {
   prompt: string;
@@ -30,7 +49,7 @@ export type SelectionToolbarTool =
     }
   | {
       kind: 'builtin_action';
-      builtin_key: 'copy';
+      builtin_key: SelectionToolbarBuiltinActionKey;
       enabled: boolean;
     }
   | {
@@ -64,6 +83,11 @@ export interface SelectionToolbarSettings {
   trigger_shortcut: string;
   /** Translate tool target language; null follows the app UI language. */
   translate_target_language: string | null;
+  /**
+   * URL template for the builtin search action. Must contain `%s`, which is
+   * replaced with the percent-encoded selection before opening the browser.
+   */
+  search_url: string;
   /** App scope for when the toolbar may appear. Default: no restriction. */
   app_filter_mode: SelectionToolbarAppFilterMode;
   /** Apps participating in the current filter mode. */
@@ -117,6 +141,7 @@ export function createDefaultSelectionToolbarSettings(): SelectionToolbarSetting
     trigger_mode: 'selection',
     trigger_shortcut: SELECTION_TOOLBAR_DEFAULT_SHORTCUT,
     translate_target_language: null,
+    search_url: SELECTION_TOOLBAR_DEFAULT_SEARCH_URL,
     app_filter_mode: 'off',
     app_filter: [],
     tools: [
@@ -149,6 +174,11 @@ export function createDefaultSelectionToolbarSettings(): SelectionToolbarSetting
         builtin_key: 'copy',
         enabled: true,
       },
+      {
+        kind: 'builtin_action',
+        builtin_key: 'search',
+        enabled: true,
+      },
     ],
   };
 }
@@ -177,7 +207,7 @@ export type SelectionToolbarPermissionSettingsOutcome =
 export interface SelectionToolbarToolView {
   id: string;
   kind: 'ai' | 'action';
-  builtin_key: SelectionToolbarBuiltinAiKey | 'copy' | null;
+  builtin_key: SelectionToolbarBuiltinAiKey | SelectionToolbarBuiltinActionKey | null;
   name: string | null;
   icon: string;
 }

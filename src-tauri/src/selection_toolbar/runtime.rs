@@ -118,13 +118,13 @@ pub struct ToolbarToolView {
 }
 
 impl ToolbarToolView {
-    pub fn action(id: &str, builtin_key: &str) -> Self {
+    pub fn action(id: &str, builtin_key: &str, icon: &str) -> Self {
         Self {
             id: id.into(),
             kind: "action".into(),
             builtin_key: Some(builtin_key.into()),
             name: None,
-            icon: "copy".into(),
+            icon: icon.into(),
         }
     }
 
@@ -467,7 +467,7 @@ mod tests {
         let mut store = RuntimeStore::new(SelectionPlatform::Macos);
         let selection_id = store.accept_selection(
             selected("private selected text"),
-            vec![ToolbarToolView::action("copy", "copy")],
+            vec![ToolbarToolView::action("copy", "copy", "copy")],
             "dark",
             "zh-CN",
             SelectionToolbarDisplayMode::Compact,

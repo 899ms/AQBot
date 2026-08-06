@@ -536,7 +536,8 @@
         "explain": "解释",
         "polish": "润色",
         "summarize": "总结",
-        "copy": "复制"
+        "copy": "复制",
+        "search": "搜索"
       },
       "status": {
         "disabled": "未启用",
@@ -567,7 +568,17 @@
       "appFilterPickHint": "通过系统文件选择器选取应用，确认后加入列表。",
       "appFilterPickHintMac": "已选择 .app 应用。可移除误选，或继续添加。",
       "appFilterPickHintWin": "已选择 .exe / .lnk。可移除误选，或继续添加。",
-      "appFilterPickHintLinux": "已选择 .desktop 项。可移除误选，或继续添加。"
+      "appFilterPickHintLinux": "已选择 .desktop 项。可移除误选，或继续添加。",
+      "searchEngine": "搜索引擎",
+      "searchUrl": "搜索 URL 模板",
+      "searchUrlHint": "必须是包含 %s 的 http(s) 链接。选中文字会先做 URL 编码再替换 %s，并用默认浏览器打开。",
+      "searchUrlInvalid": "请输入包含 %s 的有效 http(s) 链接",
+      "searchPresets": {
+        "google": "Google",
+        "baidu": "百度",
+        "bing": "Bing",
+        "custom": "自定义"
+      }
     },
     "title": "设置",
     "providers": "服务商管理",

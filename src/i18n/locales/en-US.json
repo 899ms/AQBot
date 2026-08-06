@@ -536,7 +536,8 @@
         "explain": "Explain",
         "polish": "Polish",
         "summarize": "Summarize",
-        "copy": "Copy"
+        "copy": "Copy",
+        "search": "Search"
       },
       "status": {
         "disabled": "Disabled",
@@ -567,7 +568,17 @@
       "appFilterPickHint": "Choose application files, then confirm the list below.",
       "appFilterPickHintMac": "Selected .app bundles. Remove any by mistake, or add more.",
       "appFilterPickHintWin": "Selected .exe / .lnk files. Remove any by mistake, or add more.",
-      "appFilterPickHintLinux": "Selected .desktop entries. Remove any by mistake, or add more."
+      "appFilterPickHintLinux": "Selected .desktop entries. Remove any by mistake, or add more.",
+      "searchEngine": "Search engine",
+      "searchUrl": "Search URL template",
+      "searchUrlHint": "Must be an http(s) URL containing %s. The selected text is URL-encoded and substituted for %s, then opened in the default browser.",
+      "searchUrlInvalid": "Enter a valid http(s) URL that contains %s",
+      "searchPresets": {
+        "google": "Google",
+        "baidu": "Baidu",
+        "bing": "Bing",
+        "custom": "Custom"
+      }
     },
     "title": "Settings",
     "providers": "Provider Management",

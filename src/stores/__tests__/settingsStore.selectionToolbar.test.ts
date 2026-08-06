@@ -25,7 +25,9 @@ describe('selection toolbar settings', () => {
       trigger_mode: 'selection',
       trigger_shortcut: 'CmdOrCtrl+Shift+E',
     });
-    expect(useSettingsStore.getState().settings.selection_toolbar.tools).toHaveLength(5);
+    expect(useSettingsStore.getState().settings.selection_toolbar.tools).toHaveLength(6);
+    expect(useSettingsStore.getState().settings.selection_toolbar.search_url)
+      .toBe('https://www.google.com/search?q=%s');
   });
 
   it('inserts explain after translate when fetched tools use the legacy shape', async () => {
@@ -56,7 +58,7 @@ describe('selection toolbar settings', () => {
     expect(
       useSettingsStore.getState().settings.selection_toolbar.tools.map((tool) =>
         tool.kind === 'custom_ai' ? tool.id : tool.builtin_key),
-    ).toEqual(['translate', 'explain', 'copy']);
+    ).toEqual(['translate', 'explain', 'copy', 'search']);
   });
 
   it('rolls back an optimistic toolbar update when persistence fails', async () => {

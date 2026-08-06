@@ -158,17 +158,27 @@ function normalizeSelectionToolbarTools(
   tools: AppSettings['selection_toolbar']['tools'] | undefined,
 ): AppSettings['selection_toolbar']['tools'] {
   if (!tools) return DEFAULT_SETTINGS.selection_toolbar.tools;
-  if (tools.some((tool) =>
+  let normalized = [...tools];
+  if (!normalized.some((tool) =>
     tool.kind === 'builtin_ai' && tool.builtin_key === 'explain')) {
-    return tools;
+    const explain = DEFAULT_SETTINGS.selection_toolbar.tools.find((tool) =>
+      tool.kind === 'builtin_ai' && tool.builtin_key === 'explain');
+    if (explain) {
+      const translateIndex = normalized.findIndex((tool) =>
+        tool.kind === 'builtin_ai' && tool.builtin_key === 'translate');
+      normalized.splice(translateIndex < 0 ? 0 : translateIndex + 1, 0, explain);
+    }
   }
-  const explain = DEFAULT_SETTINGS.selection_toolbar.tools.find((tool) =>
-    tool.kind === 'builtin_ai' && tool.builtin_key === 'explain');
-  if (!explain) return tools;
-  const normalized = [...tools];
-  const translateIndex = normalized.findIndex((tool) =>
-    tool.kind === 'builtin_ai' && tool.builtin_key === 'translate');
-  normalized.splice(translateIndex < 0 ? 0 : translateIndex + 1, 0, explain);
+  if (!normalized.some((tool) =>
+    tool.kind === 'builtin_action' && tool.builtin_key === 'search')) {
+    const search = DEFAULT_SETTINGS.selection_toolbar.tools.find((tool) =>
+      tool.kind === 'builtin_action' && tool.builtin_key === 'search');
+    if (search) {
+      const copyIndex = normalized.findIndex((tool) =>
+        tool.kind === 'builtin_action' && tool.builtin_key === 'copy');
+      normalized.splice(copyIndex < 0 ? normalized.length : copyIndex + 1, 0, search);
+    }
+  }
   return normalized;
 }
 

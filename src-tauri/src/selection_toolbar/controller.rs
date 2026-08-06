@@ -5,8 +5,8 @@ use std::sync::{
 use std::time::Instant;
 
 use aqbot_core::types::{
-    AppSettings, SelectionToolbarBuiltinAiKey, SelectionToolbarDisplayMode, SelectionToolbarTool,
-    SelectionToolbarTriggerMode,
+    AppSettings, SelectionToolbarBuiltinActionKey, SelectionToolbarBuiltinAiKey,
+    SelectionToolbarDisplayMode, SelectionToolbarTool, SelectionToolbarTriggerMode,
 };
 use tauri::{AppHandle, Emitter, Manager, Theme};
 use tokio::sync::{mpsc, Mutex};
@@ -972,6 +972,12 @@ mod tests {
             .find(|view| view.id == "explain")
             .expect("default toolbar should include explain");
         assert_eq!(explain.icon, "lightbulb");
+        let search = views
+            .iter()
+            .find(|view| view.id == "search")
+            .expect("default toolbar should include search");
+        assert_eq!(search.icon, "search");
+        assert_eq!(search.kind, "action");
     }
 
     #[test]
@@ -1009,9 +1015,14 @@ fn toolbar_tool_views(settings: &AppSettings) -> Vec<ToolbarToolView> {
                     SelectionToolbarBuiltinAiKey::Summarize => "list-collapse",
                 },
             ),
-            SelectionToolbarTool::BuiltinAction { builtin_key, .. } => {
-                ToolbarToolView::action(builtin_key.as_str(), builtin_key.as_str())
-            }
+            SelectionToolbarTool::BuiltinAction { builtin_key, .. } => ToolbarToolView::action(
+                builtin_key.as_str(),
+                builtin_key.as_str(),
+                match builtin_key {
+                    SelectionToolbarBuiltinActionKey::Copy => "copy",
+                    SelectionToolbarBuiltinActionKey::Search => "search",
+                },
+            ),
             SelectionToolbarTool::CustomAi { id, name, icon, .. } => {
                 ToolbarToolView::ai(id, None, Some(name), icon)
             }

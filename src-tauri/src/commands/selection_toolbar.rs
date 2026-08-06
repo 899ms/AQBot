@@ -230,6 +230,63 @@ pub async fn selection_toolbar_copy_selection(
     })
 }
 
+/// Open the configured search URL in the system default browser with the
+/// selected text percent-encoded into the `%s` placeholder.
+#[tauri::command]
+pub async fn selection_toolbar_search_selection(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    selection_id: String,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+
+    state.selection_toolbar.lock_interaction();
+    let text = match state.selection_toolbar.selection_text(&selection_id).await {
+        Some(text) => text,
+        None => {
+            state.selection_toolbar.unlock_interaction();
+            return Err("The selected text is no longer active".to_string());
+        }
+    };
+    let settings = aqbot_core::repo::settings::get_settings(&state.sea_db)
+        .await
+        .map_err(|error| {
+            state.selection_toolbar.unlock_interaction();
+            error.to_string()
+        })?;
+    if !settings.selection_toolbar.enabled {
+        state.selection_toolbar.unlock_interaction();
+        return Err("Selection toolbar is disabled".into());
+    }
+    let search_enabled = settings.selection_toolbar.tools.iter().any(|tool| {
+        matches!(
+            tool,
+            aqbot_core::types::SelectionToolbarTool::BuiltinAction {
+                builtin_key: aqbot_core::types::SelectionToolbarBuiltinActionKey::Search,
+                enabled: true,
+            }
+        )
+    });
+    if !search_enabled {
+        state.selection_toolbar.unlock_interaction();
+        return Err("The search tool is disabled".into());
+    }
+    let url = match aqbot_core::types::render_selection_toolbar_search_url(
+        &settings.selection_toolbar.search_url,
+        &text,
+    ) {
+        Ok(url) => url,
+        Err(error) => {
+            state.selection_toolbar.unlock_interaction();
+            return Err(error);
+        }
+    };
+    app.opener().open_url(url, None::<&str>).map_err(|error| {
+        state.selection_toolbar.unlock_interaction();
+        error.to_string()
+    })
+}
+
 #[tauri::command]
 pub async fn selection_toolbar_copy_result(
     app: AppHandle,

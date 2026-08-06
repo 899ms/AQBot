@@ -536,7 +536,8 @@
         "explain": "Expliquer",
         "polish": "Améliorer",
         "summarize": "Résumer",
-        "copy": "Copier"
+        "copy": "Copier",
+        "search": "Rechercher"
       },
       "status": {
         "disabled": "Désactivé",
@@ -567,7 +568,17 @@
       "appFilterPickHint": "Choisissez des applications dans le dialogue système, puis confirmez.",
       "appFilterPickHintMac": "Paquets .app sélectionnés. Retirez les erreurs ou ajoutez-en.",
       "appFilterPickHintWin": "Fichiers .exe / .lnk sélectionnés. Retirez les erreurs ou ajoutez-en.",
-      "appFilterPickHintLinux": "Entrées .desktop sélectionnées. Retirez les erreurs ou ajoutez-en."
+      "appFilterPickHintLinux": "Entrées .desktop sélectionnées. Retirez les erreurs ou ajoutez-en.",
+      "searchEngine": "Moteur de recherche",
+      "searchUrl": "Modèle d’URL de recherche",
+      "searchUrlHint": "Doit être une URL http(s) contenant %s. Le texte sélectionné est encodé puis substitue %s avant d’ouvrir le navigateur par défaut.",
+      "searchUrlInvalid": "Saisissez une URL http(s) valide contenant %s",
+      "searchPresets": {
+        "google": "Google",
+        "baidu": "Baidu",
+        "bing": "Bing",
+        "custom": "Personnalisé"
+      }
     },
     "title": "Paramètres",
     "providers": "Gestion des fournisseurs",

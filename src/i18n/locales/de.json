@@ -536,7 +536,8 @@
         "explain": "Erklären",
         "polish": "Überarbeiten",
         "summarize": "Zusammenfassen",
-        "copy": "Kopieren"
+        "copy": "Kopieren",
+        "search": "Suchen"
       },
       "status": {
         "disabled": "Deaktiviert",
@@ -567,7 +568,17 @@
       "appFilterPickHint": "Apps im Systemdialog wählen und unten bestätigen.",
       "appFilterPickHintMac": ".app-Bundles ausgewählt. Fehlgriffe entfernen oder weitere hinzufügen.",
       "appFilterPickHintWin": ".exe / .lnk ausgewählt. Fehlgriffe entfernen oder weitere hinzufügen.",
-      "appFilterPickHintLinux": ".desktop-Einträge ausgewählt. Fehlgriffe entfernen oder weitere hinzufügen."
+      "appFilterPickHintLinux": ".desktop-Einträge ausgewählt. Fehlgriffe entfernen oder weitere hinzufügen.",
+      "searchEngine": "Suchmaschine",
+      "searchUrl": "Such-URL-Vorlage",
+      "searchUrlHint": "Muss eine http(s)-URL mit %s sein. Der ausgewählte Text wird URL-kodiert, für %s eingesetzt und im Standardbrowser geöffnet.",
+      "searchUrlInvalid": "Geben Sie eine gültige http(s)-URL mit %s ein",
+      "searchPresets": {
+        "google": "Google",
+        "baidu": "Baidu",
+        "bing": "Bing",
+        "custom": "Benutzerdefiniert"
+      }
     },
     "title": "Einstellungen",
     "providers": "Anbieterverwaltung",

@@ -536,7 +536,8 @@
         "explain": "Объяснить",
         "polish": "Улучшить",
         "summarize": "Сводка",
-        "copy": "Копировать"
+        "copy": "Копировать",
+        "search": "Поиск"
       },
       "status": {
         "disabled": "Отключено",
@@ -567,7 +568,17 @@
       "appFilterPickHint": "Выберите приложения в системном диалоге и подтвердите список.",
       "appFilterPickHintMac": "Выбраны .app. Удалите лишние или добавьте ещё.",
       "appFilterPickHintWin": "Выбраны .exe / .lnk. Удалите лишние или добавьте ещё.",
-      "appFilterPickHintLinux": "Выбраны .desktop. Удалите лишние или добавьте ещё."
+      "appFilterPickHintLinux": "Выбраны .desktop. Удалите лишние или добавьте ещё.",
+      "searchEngine": "Поисковая система",
+      "searchUrl": "Шаблон URL поиска",
+      "searchUrlHint": "Должен быть http(s) URL с %s. Выделенный текст кодируется, подставляется вместо %s и открывается в браузере по умолчанию.",
+      "searchUrlInvalid": "Введите действительный http(s) URL, содержащий %s",
+      "searchPresets": {
+        "google": "Google",
+        "baidu": "Baidu",
+        "bing": "Bing",
+        "custom": "Свой"
+      }
     },
     "title": "Настройки",
     "providers": "Управление провайдерами",

@@ -491,6 +491,7 @@ pub fn run() {
         commands::selection_toolbar::selection_toolbar_set_translate_target,
         commands::selection_toolbar::selection_toolbar_stop_generation,
         commands::selection_toolbar::selection_toolbar_copy_selection,
+        commands::selection_toolbar::selection_toolbar_search_selection,
         commands::selection_toolbar::selection_toolbar_copy_result,
         commands::selection_toolbar::selection_toolbar_close,
         commands::selection_toolbar::selection_toolbar_resolve_app_paths,

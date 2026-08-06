@@ -295,6 +295,57 @@ describe('selection toolbar store', () => {
     });
   });
 
+  it('routes copy and search actions to dedicated commands', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'selection_toolbar_get_snapshot') {
+        return {
+          runtime: {
+            state: 'running',
+            platform: 'macos',
+            permission: 'granted',
+            last_error: null,
+            global_dismissal_supported: true,
+          },
+          session: {
+            selection_id: 'selection-1',
+            tools: [
+              { id: 'copy', kind: 'action', icon: 'copy', builtin_key: 'copy', name: null },
+              { id: 'search', kind: 'action', icon: 'search', builtin_key: 'search', name: null },
+            ],
+            theme: 'light',
+            language: 'en-US',
+          },
+          run: null,
+        };
+      }
+      return undefined;
+    });
+    const { useSelectionToolbarStore } = await import('../selectionToolbarStore');
+    await useSelectionToolbarStore.getState().initialize();
+
+    await useSelectionToolbarStore.getState().executeTool({
+      id: 'search',
+      kind: 'action',
+      icon: 'search',
+      builtin_key: 'search',
+      name: null,
+    });
+    expect(invokeMock).toHaveBeenCalledWith('selection_toolbar_search_selection', {
+      selectionId: 'selection-1',
+    });
+
+    await useSelectionToolbarStore.getState().executeTool({
+      id: 'copy',
+      kind: 'action',
+      icon: 'copy',
+      builtin_key: 'copy',
+      name: null,
+    });
+    expect(invokeMock).toHaveBeenCalledWith('selection_toolbar_copy_selection', {
+      selectionId: 'selection-1',
+    });
+  });
+
   it('routes stop, result copy, and close through request and selection identifiers', async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'selection_toolbar_get_snapshot') {

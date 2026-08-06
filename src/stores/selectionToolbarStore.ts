@@ -215,6 +215,19 @@ export const useSelectionToolbarStore = create<SelectionToolbarState>((set, get)
     set({ busy: true, error: null });
     try {
       if (tool.kind === 'action') {
+        if (tool.builtin_key === 'search') {
+          await invoke('selection_toolbar_search_selection', {
+            selectionId: session.selection_id,
+          });
+          set({ busy: false });
+          copyCloseTimer = window.setTimeout(() => {
+            copyCloseTimer = null;
+            if (!get().run) {
+              void get().close('search_completed');
+            }
+          }, 400);
+          return;
+        }
         await invoke('selection_toolbar_copy_selection', {
           selectionId: session.selection_id,
         });

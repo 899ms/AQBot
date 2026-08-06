@@ -536,7 +536,8 @@
         "explain": "解釋",
         "polish": "潤飾",
         "summarize": "摘要",
-        "copy": "複製"
+        "copy": "複製",
+        "search": "搜尋"
       },
       "status": {
         "disabled": "未啟用",
@@ -567,7 +568,17 @@
       "appFilterPickHint": "透過系統檔案選擇器選取應用程式，確認後加入清單。",
       "appFilterPickHintMac": "已選擇 .app 應用程式。可移除誤選，或繼續新增。",
       "appFilterPickHintWin": "已選擇 .exe / .lnk。可移除誤選，或繼續新增。",
-      "appFilterPickHintLinux": "已選擇 .desktop 項目。可移除誤選，或繼續新增。"
+      "appFilterPickHintLinux": "已選擇 .desktop 項目。可移除誤選，或繼續新增。",
+      "searchEngine": "搜尋引擎",
+      "searchUrl": "搜尋 URL 模板",
+      "searchUrlHint": "必須是包含 %s 的 http(s) 連結。選取文字會先做 URL 編碼再替換 %s，並以預設瀏覽器開啟。",
+      "searchUrlInvalid": "請輸入包含 %s 的有效 http(s) 連結",
+      "searchPresets": {
+        "google": "Google",
+        "baidu": "百度",
+        "bing": "Bing",
+        "custom": "自訂"
+      }
     },
     "title": "設定",
     "providers": "供應商管理",

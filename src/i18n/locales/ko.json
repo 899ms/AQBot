@@ -536,7 +536,8 @@
         "explain": "설명",
         "polish": "다듬기",
         "summarize": "요약",
-        "copy": "복사"
+        "copy": "복사",
+        "search": "검색"
       },
       "status": {
         "disabled": "사용 안 함",
@@ -567,7 +568,17 @@
       "appFilterPickHint": "시스템 파일 선택기로 앱을 고른 뒤 확인하여 목록에 추가합니다.",
       "appFilterPickHintMac": ".app을 선택했습니다. 잘못 고른 항목을 제거하거나 더 추가할 수 있습니다.",
       "appFilterPickHintWin": ".exe / .lnk를 선택했습니다. 잘못 고른 항목을 제거하거나 더 추가할 수 있습니다.",
-      "appFilterPickHintLinux": ".desktop을 선택했습니다. 잘못 고른 항목을 제거하거나 더 추가할 수 있습니다."
+      "appFilterPickHintLinux": ".desktop을 선택했습니다. 잘못 고른 항목을 제거하거나 더 추가할 수 있습니다.",
+      "searchEngine": "검색 엔진",
+      "searchUrl": "검색 URL 템플릿",
+      "searchUrlHint": "%s 가 포함된 http(s) URL이어야 합니다. 선택한 텍스트는 URL 인코딩되어 %s 를 대체한 뒤 기본 브라우저에서 열립니다.",
+      "searchUrlInvalid": "%s 가 포함된 유효한 http(s) URL을 입력하세요",
+      "searchPresets": {
+        "google": "Google",
+        "baidu": "Baidu",
+        "bing": "Bing",
+        "custom": "사용자 지정"
+      }
     },
     "title": "설정",
     "providers": "공급자 관리",

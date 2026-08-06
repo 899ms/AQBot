@@ -536,7 +536,8 @@
         "explain": "説明",
         "polish": "推敲",
         "summarize": "要約",
-        "copy": "コピー"
+        "copy": "コピー",
+        "search": "検索"
       },
       "status": {
         "disabled": "無効",
@@ -567,7 +568,17 @@
       "appFilterPickHint": "システムダイアログでアプリを選び、確認してからリストに追加します。",
       "appFilterPickHintMac": ".app を選択しました。誤選択を削除するか、さらに追加できます。",
       "appFilterPickHintWin": ".exe / .lnk を選択しました。誤選択を削除するか、さらに追加できます。",
-      "appFilterPickHintLinux": ".desktop を選択しました。誤選択を削除するか、さらに追加できます。"
+      "appFilterPickHintLinux": ".desktop を選択しました。誤選択を削除するか、さらに追加できます。",
+      "searchEngine": "検索エンジン",
+      "searchUrl": "検索 URL テンプレート",
+      "searchUrlHint": "%s を含む http(s) URL である必要があります。選択テキストは URL エンコードされ %s に置換され、既定のブラウザで開きます。",
+      "searchUrlInvalid": "%s を含む有効な http(s) URL を入力してください",
+      "searchPresets": {
+        "google": "Google",
+        "baidu": "Baidu",
+        "bing": "Bing",
+        "custom": "カスタム"
+      }
     },
     "title": "設定",
     "providers": "プロバイダー管理",

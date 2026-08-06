@@ -33,6 +33,7 @@ zip = "2"
 litchi = "0.0.1"
 dirs = "5"
 tempfile = "3"
+urlencoding = "2"
 aqbot-migration = { path = "../migration" }
 
 [target.'cfg(target_os = "windows")'.dependencies]

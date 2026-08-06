@@ -57,14 +57,18 @@ import {
 } from '@/constants/selectionTranslateLanguages';
 import {
   createDefaultSelectionToolbarSettings,
+  matchSelectionToolbarSearchPreset,
+  SELECTION_TOOLBAR_DEFAULT_SEARCH_URL,
   SELECTION_TOOLBAR_DEFAULT_SHORTCUT,
   SELECTION_TOOLBAR_MAX_VISIBLE_TOOLS,
+  SELECTION_TOOLBAR_SEARCH_PRESETS,
   type SelectionToolbarAppEntry,
   type SelectionToolbarAppFilterMode,
   type SelectionToolbarDisplayMode,
   type SelectionToolbarInstalledApp,
   type SelectionToolbarPermissionSettingsOutcome,
   type SelectionToolbarRuntimeStatus,
+  type SelectionToolbarSearchPresetId,
   type SelectionToolbarSettings as SelectionToolbarConfig,
   type SelectionToolbarTool,
   type SelectionToolbarTriggerMode,
@@ -80,7 +84,9 @@ function toolId(tool: SelectionToolbarTool) {
 }
 
 function toolIconName(tool: SelectionToolbarTool): string {
-  if (tool.kind === 'builtin_action') return 'copy';
+  if (tool.kind === 'builtin_action') {
+    return tool.builtin_key === 'search' ? 'search' : 'copy';
+  }
   if (tool.kind === 'builtin_ai') {
     return {
       translate: 'languages',
@@ -90,6 +96,13 @@ function toolIconName(tool: SelectionToolbarTool): string {
     }[tool.builtin_key];
   }
   return tool.icon;
+}
+
+function isValidSearchUrl(url: string): boolean {
+  const value = url.trim();
+  if (!value || value.length > 512) return false;
+  if (!value.startsWith('http://') && !value.startsWith('https://')) return false;
+  return value.includes('%s');
 }
 
 function toolName(tool: SelectionToolbarTool, t: (key: string) => string) {
@@ -421,7 +434,7 @@ function SortableToolRow({
           {t(`settings.selectionToolbar.${tool.kind === 'builtin_action' ? 'actionTool' : 'aiTool'}`)}
         </div>
       </div>
-      {tool.kind !== 'builtin_action' && (
+      {(tool.kind !== 'builtin_action' || tool.builtin_key === 'search') && (
         <Button size="small" type="text" onClick={onEdit}>
           {t('common.edit')}
         </Button>
@@ -438,6 +451,90 @@ function SortableToolRow({
       )}
       <Switch aria-label={toolName(tool, t)} checked={tool.enabled} size="small" onChange={onToggle} />
     </div>
+  );
+}
+
+function SearchToolEditor({
+  searchUrl,
+  onClose,
+  onSave,
+}: {
+  searchUrl: string;
+  onClose: () => void;
+  onSave: (searchUrl: string) => void;
+}) {
+  const { t } = useTranslation();
+  const { token } = theme.useToken();
+  const [draftUrl, setDraftUrl] = useState(searchUrl || SELECTION_TOOLBAR_DEFAULT_SEARCH_URL);
+  const [preset, setPreset] = useState<SelectionToolbarSearchPresetId>(
+    () => matchSelectionToolbarSearchPreset(searchUrl || SELECTION_TOOLBAR_DEFAULT_SEARCH_URL),
+  );
+
+  useEffect(() => {
+    const next = searchUrl || SELECTION_TOOLBAR_DEFAULT_SEARCH_URL;
+    setDraftUrl(next);
+    setPreset(matchSelectionToolbarSearchPreset(next));
+  }, [searchUrl]);
+
+  const applyPreset = (value: SelectionToolbarSearchPresetId) => {
+    setPreset(value);
+    if (value === 'custom') return;
+    const matched = SELECTION_TOOLBAR_SEARCH_PRESETS.find((item) => item.id === value);
+    if (matched) setDraftUrl(matched.url);
+  };
+
+  const submit = () => {
+    if (!isValidSearchUrl(draftUrl)) {
+      message.error(t('settings.selectionToolbar.searchUrlInvalid'));
+      return;
+    }
+    onSave(draftUrl.trim());
+  };
+
+  return (
+    <Modal
+      open
+      destroyOnHidden
+      title={t('settings.selectionToolbar.tools.search')}
+      okText={t('common.save')}
+      onCancel={onClose}
+      onOk={submit}
+    >
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+        {t('settings.selectionToolbar.searchEngine')}
+      </div>
+      <Select<SelectionToolbarSearchPresetId>
+        aria-label={t('settings.selectionToolbar.searchEngine')}
+        style={{ width: '100%', marginBottom: 16 }}
+        value={preset}
+        options={[
+          ...SELECTION_TOOLBAR_SEARCH_PRESETS.map((item) => ({
+            value: item.id,
+            label: t(`settings.selectionToolbar.searchPresets.${item.id}`),
+          })),
+          {
+            value: 'custom',
+            label: t('settings.selectionToolbar.searchPresets.custom'),
+          },
+        ]}
+        onChange={applyPreset}
+      />
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+        {t('settings.selectionToolbar.searchUrl')}
+      </div>
+      <Input
+        aria-label={t('settings.selectionToolbar.searchUrl')}
+        value={draftUrl}
+        onChange={(event) => {
+          const next = event.target.value;
+          setDraftUrl(next);
+          setPreset(matchSelectionToolbarSearchPreset(next));
+        }}
+      />
+      <div style={{ color: token.colorTextDescription, fontSize: 12, marginTop: 6 }}>
+        {t('settings.selectionToolbar.searchUrlHint')}
+      </div>
+    </Modal>
   );
 }
 
@@ -1257,8 +1354,19 @@ export function SelectionToolbarSettings() {
                   onDelete={() => persist({ ...settings, tools: settings.tools.filter((item) => toolId(item) !== toolId(tool)) })}
                   onEdit={() => setEditing(tool)}
                   onReset={() => {
-                    const defaultTool = createDefaultSelectionToolbarSettings().tools.find((item) => toolId(item) === toolId(tool));
-                    if (defaultTool) replaceTool(defaultTool);
+                    const defaults = createDefaultSelectionToolbarSettings();
+                    const defaultTool = defaults.tools.find((item) => toolId(item) === toolId(tool));
+                    if (!defaultTool) return;
+                    if (tool.kind === 'builtin_action' && tool.builtin_key === 'search') {
+                      void persist({
+                        ...settings,
+                        tools: settings.tools.map((item) =>
+                          toolId(item) === toolId(tool) ? defaultTool : item),
+                        search_url: defaults.search_url,
+                      });
+                      return;
+                    }
+                    replaceTool(defaultTool);
                   }}
                   onToggle={(enabled) => replaceTool({ ...tool, enabled })}
                 />
@@ -1400,12 +1508,23 @@ export function SelectionToolbarSettings() {
         }}
       />
 
-      <ToolEditor
-        tool={editing}
-        translateTargetLanguage={settings.translate_target_language ?? null}
-        onClose={() => setEditing(null)}
-        onSave={saveEditor}
-      />
+      {editing?.kind === 'builtin_action' && editing.builtin_key === 'search' ? (
+        <SearchToolEditor
+          searchUrl={settings.search_url || SELECTION_TOOLBAR_DEFAULT_SEARCH_URL}
+          onClose={() => setEditing(null)}
+          onSave={(search_url) => {
+            void persist({ ...settings, search_url });
+            setEditing(null);
+          }}
+        />
+      ) : (
+        <ToolEditor
+          tool={editing}
+          translateTargetLanguage={settings.translate_target_language ?? null}
+          onClose={() => setEditing(null)}
+          onSave={saveEditor}
+        />
+      )}
     </div>
   );
 }

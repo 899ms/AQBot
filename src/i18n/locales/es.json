@@ -536,7 +536,8 @@
         "explain": "Explicar",
         "polish": "Mejorar",
         "summarize": "Resumir",
-        "copy": "Copiar"
+        "copy": "Copiar",
+        "search": "Buscar"
       },
       "status": {
         "disabled": "Desactivada",
@@ -567,7 +568,17 @@
       "appFilterPickHint": "Elige aplicaciones en el diálogo del sistema y confirma la lista.",
       "appFilterPickHintMac": "Se seleccionaron .app. Quita errores o añade más.",
       "appFilterPickHintWin": "Se seleccionaron .exe / .lnk. Quita errores o añade más.",
-      "appFilterPickHintLinux": "Se seleccionaron .desktop. Quita errores o añade más."
+      "appFilterPickHintLinux": "Se seleccionaron .desktop. Quita errores o añade más.",
+      "searchEngine": "Motor de búsqueda",
+      "searchUrl": "Plantilla de URL de búsqueda",
+      "searchUrlHint": "Debe ser una URL http(s) con %s. El texto seleccionado se codifica y sustituye %s, y se abre en el navegador predeterminado.",
+      "searchUrlInvalid": "Introduce una URL http(s) válida que contenga %s",
+      "searchPresets": {
+        "google": "Google",
+        "baidu": "Baidu",
+        "bing": "Bing",
+        "custom": "Personalizado"
+      }
     },
     "title": "Configuración",
     "providers": "Gestión de proveedores",
