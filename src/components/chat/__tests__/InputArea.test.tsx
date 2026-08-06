@@ -1,6 +1,6 @@
 import { App } from 'antd';
 import { Activity } from 'react';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppSettings, Message } from '@/types';
@@ -121,7 +121,16 @@ const memoryState = {
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
-    t: (_key: string, fallback?: string) => fallback ?? _key,
+    t: (key: string, options?: string | Record<string, unknown>) => {
+      if (typeof options === 'string') return options;
+      if (options && typeof options === 'object') {
+        if (key === 'chat.pastedTextLabel') {
+          return `Pasted text #${options.n} · ${options.lines} lines`;
+        }
+        if (typeof options.defaultValue === 'string') return options.defaultValue;
+      }
+      return key;
+    },
   }),
 }));
 
@@ -525,6 +534,91 @@ describe('InputArea', () => {
     expect(input?.accept).toContain('.pdf');
     expect(input?.accept).toContain('.doc');
     expect(input?.accept).toContain('.docx');
+    expect(input?.accept).toContain('.txt');
+    expect(input?.accept).toContain('.md');
+  });
+
+  it('collapses long pasted text into a snippet chip and merges it on send', async () => {
+    render(
+      <App>
+        <InputArea />
+      </App>,
+    );
+
+    const textarea = screen.getByPlaceholderText('chat.inputPlaceholder') as HTMLTextAreaElement;
+    const longText = Array.from({ length: 45 }, (_, i) => `line ${i + 1}`).join('\n');
+
+    const pasteEvent = createEvent.paste(textarea, {
+      clipboardData: {
+        items: [],
+        getData: (type: string) => (type === 'text/plain' ? longText : ''),
+      },
+    });
+    const preventDefault = vi.spyOn(pasteEvent, 'preventDefault');
+    fireEvent(textarea, pasteEvent);
+
+    expect(preventDefault).toHaveBeenCalled();
+    expect(textarea).toHaveValue('');
+    expect(screen.getByText(/Pasted text #1 · 45 lines/)).toBeInTheDocument();
+
+    fireEvent.change(textarea, { target: { value: 'Please summarize' } });
+    fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' });
+
+    await waitFor(() => {
+      expect(sendMessage).toHaveBeenCalled();
+    });
+
+    const [content] = sendMessage.mock.calls[0];
+    expect(content).toContain('Please summarize');
+    expect(content).toContain('[Pasted text #1 · 45 lines]');
+    expect(content).toContain('line 1');
+    expect(content).toContain('line 45');
+  });
+
+  it('does not intercept short text paste', () => {
+    render(
+      <App>
+        <InputArea />
+      </App>,
+    );
+
+    const textarea = screen.getByPlaceholderText('chat.inputPlaceholder') as HTMLTextAreaElement;
+    const pasteEvent = createEvent.paste(textarea, {
+      clipboardData: {
+        items: [],
+        getData: (type: string) => (type === 'text/plain' ? 'hello short' : ''),
+      },
+    });
+    const preventDefault = vi.spyOn(pasteEvent, 'preventDefault');
+    fireEvent(textarea, pasteEvent);
+
+    expect(preventDefault).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Pasted text #/)).not.toBeInTheDocument();
+  });
+
+  it('expands a pasted snippet back into the textarea', async () => {
+    render(
+      <App>
+        <InputArea />
+      </App>,
+    );
+
+    const textarea = screen.getByPlaceholderText('chat.inputPlaceholder') as HTMLTextAreaElement;
+    const longText = Array.from({ length: 45 }, (_, i) => `line ${i + 1}`).join('\n');
+    fireEvent(
+      textarea,
+      createEvent.paste(textarea, {
+        clipboardData: {
+          items: [],
+          getData: (type: string) => (type === 'text/plain' ? longText : ''),
+        },
+      }),
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'chat.expandPastedText' }));
+    expect(screen.queryByText(/Pasted text #1/)).not.toBeInTheDocument();
+    expect(textarea.value).toContain('line 1');
+    expect(textarea.value).toContain('line 45');
   });
 
   it('keeps the clear-all action in the clear conversation menu', async () => {

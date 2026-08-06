@@ -1017,6 +1017,13 @@ fn is_supported_document_attachment(attachment: &Attachment) -> bool {
         "application/pdf"
             | "application/msword"
             | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            | "text/plain"
+            | "text/markdown"
+            | "text/csv"
+            | "text/html"
+            | "text/xml"
+            | "application/json"
+            | "application/xml"
     )
 }
 
@@ -5821,6 +5828,60 @@ mod tests {
             Some(extra_body)
         );
         assert_eq!(model_extra_body_from_overrides(None), None);
+    }
+
+    #[test]
+    fn text_document_attachments_are_supported_and_injected() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "aqbot-text-document-test-{}",
+            aqbot_core::utils::gen_id()
+        ));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        let result = (|| {
+            let file_store = aqbot_core::file_store::FileStore::with_root(temp_dir.clone());
+            let body = b"hello from markdown notes";
+            let saved = file_store
+                .save_file(body, "notes.md", "text/markdown")
+                .unwrap();
+            let attachments = vec![Attachment {
+                id: "att-md".into(),
+                file_type: "text/markdown".into(),
+                file_name: "notes.md".into(),
+                file_path: saved.storage_path,
+                file_size: body.len() as u64,
+                data: None,
+            }];
+
+            assert!(is_supported_document_attachment(&attachments[0]));
+
+            let disabled = append_document_attachment_context(
+                &file_store,
+                "Summarize this",
+                &attachments,
+                false,
+                Some(8_000),
+            )
+            .unwrap();
+            let enabled = append_document_attachment_context(
+                &file_store,
+                "Summarize this",
+                &attachments,
+                true,
+                Some(8_000),
+            )
+            .unwrap();
+
+            (disabled, enabled)
+        })();
+
+        let _ = fs::remove_dir_all(&temp_dir);
+
+        assert_eq!(result.0, "Summarize this");
+        assert!(result.1.contains("Summarize this"));
+        assert!(result.1.contains("notes.md"));
+        assert!(result.1.contains("hello from markdown notes"));
+        assert!(result.1.contains("[Parsed document attachments]"));
     }
 
     fn test_docx_bytes(text: &str) -> Vec<u8> {

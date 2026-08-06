@@ -35,26 +35,58 @@ import { invoke } from '@/lib/invoke';
 import { usePageSuspendCleanup } from '@/components/layout/PageLifecycle';
 import { RoleSwitcherPopover } from './toolbar/RoleSwitcherPopover';
 import { SkillPickerPopover } from './toolbar/SkillPickerPopover';
+import { AttachmentChips } from './AttachmentChips';
+import {
+  createPastedSnippet,
+  isLongPastedText,
+  mergePastedSnippetsIntoContent,
+  type PastedSnippet,
+} from '@/lib/pastedText';
 
 const DOCUMENT_ATTACHMENT_ACCEPT = [
   '.pdf',
   '.doc',
   '.docx',
+  '.txt',
+  '.md',
+  '.markdown',
+  '.csv',
+  '.json',
+  '.html',
+  '.htm',
+  '.xml',
   'application/pdf',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/json',
+  'text/html',
+  'text/xml',
+  'application/xml',
 ].join(',');
 
 const DOCUMENT_ATTACHMENT_MIME_BY_EXTENSION: Record<string, string> = {
   pdf: 'application/pdf',
   doc: 'application/msword',
   docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  markdown: 'text/markdown',
+  csv: 'text/csv',
+  json: 'application/json',
+  html: 'text/html',
+  htm: 'text/html',
+  xml: 'application/xml',
 };
 
+const DOCUMENT_ATTACHMENT_MIME_TYPES = new Set(Object.values(DOCUMENT_ATTACHMENT_MIME_BY_EXTENSION));
+
 function getAttachmentMimeType(fileName: string, mimeType?: string): string {
-  if (mimeType) return mimeType;
+  if (mimeType && mimeType !== 'application/octet-stream') return mimeType;
   const extension = fileName.split('.').pop()?.toLowerCase() || '';
-  return DOCUMENT_ATTACHMENT_MIME_BY_EXTENSION[extension] || 'application/octet-stream';
+  return DOCUMENT_ATTACHMENT_MIME_BY_EXTENSION[extension] || mimeType || 'application/octet-stream';
 }
 
 function isAllowedAttachmentFile(
@@ -66,7 +98,7 @@ function isAllowedAttachmentFile(
   const effectiveMimeType = getAttachmentMimeType(fileName, mimeType);
   if (hasVision && effectiveMimeType.startsWith('image/')) return true;
   if (!documentAttachmentReadingEnabled) return false;
-  return Object.values(DOCUMENT_ATTACHMENT_MIME_BY_EXTENSION).includes(effectiveMimeType);
+  return DOCUMENT_ATTACHMENT_MIME_TYPES.has(effectiveMimeType);
 }
 
 async function fileToAttachmentInput(file: File): Promise<AttachmentInput> {
@@ -96,6 +128,8 @@ export function InputArea() {
     return convId ? _draftCache.get(convId) || '' : '';
   });
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
+  const [pastedSnippets, setPastedSnippets] = useState<PastedSnippet[]>([]);
+  const pastedSnippetSeqRef = useRef(0);
   const [voiceCallVisible, setVoiceCallVisible] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
@@ -290,6 +324,10 @@ export function InputArea() {
       else _draftCache.delete(prev);
     }
     setValue(next ? _draftCache.get(next) || '' : '');
+    // Attachments and pasted snippets are composer-local and do not follow conversations.
+    setAttachedFiles([]);
+    setPastedSnippets([]);
+    pastedSnippetSeqRef.current = 0;
     prevConvIdRef.current = next;
   }, [activeConversationId]);
 
@@ -966,10 +1004,19 @@ export function InputArea() {
   }, [activeConversation, updateConversation, companionModels, companionStorageKey]);
 
   const handleSend = useCallback(async () => {
-    const trimmed = value.trim();
-    if (!trimmed || loading) return;
+    if (loading) return;
 
     const submittedFiles = attachedFiles;
+    const submittedSnippets = pastedSnippets;
+    const mergedContent = mergePastedSnippetsIntoContent(value, submittedSnippets);
+    if (!mergedContent && submittedFiles.length === 0) return;
+
+    // Attachment-only messages need a minimal content marker so downstream pipelines stay valid.
+    const finalContent = mergedContent || t('chat.attachmentOnlyMessage', '(attachment)');
+    const titleSeed = value.trim()
+      || submittedSnippets[0]?.content.slice(0, 80)
+      || submittedFiles[0]?.name
+      || 'New chat';
 
     try {
       if (!activeConversationId) {
@@ -987,7 +1034,7 @@ export function InputArea() {
           messageApi.warning(t('chat.noModelsAvailable'));
           return;
         }
-        await createConversation(normalizeAutoConversationTitle(trimmed), model.model_id, provider.id);
+        await createConversation(normalizeAutoConversationTitle(titleSeed), model.model_id, provider.id);
       }
 
       let attachments: AttachmentInput[] | undefined;
@@ -997,6 +1044,8 @@ export function InputArea() {
 
       setValue('');
       setAttachedFiles([]);
+      setPastedSnippets([]);
+      pastedSnippetSeqRef.current = 0;
       // Reset textarea height and drag state after clearing content
       hasUserResizedRef.current = false;
       setUserMinHeight(INITIAL_MIN_HEIGHT);
@@ -1007,15 +1056,16 @@ export function InputArea() {
         }
       });
       if (currentMode === 'agent') {
-        await sendAgentMessage(trimmed, attachments);
+        await sendAgentMessage(finalContent, attachments);
       } else if (companionModels.length > 0) {
-        await sendMultiModelMessage(trimmed, companionModels, attachments, searchEnabled ? searchProviderId : null);
+        await sendMultiModelMessage(finalContent, companionModels, attachments, searchEnabled ? searchProviderId : null);
       } else {
-        await sendMessage(trimmed, attachments, searchEnabled ? searchProviderId : null);
+        await sendMessage(finalContent, attachments, searchEnabled ? searchProviderId : null);
       }
     } catch (e) {
-      setValue((current) => current || trimmed);
+      setValue((current) => current || value);
       setAttachedFiles((current) => (current.length > 0 ? current : submittedFiles));
+      setPastedSnippets((current) => (current.length > 0 ? current : submittedSnippets));
       console.error('[handleSend] error:', e);
       messageApi.error(String(e));
       // Re-expand textarea after restoring content
@@ -1030,7 +1080,7 @@ export function InputArea() {
         }
       });
     }
-  }, [value, attachedFiles, sendMessage, sendAgentMessage, sendMultiModelMessage, companionModels, activeConversationId, providers, settings, createConversation, loading, messageApi, t, searchEnabled, searchProviderId, currentMode]);
+  }, [value, attachedFiles, pastedSnippets, sendMessage, sendAgentMessage, sendMultiModelMessage, companionModels, activeConversationId, providers, settings, createConversation, loading, messageApi, t, searchEnabled, searchProviderId, currentMode]);
 
   const handleFillLastMessage = useCallback(() => {
     if (loading || streaming) return;
@@ -1058,54 +1108,106 @@ export function InputArea() {
     fileInputRef.current?.click();
   }, []);
 
+  const addFiles = useCallback((incoming: File[]) => {
+    if (incoming.length === 0) return;
+    const allowed = incoming.filter((file) =>
+      isAllowedAttachmentFile(
+        file.name,
+        file.type,
+        hasVision,
+        documentAttachmentReadingEnabled,
+      ),
+    );
+    if (allowed.length === 0) return;
+    setAttachedFiles((prev) => {
+      // Deduplicate by name+size+lastModified to avoid Tauri + HTML5 double-drop.
+      const keys = new Set(prev.map((f) => `${f.name}:${f.size}:${f.lastModified}`));
+      const unique = allowed.filter((f) => !keys.has(`${f.name}:${f.size}:${f.lastModified}`));
+      return unique.length > 0 ? [...prev, ...unique] : prev;
+    });
+  }, [documentAttachmentReadingEnabled, hasVision]);
+
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (files) {
-      const allowedFiles = Array.from(files).filter((file) =>
-        isAllowedAttachmentFile(
-          file.name,
-          file.type,
-          hasVision,
-          documentAttachmentReadingEnabled,
-        ),
-      );
-      setAttachedFiles((prev) => [...prev, ...allowedFiles]);
+      addFiles(Array.from(files));
     }
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-  }, [documentAttachmentReadingEnabled, hasVision]);
+  }, [addFiles]);
 
   const removeFile = useCallback((index: number) => {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
+  const removeSnippet = useCallback((id: string) => {
+    setPastedSnippets((prev) => prev.filter((s) => s.id !== id));
+  }, []);
+
+  const expandSnippet = useCallback((id: string) => {
+    setPastedSnippets((prev) => {
+      const target = prev.find((s) => s.id === id);
+      if (!target) return prev;
+      setValue((current) => {
+        if (!current) return target.content;
+        // Insert at end with a separating newline so the question stays intact.
+        const needsGap = !current.endsWith('\n');
+        return `${current}${needsGap ? '\n' : ''}${target.content}`;
+      });
+      requestAnimationFrame(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        textarea.focus();
+        textarea.style.height = 'auto';
+        const desired = hasUserResizedRef.current
+          ? userMinHeightRef.current
+          : Math.max(textarea.scrollHeight, userMinHeightRef.current);
+        textarea.style.height = Math.min(desired, ABSOLUTE_MAX_HEIGHT) + 'px';
+      });
+      return prev.filter((s) => s.id !== id);
+    });
+  }, []);
+
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    if (!canAttachFiles) return;
     const items = e.clipboardData?.items;
     if (!items) return;
-    const files: File[] = [];
-    for (const item of items) {
-      if (item.kind === 'file') {
-        const file = item.getAsFile();
-        if (
-          file &&
-          isAllowedAttachmentFile(
-            file.name,
-            file.type,
-            hasVision,
-            documentAttachmentReadingEnabled,
-          )
-        ) {
-          files.push(file);
+
+    // Prefer file/image items when attachment is allowed.
+    if (canAttachFiles) {
+      const files: File[] = [];
+      for (const item of items) {
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (
+            file &&
+            isAllowedAttachmentFile(
+              file.name,
+              file.type,
+              hasVision,
+              documentAttachmentReadingEnabled,
+            )
+          ) {
+            files.push(file);
+          }
         }
       }
+      if (files.length > 0) {
+        e.preventDefault();
+        addFiles(files);
+        return;
+      }
     }
-    if (files.length > 0) {
+
+    // Long plain-text paste → compact snippet (independent of vision/document settings).
+    const text = e.clipboardData?.getData('text/plain');
+    if (text && isLongPastedText(text)) {
       e.preventDefault();
-      setAttachedFiles((prev) => [...prev, ...files]);
+      pastedSnippetSeqRef.current += 1;
+      const snippet = createPastedSnippet(text, pastedSnippetSeqRef.current);
+      setPastedSnippets((prev) => [...prev, snippet]);
     }
-  }, [canAttachFiles, documentAttachmentReadingEnabled, hasVision]);
+  }, [addFiles, canAttachFiles, documentAttachmentReadingEnabled, hasVision]);
 
   // Drag-and-drop overlay (Tauri native)
   const [isDragging, setIsDragging] = useState(false);
@@ -1156,7 +1258,8 @@ export function InputArea() {
                 docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                 txt: 'text/plain',
                 json: 'application/json', csv: 'text/csv',
-                md: 'text/markdown', html: 'text/html',
+                md: 'text/markdown', markdown: 'text/markdown',
+                html: 'text/html', htm: 'text/html', xml: 'application/xml',
                 js: 'text/javascript', ts: 'text/typescript',
                 zip: 'application/zip',
               };
@@ -1178,7 +1281,7 @@ export function InputArea() {
             }
           }
           if (!cancelled && files.length > 0) {
-            setAttachedFiles((prev) => [...prev, ...files]);
+            addFiles(files);
           }
         }
       });
@@ -1192,7 +1295,41 @@ export function InputArea() {
       cancelled = true;
       unlisten?.();
     };
-  }, [canAttachFiles, documentAttachmentReadingEnabled, hasVision]);
+  }, [addFiles, canAttachFiles, documentAttachmentReadingEnabled, hasVision]);
+
+  // HTML5 drag-and-drop fallback (browser / non-Tauri paths)
+  const handleHtmlDragEnter = useCallback((e: React.DragEvent) => {
+    if (!canAttachFiles) return;
+    if (![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  }, [canAttachFiles]);
+
+  const handleHtmlDragOver = useCallback((e: React.DragEvent) => {
+    if (!canAttachFiles) return;
+    if (![...e.dataTransfer.types].includes('Files')) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'copy';
+  }, [canAttachFiles]);
+
+  const handleHtmlDragLeave = useCallback((e: React.DragEvent) => {
+    if (!canAttachFiles) return;
+    // Only clear when leaving the outer container, not child nodes.
+    if (e.currentTarget === e.target) {
+      setIsDragging(false);
+    }
+  }, [canAttachFiles]);
+
+  const handleHtmlDrop = useCallback((e: React.DragEvent) => {
+    if (!canAttachFiles) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files || []);
+    addFiles(files);
+  }, [addFiles, canAttachFiles]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1325,8 +1462,18 @@ export function InputArea() {
     return () => window.removeEventListener('aqbot:toggle-mode', onToggleMode);
   }, [currentMode, handleModeSwitch]);
 
+  const canSend =
+    !loading &&
+    (value.trim().length > 0 || attachedFiles.length > 0 || pastedSnippets.length > 0);
+
   return (
-    <div className="px-4 pb-3 pt-1">
+    <div
+      className="px-4 pb-3 pt-1"
+      onDragEnter={handleHtmlDragEnter}
+      onDragOver={handleHtmlDragOver}
+      onDragLeave={handleHtmlDragLeave}
+      onDrop={handleHtmlDrop}
+    >
       <input
         ref={fileInputRef}
         type="file"
@@ -1336,29 +1483,13 @@ export function InputArea() {
         onChange={handleFileChange}
       />
 
-      {/* Attachment preview */}
-      {attachedFiles.length > 0 && (
-        <div className="flex flex-wrap gap-2 mb-2">
-          {attachedFiles.map((file, idx) => (
-            <span
-              key={`${file.name}-${idx}`}
-              className="inline-flex items-center gap-1 px-2 py-1 text-xs"
-              style={{
-                backgroundColor: token.colorFillTertiary,
-                borderRadius: token.borderRadius,
-              }}
-            >
-              {file.name}
-              <Trash2
-                size={14}
-                className="cursor-pointer"
-                style={{ color: token.colorTextSecondary }}
-                onClick={() => removeFile(idx)}
-              />
-            </span>
-          ))}
-        </div>
-      )}
+      <AttachmentChips
+        files={attachedFiles}
+        snippets={pastedSnippets}
+        onRemoveFile={removeFile}
+        onRemoveSnippet={removeSnippet}
+        onExpandSnippet={expandSnippet}
+      />
 
       {/* Main input container */}
       <div
@@ -1719,7 +1850,7 @@ export function InputArea() {
                 size="small"
                 icon={<ArrowUp size={14} />}
                 onClick={handleSend}
-                disabled={loading || !value.trim()}
+                disabled={!canSend}
               />
             )}
           </div>
