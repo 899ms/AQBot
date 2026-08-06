@@ -301,6 +301,21 @@ const BUILT_IN_PROVIDERS = [
     updated_at: 1700000000000,
   },
   {
+    id: 'builtin-gptnb',
+    builtin_id: 'gptnb',
+    name: 'GPTNB',
+    provider_type: 'openai',
+    api_host: 'https://goapi.gptnb.ai',
+    api_path: null,
+    enabled: false,
+    models: [],
+    keys: [],
+    proxy_config: null,
+    sort_order: 10,
+    created_at: 1700000000000,
+    updated_at: 1700000000000,
+  },
+  {
     id: 'builtin-jina',
     name: 'Jina',
     provider_type: 'jina',
@@ -314,7 +329,7 @@ const BUILT_IN_PROVIDERS = [
     ],
     keys: [],
     proxy_config: null,
-    sort_order: 10,
+    sort_order: 11,
     created_at: 1700000000000,
     updated_at: 1700000000000,
   },
@@ -333,7 +348,7 @@ const BUILT_IN_PROVIDERS = [
     ],
     keys: [],
     proxy_config: null,
-    sort_order: 11,
+    sort_order: 12,
     created_at: 1700000000000,
     updated_at: 1700000000000,
   },
@@ -352,7 +367,7 @@ const BUILT_IN_PROVIDERS = [
     ],
     keys: [],
     proxy_config: null,
-    sort_order: 12,
+    sort_order: 13,
     created_at: 1700000000000,
     updated_at: 1700000000000,
   },
@@ -362,15 +377,26 @@ function cloneBuiltInValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-const LEGACY_RERANK_PROVIDER_SORT_ORDERS: Record<string, number> = {
+/** Pre-SHUAI API sort orders for rerank providers (before sort_order 9 was taken). */
+const LEGACY_RERANK_SORT_BEFORE_SHUAIAPI: Record<string, number> = {
   'builtin-jina': 9,
   'builtin-cohere': 10,
   'builtin-voyage': 11,
 };
 
-function shiftLegacyRerankProviderSortOrders(providers: any[]): boolean {
+/** Pre-GPTNB sort orders (after SHUAI API occupied 9). */
+const LEGACY_RERANK_SORT_BEFORE_GPTNB: Record<string, number> = {
+  'builtin-jina': 10,
+  'builtin-cohere': 11,
+  'builtin-voyage': 12,
+};
+
+function shiftRerankProviderSortOrders(
+  providers: any[],
+  legacyMap: Record<string, number>,
+): boolean {
   let dirty = false;
-  for (const [providerId, legacySortOrder] of Object.entries(LEGACY_RERANK_PROVIDER_SORT_ORDERS)) {
+  for (const [providerId, legacySortOrder] of Object.entries(legacyMap)) {
     const provider = providers.find((item: any) => item.id === providerId);
     if (provider?.sort_order === legacySortOrder) {
       provider.sort_order = legacySortOrder + 1;
@@ -389,7 +415,14 @@ function initProviders(): any[] {
   }
   // Restore missing built-in providers and models (e.g. after an upgrade or a bad fetch_remote_models wipe)
   const isShuaiApiMissing = !existing.some((provider: any) => provider.id === 'builtin-shuaiapi');
-  let dirty = isShuaiApiMissing && shiftLegacyRerankProviderSortOrders(existing);
+  const isGptnbMissing = !existing.some((provider: any) => provider.id === 'builtin-gptnb');
+  let dirty = false;
+  if (isShuaiApiMissing) {
+    dirty = shiftRerankProviderSortOrders(existing, LEGACY_RERANK_SORT_BEFORE_SHUAIAPI) || dirty;
+  }
+  if (isGptnbMissing) {
+    dirty = shiftRerankProviderSortOrders(existing, LEGACY_RERANK_SORT_BEFORE_GPTNB) || dirty;
+  }
   for (const builtin of BUILT_IN_PROVIDERS) {
     const stored = existing.find((p: any) => p.id === builtin.id);
     if (!stored) {

@@ -60,6 +60,22 @@ describe('SmartProviderIcon', () => {
     expect(image).toHaveStyle({ borderRadius: '50%' });
   });
 
+  it('loads the GPTNB logo from the exact external URL', () => {
+    const { container } = render(
+      <SmartProviderIcon
+        provider={makeProvider({ builtin_id: 'gptnb' })}
+        size={32}
+        type="avatar"
+      />,
+    );
+
+    const image = container.querySelector('img');
+    expect(image).toHaveAttribute('src', 'https://pic.scdn.app/images/2023/06/26/favicon.png');
+    expect(image).toHaveAttribute('width', '32');
+    expect(image).toHaveAttribute('height', '32');
+    expect(image).toHaveStyle({ borderRadius: '50%' });
+  });
+
   it('uses the avatar square radius when requested', () => {
     const { container } = render(
       <SmartProviderIcon
@@ -111,6 +127,15 @@ describe('SmartProviderIcon', () => {
     expect(container.querySelector('img')).toHaveAttribute(
       'src',
       'https://api.shuaiapi.com/images/logo.svg',
+    );
+
+    rerender(
+      <SmartProviderIcon provider={{ ...initialProvider, builtin_id: 'gptnb' }} />,
+    );
+
+    expect(container.querySelector('img')).toHaveAttribute(
+      'src',
+      'https://pic.scdn.app/images/2023/06/26/favicon.png',
     );
   });
 });

@@ -7,6 +7,7 @@ describe('getBuiltinProviderWebsite', () => {
     expect(getBuiltinProviderWebsite('anthropic')).toBe('https://www.anthropic.com');
     expect(getBuiltinProviderWebsite('deepseek')).toBe('https://www.deepseek.com');
     expect(getBuiltinProviderWebsite('shuaiapi')).toBe('https://api.shuaiapi.com');
+    expect(getBuiltinProviderWebsite('gptnb')).toBe('https://goapi.gptnb.ai');
   });
 
   it('returns null for custom or missing providers', () => {

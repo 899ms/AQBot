@@ -24,30 +24,52 @@ const EXPECTED_SHUAI_API_PROVIDER = {
   updated_at: 1700000000000,
 };
 
+const EXPECTED_GPTNB_PROVIDER = {
+  id: 'builtin-gptnb',
+  builtin_id: 'gptnb',
+  name: 'GPTNB',
+  provider_type: 'openai',
+  api_host: 'https://goapi.gptnb.ai',
+  api_path: null,
+  enabled: false,
+  models: [],
+  keys: [],
+  proxy_config: null,
+  sort_order: 10,
+  created_at: 1700000000000,
+  updated_at: 1700000000000,
+};
+
 describe('browserMock built-in providers', () => {
   beforeEach(() => {
     localStorage.clear();
   });
 
-  it('initializes SHUAI API with the expected fields and ordering', async () => {
+  it('initializes SHUAI API and GPTNB with the expected fields and ordering', async () => {
     const providers = await handleCommand<any[]>('list_providers');
     const shuaiApi = providers.find((provider) => provider.id === 'builtin-shuaiapi');
+    const gptnb = providers.find((provider) => provider.id === 'builtin-gptnb');
 
     expect(shuaiApi).toEqual(EXPECTED_SHUAI_API_PROVIDER);
+    expect(gptnb).toEqual(EXPECTED_GPTNB_PROVIDER);
     expect(providers.map((provider) => provider.id)).toEqual(expect.arrayContaining([
       'builtin-minimax',
       'builtin-shuaiapi',
+      'builtin-gptnb',
       'builtin-jina',
     ]));
     expect(providers.findIndex((provider) => provider.id === 'builtin-shuaiapi')).toBe(
       providers.findIndex((provider) => provider.id === 'builtin-minimax') + 1,
     );
-    expect(providers.findIndex((provider) => provider.id === 'builtin-jina')).toBe(
+    expect(providers.findIndex((provider) => provider.id === 'builtin-gptnb')).toBe(
       providers.findIndex((provider) => provider.id === 'builtin-shuaiapi') + 1,
     );
-    expect(providers.find((provider) => provider.id === 'builtin-jina')?.sort_order).toBe(10);
-    expect(providers.find((provider) => provider.id === 'builtin-cohere')?.sort_order).toBe(11);
-    expect(providers.find((provider) => provider.id === 'builtin-voyage')?.sort_order).toBe(12);
+    expect(providers.findIndex((provider) => provider.id === 'builtin-jina')).toBe(
+      providers.findIndex((provider) => provider.id === 'builtin-gptnb') + 1,
+    );
+    expect(providers.find((provider) => provider.id === 'builtin-jina')?.sort_order).toBe(11);
+    expect(providers.find((provider) => provider.id === 'builtin-cohere')?.sort_order).toBe(12);
+    expect(providers.find((provider) => provider.id === 'builtin-voyage')?.sort_order).toBe(13);
   });
 
   it('adds the complete SHUAI API provider to existing localStorage', async () => {
@@ -58,7 +80,7 @@ describe('browserMock built-in providers', () => {
       'builtin-voyage': 11,
     };
     const legacyProviders = providers
-      .filter((provider) => provider.id !== 'builtin-shuaiapi')
+      .filter((provider) => provider.id !== 'builtin-shuaiapi' && provider.id !== 'builtin-gptnb')
       .map((provider) => ({
         ...provider,
         sort_order: legacySortOrders[provider.id] ?? provider.sort_order,
@@ -70,29 +92,67 @@ describe('browserMock built-in providers', () => {
 
     const upgradedProviders = await handleCommand<any[]>('list_providers');
     const shuaiApi = upgradedProviders.find((provider) => provider.id === 'builtin-shuaiapi');
+    const gptnb = upgradedProviders.find((provider) => provider.id === 'builtin-gptnb');
     const persistedProviders = JSON.parse(localStorage.getItem('aqbot_providers') ?? '[]');
 
     expect(shuaiApi).toEqual(EXPECTED_SHUAI_API_PROVIDER);
+    expect(gptnb).toEqual(EXPECTED_GPTNB_PROVIDER);
     expect(persistedProviders.find((provider: any) => provider.id === 'builtin-shuaiapi'))
       .toEqual(EXPECTED_SHUAI_API_PROVIDER);
+    expect(persistedProviders.find((provider: any) => provider.id === 'builtin-gptnb'))
+      .toEqual(EXPECTED_GPTNB_PROVIDER);
     expect(upgradedProviders.findIndex((provider) => provider.id === 'builtin-shuaiapi')).toBe(
       upgradedProviders.findIndex((provider) => provider.id === 'builtin-minimax') + 1,
     );
-    expect(upgradedProviders.find((provider) => provider.id === 'builtin-jina')?.sort_order).toBe(10);
-    expect(upgradedProviders.find((provider) => provider.id === 'builtin-cohere')?.sort_order).toBe(11);
-    expect(upgradedProviders.find((provider) => provider.id === 'builtin-voyage')?.sort_order).toBe(12);
+    expect(upgradedProviders.findIndex((provider) => provider.id === 'builtin-gptnb')).toBe(
+      upgradedProviders.findIndex((provider) => provider.id === 'builtin-shuaiapi') + 1,
+    );
+    expect(upgradedProviders.find((provider) => provider.id === 'builtin-jina')?.sort_order).toBe(11);
+    expect(upgradedProviders.find((provider) => provider.id === 'builtin-cohere')?.sort_order).toBe(12);
+    expect(upgradedProviders.find((provider) => provider.id === 'builtin-voyage')?.sort_order).toBe(13);
+  });
+
+  it('adds GPTNB to existing localStorage that already has SHUAI API', async () => {
+    const providers = await handleCommand<any[]>('list_providers');
+    const legacySortOrders: Record<string, number> = {
+      'builtin-jina': 10,
+      'builtin-cohere': 11,
+      'builtin-voyage': 12,
+    };
+    const legacyProviders = providers
+      .filter((provider) => provider.id !== 'builtin-gptnb')
+      .map((provider) => ({
+        ...provider,
+        sort_order: legacySortOrders[provider.id] ?? provider.sort_order,
+      }));
+    localStorage.setItem('aqbot_providers', JSON.stringify(legacyProviders));
+
+    const upgradedProviders = await handleCommand<any[]>('list_providers');
+    const gptnb = upgradedProviders.find((provider) => provider.id === 'builtin-gptnb');
+
+    expect(gptnb).toEqual(EXPECTED_GPTNB_PROVIDER);
+    expect(upgradedProviders.findIndex((provider) => provider.id === 'builtin-gptnb')).toBe(
+      upgradedProviders.findIndex((provider) => provider.id === 'builtin-shuaiapi') + 1,
+    );
+    expect(upgradedProviders.find((provider) => provider.id === 'builtin-jina')?.sort_order).toBe(11);
+    expect(upgradedProviders.find((provider) => provider.id === 'builtin-cohere')?.sort_order).toBe(12);
+    expect(upgradedProviders.find((provider) => provider.id === 'builtin-voyage')?.sort_order).toBe(13);
   });
 
   it('does not share mutable built-in provider data across initializations', async () => {
     const providers = await handleCommand<any[]>('list_providers');
     const shuaiApi = providers.find((provider) => provider.id === 'builtin-shuaiapi');
+    const gptnb = providers.find((provider) => provider.id === 'builtin-gptnb');
     shuaiApi.keys.push({ id: 'temporary-key' });
+    gptnb.keys.push({ id: 'temporary-key' });
 
     localStorage.clear();
     const reinitializedProviders = await handleCommand<any[]>('list_providers');
 
     expect(reinitializedProviders.find((provider) => provider.id === 'builtin-shuaiapi'))
       .toEqual(EXPECTED_SHUAI_API_PROVIDER);
+    expect(reinitializedProviders.find((provider) => provider.id === 'builtin-gptnb'))
+      .toEqual(EXPECTED_GPTNB_PROVIDER);
   });
 });
 

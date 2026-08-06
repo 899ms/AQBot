@@ -4,6 +4,12 @@ import { ProviderIcon, ModelIcon, providerMappings, modelMappings } from '@lobeh
 import { DynamicLobeIcon } from '@/components/shared/DynamicLobeIcon';
 
 const SHUAI_API_LOGO_URL = 'https://api.shuaiapi.com/images/logo.svg';
+const GPTNB_LOGO_URL = 'https://pic.scdn.app/images/2023/06/26/favicon.png';
+
+const BUILTIN_LOGO_URLS: Record<string, string> = {
+  shuaiapi: SHUAI_API_LOGO_URL,
+  gptnb: GPTNB_LOGO_URL,
+};
 
 const TYPE_TO_PROVIDER: Record<string, string> = {
   openai: 'openai',
@@ -133,7 +139,10 @@ export const SmartProviderIcon = memo(function SmartProviderIcon({
     // key is a toc `id` (e.g., "Ai302", "OpenAI") — use DynamicLobeIcon for reliable rendering
     return <DynamicLobeIcon iconId={key} size={size} type={type} />;
   }
-  if (provider.builtin_id === 'shuaiapi') {
+  const builtinLogoUrl = provider.builtin_id
+    ? BUILTIN_LOGO_URLS[provider.builtin_id]
+    : undefined;
+  if (builtinLogoUrl) {
     const borderRadius = shape === 'circle' || (shape === undefined && type === 'avatar')
       ? '50%'
       : shape === 'square'
@@ -143,7 +152,7 @@ export const SmartProviderIcon = memo(function SmartProviderIcon({
       <img
         alt=""
         height={size}
-        src={SHUAI_API_LOGO_URL}
+        src={builtinLogoUrl}
         style={{
           borderRadius,
           display: 'block',

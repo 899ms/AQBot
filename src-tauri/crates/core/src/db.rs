@@ -531,6 +531,13 @@ pub fn get_builtin_providers() -> Vec<BuiltinProvider> {
             models: vec![],
         },
         BuiltinProvider {
+            builtin_id: "gptnb",
+            name: "GPTNB",
+            provider_type: ProviderType::OpenAI,
+            api_host: "https://goapi.gptnb.ai",
+            models: vec![],
+        },
+        BuiltinProvider {
             builtin_id: "jina",
             name: "Jina",
             provider_type: ProviderType::Jina,
@@ -619,7 +626,7 @@ mod tests {
     }
 
     #[test]
-    fn shuaiapi_builtin_is_registered_between_minimax_and_jina() {
+    fn shuaiapi_builtin_is_registered_between_minimax_and_gptnb() {
         let providers = get_builtin_providers();
         let shuaiapi_index = providers
             .iter()
@@ -628,11 +635,28 @@ mod tests {
         let shuaiapi = &providers[shuaiapi_index];
 
         assert_eq!(providers[shuaiapi_index - 1].builtin_id, "minimax");
-        assert_eq!(providers[shuaiapi_index + 1].builtin_id, "jina");
+        assert_eq!(providers[shuaiapi_index + 1].builtin_id, "gptnb");
         assert_eq!(shuaiapi.name, "SHUAI API");
         assert_eq!(shuaiapi.provider_type, ProviderType::OpenAI);
         assert_eq!(shuaiapi.api_host, "https://api.shuaiapi.com");
         assert!(shuaiapi.models.is_empty());
+    }
+
+    #[test]
+    fn gptnb_builtin_is_registered_between_shuaiapi_and_jina() {
+        let providers = get_builtin_providers();
+        let gptnb_index = providers
+            .iter()
+            .position(|provider| provider.builtin_id == "gptnb")
+            .expect("missing GPTNB builtin provider");
+        let gptnb = &providers[gptnb_index];
+
+        assert_eq!(providers[gptnb_index - 1].builtin_id, "shuaiapi");
+        assert_eq!(providers[gptnb_index + 1].builtin_id, "jina");
+        assert_eq!(gptnb.name, "GPTNB");
+        assert_eq!(gptnb.provider_type, ProviderType::OpenAI);
+        assert_eq!(gptnb.api_host, "https://goapi.gptnb.ai");
+        assert!(gptnb.models.is_empty());
     }
 
     #[test]

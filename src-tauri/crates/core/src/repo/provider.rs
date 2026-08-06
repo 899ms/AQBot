@@ -1061,6 +1061,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn gptnb_virtual_provider_materializes_with_builtin_defaults() {
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+
+        let providers = list_providers_merged(db).await.unwrap();
+        let virtual_provider = providers
+            .iter()
+            .find(|provider| provider.builtin_id.as_deref() == Some("gptnb"))
+            .expect("GPTNB virtual provider");
+
+        assert_eq!(virtual_provider.id, "builtin_gptnb");
+        assert_eq!(virtual_provider.name, "GPTNB");
+        assert_eq!(virtual_provider.provider_type, ProviderType::OpenAI);
+        assert_eq!(virtual_provider.api_host, "https://goapi.gptnb.ai");
+        assert_eq!(virtual_provider.api_path, None);
+        assert!(!virtual_provider.enabled);
+        assert!(virtual_provider.keys.is_empty());
+        assert!(virtual_provider.models.is_empty());
+
+        let provider_id = ensure_builtin_provider(db, "gptnb").await.unwrap();
+        assert_ne!(provider_id, "builtin_gptnb");
+        assert_eq!(
+            ensure_builtin_provider(db, "gptnb").await.unwrap(),
+            provider_id
+        );
+
+        let materialized = get_provider(db, &provider_id).await.unwrap();
+        assert_eq!(materialized.name, "GPTNB");
+        assert_eq!(materialized.provider_type, ProviderType::OpenAI);
+        assert_eq!(materialized.api_host, "https://goapi.gptnb.ai");
+        assert_eq!(materialized.api_path, None);
+        assert!(!materialized.enabled);
+        assert!(materialized.keys.is_empty());
+        assert!(materialized.models.is_empty());
+        assert_eq!(materialized.builtin_id.as_deref(), Some("gptnb"));
+
+        let providers = list_providers_merged(db).await.unwrap();
+        let merged_provider = providers
+            .iter()
+            .find(|provider| provider.builtin_id.as_deref() == Some("gptnb"))
+            .expect("GPTNB materialized provider");
+        assert_eq!(merged_provider.id, provider_id);
+        assert_eq!(
+            providers
+                .iter()
+                .filter(|provider| provider.builtin_id.as_deref() == Some("gptnb"))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn provider_key_update_rewrites_encrypted_value_and_prefix() {
         let h = create_test_pool().await.unwrap();
         let db = &h.conn;

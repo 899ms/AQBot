@@ -13,6 +13,7 @@ const BUILTIN_PROVIDER_WEBSITES: Record<string, string> = {
   siliconflow: 'https://siliconflow.cn',
   minimax: 'https://www.minimax.io',
   shuaiapi: 'https://api.shuaiapi.com',
+  gptnb: 'https://goapi.gptnb.ai',
   jina: 'https://jina.ai',
   cohere: 'https://cohere.com',
   voyage: 'https://www.voyageai.com',
