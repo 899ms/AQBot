@@ -5,6 +5,9 @@ export const LONG_PASTE_LINE_THRESHOLD = 40;
 /** Soft cap when merging snippets into the outgoing message content. */
 export const PASTED_SNIPPET_CHAR_LIMIT = 96_000;
 
+/** Locale-independent inline reference placed in the composer textarea. */
+export const PASTE_TOKEN_RE = /\[\[paste:#(\d+)\]\]/g;
+
 export type PastedSnippet = {
   id: string;
   content: string;
@@ -44,6 +47,59 @@ export function createPastedSnippet(
   };
 }
 
+export function formatPasteToken(index: number): string {
+  return `[[paste:#${index}]]`;
+}
+
+/**
+ * Insert a paste reference token at the current selection (or replace the selection).
+ * Returns the new value and caret position after the inserted token.
+ */
+export function insertPasteTokenAtSelection(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  index: number,
+): { value: string; caret: number } {
+  const start = Math.max(0, Math.min(selectionStart, value.length));
+  const end = Math.max(start, Math.min(selectionEnd, value.length));
+  const token = formatPasteToken(index);
+  const next = `${value.slice(0, start)}${token}${value.slice(end)}`;
+  return { value: next, caret: start + token.length };
+}
+
+/** Remove every `[[paste:#index]]` occurrence from the composer text. */
+export function removePasteTokens(value: string, index: number): string {
+  const token = formatPasteToken(index);
+  if (!value.includes(token)) return value;
+  // Drop whole lines that only contain the token, then strip any leftover inline uses.
+  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lineOnly = new RegExp(`^[ \\t]*${escaped}[ \\t]*\\n?`, 'gm');
+  return value
+    .replace(lineOnly, '')
+    .split(token)
+    .join('')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n');
+}
+
+/** Replace every `[[paste:#index]]` with the given content (e.g. expand back into the textarea). */
+export function replacePasteTokensWithContent(
+  value: string,
+  index: number,
+  content: string,
+): string {
+  const token = formatPasteToken(index);
+  if (!value.includes(token)) {
+    // Token was already deleted by the user — append so expand still surfaces the text.
+    if (!value) return content;
+    const needsGap = !value.endsWith('\n');
+    return `${value}${needsGap ? '\n' : ''}${content}`;
+  }
+  return value.split(token).join(content);
+}
+
 function truncateToCharLimit(text: string, limit: number): { text: string; truncated: boolean } {
   if (text.length <= limit) return { text, truncated: false };
   // Prefer char-count over code-unit when truncating large pastes.
@@ -57,27 +113,53 @@ function truncateToCharLimit(text: string, limit: number): { text: string; trunc
   return { text: out, truncated: false };
 }
 
+function formatSnippetBlock(snippet: PastedSnippet, charLimit: number): string {
+  const { text, truncated } = truncateToCharLimit(snippet.content, charLimit);
+  const header = `[Pasted text #${snippet.index} · ${snippet.lineCount} lines]`;
+  const body = truncated
+    ? `${text}\n\n[Pasted text truncated for model context budget.]`
+    : text;
+  return `---\n${header}\n${body}\n---`;
+}
+
 /**
- * Merge user-typed content with collapsed pasted snippets for the model prompt.
- * Snippets are appended as fenced blocks so the model can tell them apart from the question.
+ * Expand inline `[[paste:#N]]` tokens in order, then append any orphan snippets
+ * (present in state but missing from the text) so content is never silently dropped.
  */
 export function mergePastedSnippetsIntoContent(
   userText: string,
   snippets: PastedSnippet[],
   charLimit: number = PASTED_SNIPPET_CHAR_LIMIT,
 ): string {
-  const trimmed = userText.trim();
-  if (snippets.length === 0) return trimmed;
+  if (snippets.length === 0) return userText.trim();
 
-  const blocks = snippets.map((snippet) => {
-    const { text, truncated } = truncateToCharLimit(snippet.content, charLimit);
-    const header = `[Pasted text #${snippet.index} · ${snippet.lineCount} lines]`;
-    const body = truncated
-      ? `${text}\n\n[Pasted text truncated for model context budget.]`
-      : text;
-    return `---\n${header}\n${body}\n---`;
-  });
+  const byIndex = new Map(snippets.map((s) => [s.index, s]));
+  const referenced = new Set<number>();
 
-  if (!trimmed) return blocks.join('\n\n');
-  return `${trimmed}\n\n${blocks.join('\n\n')}`;
+  // Rebuild with tokens expanded; missing snippets drop their tokens silently.
+  let result = '';
+  let lastIndex = 0;
+  const re = new RegExp(PASTE_TOKEN_RE.source, 'g');
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(userText)) !== null) {
+    result += userText.slice(lastIndex, match.index);
+    const idx = Number(match[1]);
+    const snippet = byIndex.get(idx);
+    if (snippet) {
+      referenced.add(idx);
+      result += formatSnippetBlock(snippet, charLimit);
+    }
+    // else: drop dangling token
+    lastIndex = match.index + match[0].length;
+  }
+  result += userText.slice(lastIndex);
+
+  const orphans = snippets.filter((s) => !referenced.has(s.index));
+  if (orphans.length > 0) {
+    const orphanBlocks = orphans.map((s) => formatSnippetBlock(s, charLimit)).join('\n\n');
+    const trimmed = result.trim();
+    result = trimmed ? `${trimmed}\n\n${orphanBlocks}` : orphanBlocks;
+  }
+
+  return result.trim();
 }

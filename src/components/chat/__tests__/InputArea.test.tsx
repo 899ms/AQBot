@@ -538,7 +538,7 @@ describe('InputArea', () => {
     expect(input?.accept).toContain('.md');
   });
 
-  it('collapses long pasted text into a snippet chip and merges it on send', async () => {
+  it('collapses long pasted text into a snippet chip, inserts an inline token, and merges it on send', async () => {
     render(
       <App>
         <InputArea />
@@ -558,10 +558,10 @@ describe('InputArea', () => {
     fireEvent(textarea, pasteEvent);
 
     expect(preventDefault).toHaveBeenCalled();
-    expect(textarea).toHaveValue('');
+    expect(textarea).toHaveValue('[[paste:#1]]');
     expect(screen.getByText(/Pasted text #1 · 45 lines/)).toBeInTheDocument();
 
-    fireEvent.change(textarea, { target: { value: 'Please summarize' } });
+    fireEvent.change(textarea, { target: { value: 'Please summarize\n[[paste:#1]]' } });
     fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' });
 
     await waitFor(() => {
@@ -573,6 +573,51 @@ describe('InputArea', () => {
     expect(content).toContain('[Pasted text #1 · 45 lines]');
     expect(content).toContain('line 1');
     expect(content).toContain('line 45');
+    expect(content.indexOf('Please summarize')).toBeLessThan(content.indexOf('line 1'));
+  });
+
+  it('expands inline tokens in the order they appear in the textarea', async () => {
+    render(
+      <App>
+        <InputArea />
+      </App>,
+    );
+
+    const textarea = screen.getByPlaceholderText('chat.inputPlaceholder') as HTMLTextAreaElement;
+    const longA = Array.from({ length: 45 }, (_, i) => `A${i + 1}`).join('\n');
+    const longB = Array.from({ length: 45 }, (_, i) => `B${i + 1}`).join('\n');
+
+    fireEvent(
+      textarea,
+      createEvent.paste(textarea, {
+        clipboardData: {
+          items: [],
+          getData: (type: string) => (type === 'text/plain' ? longA : ''),
+        },
+      }),
+    );
+    fireEvent(
+      textarea,
+      createEvent.paste(textarea, {
+        clipboardData: {
+          items: [],
+          getData: (type: string) => (type === 'text/plain' ? longB : ''),
+        },
+      }),
+    );
+
+    // Reverse token order relative to paste sequence so #2 appears before #1.
+    fireEvent.change(textarea, {
+      target: { value: `First\n[[paste:#2]]\nThen\n[[paste:#1]]` },
+    });
+    fireEvent.keyDown(textarea, { key: 'Enter', code: 'Enter' });
+
+    await waitFor(() => {
+      expect(sendMessage).toHaveBeenCalled();
+    });
+
+    const [content] = sendMessage.mock.calls[0];
+    expect(content.indexOf('B1')).toBeLessThan(content.indexOf('A1'));
   });
 
   it('does not intercept short text paste', () => {
@@ -596,7 +641,7 @@ describe('InputArea', () => {
     expect(screen.queryByText(/Pasted text #/)).not.toBeInTheDocument();
   });
 
-  it('expands a pasted snippet back into the textarea', async () => {
+  it('removes the inline token when a pasted snippet chip is deleted', async () => {
     render(
       <App>
         <InputArea />
@@ -615,10 +660,11 @@ describe('InputArea', () => {
       }),
     );
 
-    await userEvent.click(screen.getByRole('button', { name: 'chat.expandPastedText' }));
+    fireEvent.change(textarea, { target: { value: `keep\n[[paste:#1]]\nme` } });
+    await userEvent.click(screen.getByRole('button', { name: 'chat.removePastedText' }));
+
     expect(screen.queryByText(/Pasted text #1/)).not.toBeInTheDocument();
-    expect(textarea.value).toContain('line 1');
-    expect(textarea.value).toContain('line 45');
+    expect(textarea.value).toBe('keep\nme');
   });
 
   it('keeps the clear-all action in the clear conversation menu', async () => {

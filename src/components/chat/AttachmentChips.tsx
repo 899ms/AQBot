@@ -103,11 +103,10 @@ function FileChip({ file, onRemove }: FileChipProps) {
 type SnippetBarProps = {
   snippet: PastedSnippet;
   onPreview: () => void;
-  onExpand: () => void;
   onRemove: () => void;
 };
 
-function SnippetBar({ snippet, onPreview, onExpand, onRemove }: SnippetBarProps) {
+function SnippetBar({ snippet, onPreview, onRemove }: SnippetBarProps) {
   const { t } = useTranslation();
   const { token } = theme.useToken();
   const label = t('chat.pastedTextLabel', {
@@ -150,15 +149,6 @@ function SnippetBar({ snippet, onPreview, onExpand, onRemove }: SnippetBarProps)
       <Button
         type="text"
         size="small"
-        onClick={onExpand}
-        aria-label={t('chat.expandPastedText')}
-        style={{ color: token.colorTextSecondary, fontSize: 12, paddingInline: 6 }}
-      >
-        {t('chat.expandPastedText')}
-      </Button>
-      <Button
-        type="text"
-        size="small"
         icon={<Trash2 size={13} />}
         onClick={onRemove}
         aria-label={t('chat.removePastedText')}
@@ -174,7 +164,6 @@ export type AttachmentChipsProps = {
   snippets: PastedSnippet[];
   onRemoveFile: (index: number) => void;
   onRemoveSnippet: (id: string) => void;
-  onExpandSnippet: (id: string) => void;
 };
 
 export function AttachmentChips({
@@ -182,7 +171,6 @@ export function AttachmentChips({
   snippets,
   onRemoveFile,
   onRemoveSnippet,
-  onExpandSnippet,
 }: AttachmentChipsProps) {
   const { t } = useTranslation();
   const { token } = theme.useToken();
@@ -217,7 +205,6 @@ export function AttachmentChips({
           key={snippet.id}
           snippet={snippet}
           onPreview={() => setPreviewSnippet(snippet)}
-          onExpand={() => onExpandSnippet(snippet.id)}
           onRemove={() => onRemoveSnippet(snippet.id)}
         />
       ))}

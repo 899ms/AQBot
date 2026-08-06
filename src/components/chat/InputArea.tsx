@@ -38,8 +38,10 @@ import { SkillPickerPopover } from './toolbar/SkillPickerPopover';
 import { AttachmentChips } from './AttachmentChips';
 import {
   createPastedSnippet,
+  insertPasteTokenAtSelection,
   isLongPastedText,
   mergePastedSnippetsIntoContent,
+  removePasteTokens,
   type PastedSnippet,
 } from '@/lib/pastedText';
 
@@ -1013,7 +1015,8 @@ export function InputArea() {
 
     // Attachment-only messages need a minimal content marker so downstream pipelines stay valid.
     const finalContent = mergedContent || t('chat.attachmentOnlyMessage', '(attachment)');
-    const titleSeed = value.trim()
+    // Prefer human text for auto titles; fall back to snippet/file when the box is token-only.
+    const titleSeed = value.replace(/\[\[paste:#\d+\]\]/g, '').trim()
       || submittedSnippets[0]?.content.slice(0, 80)
       || submittedFiles[0]?.name
       || 'New chat';
@@ -1141,33 +1144,28 @@ export function InputArea() {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
-  const removeSnippet = useCallback((id: string) => {
-    setPastedSnippets((prev) => prev.filter((s) => s.id !== id));
+  const resizeTextareaToContent = useCallback(() => {
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.style.height = 'auto';
+      const desired = hasUserResizedRef.current
+        ? userMinHeightRef.current
+        : Math.max(textarea.scrollHeight, userMinHeightRef.current);
+      textarea.style.height = Math.min(desired, ABSOLUTE_MAX_HEIGHT) + 'px';
+    });
   }, []);
 
-  const expandSnippet = useCallback((id: string) => {
+  const removeSnippet = useCallback((id: string) => {
     setPastedSnippets((prev) => {
       const target = prev.find((s) => s.id === id);
       if (!target) return prev;
-      setValue((current) => {
-        if (!current) return target.content;
-        // Insert at end with a separating newline so the question stays intact.
-        const needsGap = !current.endsWith('\n');
-        return `${current}${needsGap ? '\n' : ''}${target.content}`;
-      });
-      requestAnimationFrame(() => {
-        const textarea = textareaRef.current;
-        if (!textarea) return;
-        textarea.focus();
-        textarea.style.height = 'auto';
-        const desired = hasUserResizedRef.current
-          ? userMinHeightRef.current
-          : Math.max(textarea.scrollHeight, userMinHeightRef.current);
-        textarea.style.height = Math.min(desired, ABSOLUTE_MAX_HEIGHT) + 'px';
-      });
+      setValue((current) => removePasteTokens(current, target.index));
+      resizeTextareaToContent();
       return prev.filter((s) => s.id !== id);
     });
-  }, []);
+  }, [resizeTextareaToContent]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const items = e.clipboardData?.items;
@@ -1199,13 +1197,32 @@ export function InputArea() {
       }
     }
 
-    // Long plain-text paste → compact snippet (independent of vision/document settings).
+    // Long plain-text paste → compact snippet + inline reference token at caret.
     const text = e.clipboardData?.getData('text/plain');
     if (text && isLongPastedText(text)) {
       e.preventDefault();
       pastedSnippetSeqRef.current += 1;
-      const snippet = createPastedSnippet(text, pastedSnippetSeqRef.current);
+      const index = pastedSnippetSeqRef.current;
+      const snippet = createPastedSnippet(text, index);
       setPastedSnippets((prev) => [...prev, snippet]);
+
+      const textarea = e.currentTarget;
+      const currentValue = textarea.value;
+      const start = textarea.selectionStart ?? currentValue.length;
+      const end = textarea.selectionEnd ?? start;
+      const { value: nextValue, caret } = insertPasteTokenAtSelection(currentValue, start, end, index);
+      setValue(nextValue);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(caret, caret);
+        el.style.height = 'auto';
+        const desired = hasUserResizedRef.current
+          ? userMinHeightRef.current
+          : Math.max(el.scrollHeight, userMinHeightRef.current);
+        el.style.height = Math.min(desired, ABSOLUTE_MAX_HEIGHT) + 'px';
+      });
     }
   }, [addFiles, canAttachFiles, documentAttachmentReadingEnabled, hasVision]);
 
@@ -1488,7 +1505,6 @@ export function InputArea() {
         snippets={pastedSnippets}
         onRemoveFile={removeFile}
         onRemoveSnippet={removeSnippet}
-        onExpandSnippet={expandSnippet}
       />
 
       {/* Main input container */}
