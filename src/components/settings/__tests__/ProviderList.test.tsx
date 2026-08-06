@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   scanCcSwitchProviderImports: vi.fn(),
   importCcSwitchProviderConfigs: vi.fn(),
   toggleProvider: vi.fn(),
+  deleteProvider: vi.fn(),
   reorderProviders: vi.fn(),
   setSelectedProviderId: vi.fn(),
 }));
@@ -142,6 +143,7 @@ vi.mock('@/stores', () => ({
       scanCcSwitchProviderImports: mocks.scanCcSwitchProviderImports,
       importCcSwitchProviderConfigs: mocks.importCcSwitchProviderConfigs,
       toggleProvider: mocks.toggleProvider,
+      deleteProvider: mocks.deleteProvider,
       reorderProviders: mocks.reorderProviders,
     }),
   useUIStore: (selector: (state: Record<string, unknown>) => unknown) =>
@@ -235,6 +237,65 @@ describe('ProviderList', () => {
     );
 
     expect(mocks.setSelectedProviderId).toHaveBeenCalledWith('real-openai');
+  });
+
+  it('enters batch mode and can bulk-disable selected providers', async () => {
+    const user = userEvent.setup();
+    mocks.toggleProvider.mockResolvedValue(undefined);
+    providers = [
+      makeProvider({ id: 'p1', name: 'Provider One', enabled: true, builtin_id: null }),
+      makeProvider({ id: 'p2', name: 'Provider Two', enabled: true, builtin_id: null }),
+    ];
+    selectedProviderId = 'p1';
+
+    render(
+      <App>
+        <ProviderList />
+      </App>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'settings.providerBatchMode' }));
+    expect(screen.getByLabelText('common.selectAll')).toBeInTheDocument();
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    // first is select-all; remaining are provider rows
+    await user.click(checkboxes[1]);
+    await user.click(checkboxes[2]);
+    await user.click(screen.getByRole('button', { name: 'settings.batchDisable' }));
+
+    await waitFor(() => {
+      expect(mocks.toggleProvider).toHaveBeenCalledWith('p1', false);
+      expect(mocks.toggleProvider).toHaveBeenCalledWith('p2', false);
+    });
+  });
+
+  it('batch delete skips built-in providers and only deletes custom ones', async () => {
+    const user = userEvent.setup();
+    mocks.deleteProvider.mockResolvedValue(undefined);
+    providers = [
+      makeProvider({ id: 'builtin-openai', name: 'OpenAI', enabled: true, builtin_id: 'openai' }),
+      makeProvider({ id: 'custom-openai', name: 'Custom OpenAI', enabled: true, builtin_id: null }),
+    ];
+    selectedProviderId = 'custom-openai';
+
+    render(
+      <App>
+        <ProviderList />
+      </App>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'settings.providerBatchMode' }));
+    await user.click(screen.getByLabelText('common.selectAll'));
+
+    // Popconfirm needs confirm click
+    await user.click(screen.getByRole('button', { name: 'settings.batchDeleteBtn' }));
+    const confirm = await screen.findByRole('button', { name: 'common.confirm' });
+    await user.click(confirm);
+
+    await waitFor(() => {
+      expect(mocks.deleteProvider).toHaveBeenCalledTimes(1);
+      expect(mocks.deleteProvider).toHaveBeenCalledWith('custom-openai');
+    });
   });
 
   it('requires Region and hides API Host when adding AWS Bedrock', async () => {
