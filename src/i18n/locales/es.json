@@ -1342,17 +1342,26 @@
       "title": "Importar copia de seguridad de Cherry Studio",
       "selectFile": "Seleccionar archivo de copia",
       "uploadHint": "Haga clic o arrastre una copia de Cherry Studio aquí",
-      "supportedFormats": "Formatos admitidos: .zip, .json (data.json)",
-      "exportPath": "Ruta de exportación: Ajustes de Cherry Studio → Datos → Exportar datos",
+      "supportedFormats": "Supported formats: .zip, .json (data.json); full backup zip also supported (assistants → roles)",
+      "exportPath": "Export Data: Settings → Data Settings → Export Data; Full backup: Settings → Backup",
       "preview": "Vista previa de importación",
       "conversations": "Conversaciones",
       "messages": "Mensajes",
       "files": "Archivos",
+      "roles": "Roles",
       "providers": "Proveedores",
       "duplicates": "Duplicados",
       "importProviderKeys": "Importar también proveedores y claves API referenciados",
       "emptyTopics": "Se omitirán {{count}} temas vacíos",
-      "success": "Copia de Cherry Studio importada"
+      "emptyAssistants": "Se omitirán {{count}} asistentes sin prompt",
+      "success": "Copia de Cherry Studio importada",
+      "warnings": {
+        "full_backup_roles_only": "Se detectó una copia completa de Cherry Studio (sin data.json). Los asistentes se importarán como roles. El historial en IndexedDB aún no se importa — use Ajustes → Datos → Exportar datos para los chats.",
+        "assistant_empty_prompt": "Se omitió un asistente sin prompt ni descripción ({{name}}).",
+        "unsupported_block_type": "Algunos tipos de bloque de mensaje de Cherry Studio se conservarán como Markdown legible.",
+        "provider_import_failed": "Error al importar el proveedor de Cherry Studio ({{id}}).",
+        "missing_file": "Falta el adjunto en la copia, o solo está disponible en copias zip ({{id}})."
+      }
     },
     "kelivoImport": {
       "source": "Kelivo",

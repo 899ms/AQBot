@@ -1342,17 +1342,26 @@
       "title": "Importer une sauvegarde Cherry Studio",
       "selectFile": "Sélectionner le fichier de sauvegarde",
       "uploadHint": "Cliquez ou déposez une sauvegarde Cherry Studio ici",
-      "supportedFormats": "Formats pris en charge : .zip, .json (data.json)",
-      "exportPath": "Chemin d'export : Paramètres Cherry Studio → Données → Exporter les données",
+      "supportedFormats": "Supported formats: .zip, .json (data.json); full backup zip also supported (assistants → roles)",
+      "exportPath": "Export Data: Settings → Data Settings → Export Data; Full backup: Settings → Backup",
       "preview": "Aperçu de l'import",
       "conversations": "Conversations",
       "messages": "Messages",
       "files": "Fichiers",
+      "roles": "Rôles",
       "providers": "Fournisseurs",
       "duplicates": "Doublons",
       "importProviderKeys": "Importer aussi les fournisseurs et clés API référencés",
       "emptyTopics": "{{count}} sujets vides seront ignorés",
-      "success": "Sauvegarde Cherry Studio importée"
+      "emptyAssistants": "{{count}} assistants sans invite seront ignorés",
+      "success": "Sauvegarde Cherry Studio importée",
+      "warnings": {
+        "full_backup_roles_only": "Sauvegarde complète Cherry Studio détectée (sans data.json). Les assistants seront importés comme rôles. L’historique IndexedDB n’est pas encore importé — utilisez Paramètres → Données → Exporter les données pour les chats.",
+        "assistant_empty_prompt": "Assistant sans invite ni description ignoré ({{name}}).",
+        "unsupported_block_type": "Certains types de blocs de message Cherry Studio seront conservés en Markdown lisible.",
+        "provider_import_failed": "Échec de l’import du fournisseur Cherry Studio ({{id}}).",
+        "missing_file": "Pièce jointe absente de la sauvegarde, ou disponible uniquement dans les zip ({{id}})."
+      }
     },
     "kelivoImport": {
       "source": "Kelivo",

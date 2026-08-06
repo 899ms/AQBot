@@ -1342,17 +1342,26 @@
       "title": "Cherry-Studio-Backup importieren",
       "selectFile": "Backup-Datei wählen",
       "uploadHint": "Hier klicken oder Cherry-Studio-Backup ablegen",
-      "supportedFormats": "Unterstützte Formate: .zip, .json (data.json)",
-      "exportPath": "Exportpfad: Cherry Studio Einstellungen → Dateneinstellungen → Daten exportieren",
+      "supportedFormats": "Supported formats: .zip, .json (data.json); full backup zip also supported (assistants → roles)",
+      "exportPath": "Export Data: Settings → Data Settings → Export Data; Full backup: Settings → Backup",
       "preview": "Importvorschau",
       "conversations": "Unterhaltungen",
       "messages": "Nachrichten",
       "files": "Dateien",
+      "roles": "Rollen",
       "providers": "Anbieter",
       "duplicates": "Duplikate",
       "importProviderKeys": "Referenzierte Anbieter und API-Schlüssel ebenfalls importieren",
       "emptyTopics": "{{count}} leere Themen werden übersprungen",
-      "success": "Cherry-Studio-Backup importiert"
+      "emptyAssistants": "{{count}} Assistenten ohne Prompt werden übersprungen",
+      "success": "Cherry-Studio-Backup importiert",
+      "warnings": {
+        "full_backup_roles_only": "Cherry-Studio-Vollbackup erkannt (ohne data.json). Assistenten werden als Rollen importiert. Gesprächsverlauf in IndexedDB wird noch nicht importiert — nutzen Sie Einstellungen → Dateneinstellungen → Daten exportieren für Chats.",
+        "assistant_empty_prompt": "Assistent ohne Prompt oder Beschreibung übersprungen ({{name}}).",
+        "unsupported_block_type": "Einige Cherry-Studio-Nachrichtenblocktypen werden als lesbares Markdown erhalten.",
+        "provider_import_failed": "Import des Cherry-Studio-Anbieters fehlgeschlagen ({{id}}).",
+        "missing_file": "Anhang fehlt im Backup oder ist nur in ZIP-Backups verfügbar ({{id}})."
+      }
     },
     "kelivoImport": {
       "source": "Kelivo",

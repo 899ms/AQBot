@@ -1278,17 +1278,26 @@
       "title": "Import Cherry Studio Backup",
       "selectFile": "Select backup file",
       "uploadHint": "Click or drag a Cherry Studio backup here",
-      "supportedFormats": "Supported formats: .zip, .json (data.json)",
-      "exportPath": "Export path: Cherry Studio Settings -> Data Settings -> Export Data",
+      "supportedFormats": "Supported formats: .zip, .json (data.json); full backup zip also supported (assistants → roles)",
+      "exportPath": "Export Data: Settings → Data Settings → Export Data; Full backup: Settings → Backup",
       "preview": "Import Preview",
       "conversations": "Conversations",
       "messages": "Messages",
       "files": "Files",
+      "roles": "Roles",
       "providers": "Providers",
       "duplicates": "Duplicates",
       "importProviderKeys": "Also import referenced providers and API keys",
       "emptyTopics": "{{count}} empty topics will be skipped",
-      "success": "Cherry Studio backup imported"
+      "emptyAssistants": "Will skip {{count}} assistants with empty prompts",
+      "success": "Cherry Studio backup imported",
+      "warnings": {
+        "full_backup_roles_only": "Detected a Cherry Studio full backup (no data.json). Assistants will be imported as roles. Conversation history in IndexedDB is not imported yet — use Settings → Data Settings → Export Data for chats.",
+        "assistant_empty_prompt": "Skipped assistant with no prompt or description ({{name}}).",
+        "unsupported_block_type": "Some Cherry Studio message block types will be preserved as readable Markdown.",
+        "provider_import_failed": "Failed to import Cherry Studio provider ({{id}}).",
+        "missing_file": "Attachment is missing from the backup, or is only available in zip backups ({{id}})."
+      }
     },
     "kelivoImport": {
       "source": "Kelivo",

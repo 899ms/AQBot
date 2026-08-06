@@ -132,8 +132,12 @@ export interface ThirdPartyImportSummary {
   messageCount: number;
   fileCount: number;
   importableProviderCount: number;
+  /** Cherry Studio assistants importable as roles */
+  importableRoleCount?: number;
   skippedEmptyTopicCount: number;
+  skippedEmptyAssistantCount?: number;
   duplicateConversationCount: number;
+  duplicateRoleCount?: number;
   warnings: ThirdPartyImportWarning[];
 }
 
@@ -146,7 +150,10 @@ export interface ThirdPartyImportResult {
   importedMessageCount: number;
   importedFileCount: number;
   importedProviderCount: number;
+  importedRoleCount?: number;
   skippedDuplicateConversationCount: number;
+  skippedDuplicateRoleCount?: number;
+  skippedEmptyAssistantCount?: number;
   warnings: ThirdPartyImportWarning[];
 }
 

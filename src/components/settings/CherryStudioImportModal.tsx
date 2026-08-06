@@ -3,6 +3,7 @@ import { Alert, App, Checkbox, Divider, Modal, Space, Typography } from 'antd';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@/lib/invoke';
 import { getErrorMessage } from '@/lib/errorMessage';
+import { getThirdPartyImportWarningMessage } from '@/lib/thirdPartyImportWarnings';
 import type { CherryStudioImportResult, CherryStudioImportSummary } from '@/types';
 import { ThirdPartyImportUpload } from './ThirdPartyImportUpload';
 
@@ -126,6 +127,7 @@ export function CherryStudioImportModal({ open, onClose, onImported }: Props) {
               <CountItem label={t('settings.cherryImport.conversations')} value={summary.conversationCount} />
               <CountItem label={t('settings.cherryImport.messages')} value={summary.messageCount} />
               <CountItem label={t('settings.cherryImport.files')} value={summary.fileCount} />
+              <CountItem label={t('settings.cherryImport.roles')} value={summary.importableRoleCount ?? 0} />
               <CountItem label={t('settings.cherryImport.providers')} value={summary.importableProviderCount} />
               <CountItem label={t('settings.cherryImport.duplicates')} value={summary.duplicateConversationCount} />
             </Space>
@@ -143,6 +145,15 @@ export function CherryStudioImportModal({ open, onClose, onImported }: Props) {
                 message={t('settings.cherryImport.emptyTopics', { count: summary.skippedEmptyTopicCount })}
               />
             )}
+            {(summary.skippedEmptyAssistantCount ?? 0) > 0 && (
+              <Alert
+                type="info"
+                showIcon
+                message={t('settings.cherryImport.emptyAssistants', {
+                  count: summary.skippedEmptyAssistantCount,
+                })}
+              />
+            )}
             {summary.warnings.length > 0 && (
               <Space orientation="vertical" size={6} style={{ width: '100%' }}>
                 {summary.warnings.map((warning, index) => (
@@ -150,7 +161,7 @@ export function CherryStudioImportModal({ open, onClose, onImported }: Props) {
                     key={`${warning.code}-${warning.sourceId ?? index}`}
                     type="warning"
                     showIcon
-                    message={warning.message}
+                    message={getThirdPartyImportWarningMessage(warning, t, 'cherryImport')}
                   />
                 ))}
               </Space>

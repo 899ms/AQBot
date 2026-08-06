@@ -35,8 +35,11 @@ describe('CherryStudioImportModal', () => {
           messageCount: 12,
           fileCount: 1,
           importableProviderCount: 1,
+          importableRoleCount: 3,
           skippedEmptyTopicCount: 1,
+          skippedEmptyAssistantCount: 1,
           duplicateConversationCount: 0,
+          duplicateRoleCount: 0,
           warnings: [{ code: 'unsupported_block_type', message: 'Tool block preserved', sourceId: 'b1' }],
         };
       }
@@ -76,6 +79,7 @@ describe('CherryStudioImportModal', () => {
     expect(await screen.findByText('settings.cherryImport.preview')).toBeInTheDocument();
     expect(screen.getByText('2')).toBeInTheDocument();
     expect(screen.getByText('12')).toBeInTheDocument();
+    // Mock t() returns the key; helper falls back to backend message when key is untranslated.
     expect(screen.getByText('Tool block preserved')).toBeInTheDocument();
   });
 

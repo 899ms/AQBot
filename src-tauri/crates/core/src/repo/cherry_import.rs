@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::crypto::{decrypt_key, encrypt_key};
 use crate::entity::{
-    conversations, import_jobs, messages, models, provider_keys, providers, stored_files,
+    conversations, import_jobs, messages, models, provider_keys, providers, roles, stored_files,
 };
 use crate::error::{AQBotError, Result};
 use crate::file_store::FileStore;
@@ -33,8 +33,14 @@ pub struct CherryStudioImportSummary {
     pub message_count: u32,
     pub file_count: u32,
     pub importable_provider_count: u32,
+    #[serde(default)]
+    pub importable_role_count: u32,
     pub skipped_empty_topic_count: u32,
+    #[serde(default)]
+    pub skipped_empty_assistant_count: u32,
     pub duplicate_conversation_count: u32,
+    #[serde(default)]
+    pub duplicate_role_count: u32,
     pub warnings: Vec<CherryStudioImportWarning>,
 }
 
@@ -52,7 +58,13 @@ pub struct CherryStudioImportResult {
     pub imported_message_count: u32,
     pub imported_file_count: u32,
     pub imported_provider_count: u32,
+    #[serde(default)]
+    pub imported_role_count: u32,
     pub skipped_duplicate_conversation_count: u32,
+    #[serde(default)]
+    pub skipped_duplicate_role_count: u32,
+    #[serde(default)]
+    pub skipped_empty_assistant_count: u32,
     pub warnings: Vec<CherryStudioImportWarning>,
 }
 
@@ -185,9 +197,58 @@ struct CherryProviderModel {
 #[serde(rename_all = "camelCase")]
 struct CherryAssistant {
     #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    emoji: Option<String>,
+    #[serde(default)]
     prompt: Option<String>,
     #[serde(default)]
+    description: Option<String>,
+    /// Cherry stores assistant groups as a string array (sometimes a single string).
+    #[serde(default, deserialize_with = "deserialize_string_list")]
+    group: Vec<String>,
+    #[serde(default)]
+    settings: Option<CherryAssistantSettings>,
+    #[serde(default)]
     topics: Vec<CherryAssistantTopic>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CherryAssistantSettings {
+    #[serde(default)]
+    temperature: Option<f64>,
+    #[serde(default)]
+    enable_temperature: Option<bool>,
+    #[serde(default, rename = "topP")]
+    top_p: Option<f64>,
+    #[serde(default, rename = "enableTopP")]
+    enable_top_p: Option<bool>,
+}
+
+fn deserialize_string_list<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<Value>::deserialize(deserializer)?;
+    Ok(match value {
+        Some(Value::Array(items)) => items
+            .into_iter()
+            .filter_map(|item| item.as_str().map(|s| s.trim().to_string()))
+            .filter(|s| !s.is_empty())
+            .collect(),
+        Some(Value::String(raw)) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                Vec::new()
+            } else {
+                vec![trimmed.to_string()]
+            }
+        }
+        _ => Vec::new(),
+    })
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -307,6 +368,8 @@ pub async fn import_cherry_studio_backup_from_path_with_root(
             &mut created_paths,
         )
         .await?;
+
+        import_roles_from_assistants(&txn, &backup, &mut result).await?;
 
         for topic in backup.indexed_db.topics.iter() {
             if topic.messages.is_empty() {
@@ -490,16 +553,47 @@ struct ParsedBackup {
 }
 
 fn parse_cherry_backup(path: &Path) -> Result<ParsedBackup> {
-    let bytes = if path
+    if path.is_dir() {
+        return parse_full_backup_from_dir(path);
+    }
+
+    let is_zip = path
         .extension()
         .and_then(|value| value.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
-    {
-        read_data_json_from_zip(path)?
-    } else {
-        std::fs::read(path)?
-    };
-    let backup = serde_json::from_slice::<CherryBackup>(&bytes).map_err(|e| {
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"));
+
+    if is_zip {
+        return parse_cherry_backup_zip(path);
+    }
+
+    // Plain data.json export
+    let bytes = std::fs::read(path)?;
+    parse_data_json_bytes(&bytes)
+}
+
+fn parse_cherry_backup_zip(path: &Path) -> Result<ParsedBackup> {
+    let file = File::open(path)?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|e| AQBotError::Validation(format!("Invalid Cherry Studio zip backup: {e}")))?;
+
+    if let Some(bytes) = read_zip_entry_bytes(&mut archive, "data.json")? {
+        return parse_data_json_bytes(&bytes);
+    }
+
+    // Full app backup: metadata.json + Local Storage + IndexedDB (no data.json)
+    if zip_looks_like_full_backup(&mut archive) {
+        return parse_full_backup_from_zip(&mut archive);
+    }
+
+    Err(AQBotError::Validation(
+        "Cherry Studio backup is missing data.json. \
+         Use Settings → Data Settings → Export Data, or a full backup zip that includes Local Storage."
+            .into(),
+    ))
+}
+
+fn parse_data_json_bytes(bytes: &[u8]) -> Result<ParsedBackup> {
+    let backup = serde_json::from_slice::<CherryBackup>(bytes).map_err(|e| {
         AQBotError::Validation(format!("Invalid Cherry Studio backup data.json: {e}"))
     })?;
     let mut warnings = Vec::new();
@@ -507,16 +601,402 @@ fn parse_cherry_backup(path: &Path) -> Result<ParsedBackup> {
     Ok(ParsedBackup { backup, warnings })
 }
 
-fn read_data_json_from_zip(path: &Path) -> Result<Vec<u8>> {
-    let file = File::open(path)?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|e| AQBotError::Validation(format!("Invalid Cherry Studio zip backup: {e}")))?;
-    let mut entry = archive
-        .by_name("data.json")
-        .map_err(|_| AQBotError::Validation("Cherry Studio backup is missing data.json".into()))?;
-    let mut data = Vec::new();
-    entry.read_to_end(&mut data)?;
-    Ok(data)
+fn read_zip_entry_bytes(
+    archive: &mut zip::ZipArchive<File>,
+    name: &str,
+) -> Result<Option<Vec<u8>>> {
+    match archive.by_name(name) {
+        Ok(mut entry) => {
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data)?;
+            Ok(Some(data))
+        }
+        Err(zip::result::ZipError::FileNotFound) => Ok(None),
+        Err(e) => Err(AQBotError::Validation(format!(
+            "Invalid Cherry Studio zip backup: {e}"
+        ))),
+    }
+}
+
+fn zip_looks_like_full_backup(archive: &mut zip::ZipArchive<File>) -> bool {
+    let mut has_metadata = false;
+    let mut has_local_storage = false;
+    for i in 0..archive.len() {
+        let Ok(entry) = archive.by_index(i) else {
+            continue;
+        };
+        let name = entry.name().replace('\\', "/");
+        if name == "metadata.json" || name.ends_with("/metadata.json") {
+            has_metadata = true;
+        }
+        if name.contains("Local Storage/") {
+            has_local_storage = true;
+        }
+    }
+    has_metadata || has_local_storage
+}
+
+fn parse_full_backup_from_zip(archive: &mut zip::ZipArchive<File>) -> Result<ParsedBackup> {
+    let mut leveldb_blobs = Vec::new();
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i).map_err(|e| {
+            AQBotError::Validation(format!("Invalid Cherry Studio zip backup: {e}"))
+        })?;
+        let name = entry.name().replace('\\', "/");
+        if is_local_storage_leveldb_file(&name) {
+            let mut data = Vec::new();
+            entry.read_to_end(&mut data)?;
+            leveldb_blobs.push(data);
+        }
+    }
+    build_backup_from_local_storage_blobs(leveldb_blobs, true)
+}
+
+fn parse_full_backup_from_dir(dir: &Path) -> Result<ParsedBackup> {
+    let data_json = dir.join("data.json");
+    if data_json.is_file() {
+        let bytes = std::fs::read(&data_json)?;
+        return parse_data_json_bytes(&bytes);
+    }
+
+    let ls_dir = dir.join("Local Storage").join("leveldb");
+    if !ls_dir.is_dir() {
+        // Also accept a directory that is already the unzipped full backup root
+        return Err(AQBotError::Validation(
+            "Not a recognized Cherry Studio backup. Expected data.json or a full backup \
+             folder containing Local Storage/leveldb (from Settings → Backup)."
+                .into(),
+        ));
+    }
+
+    let mut leveldb_blobs = Vec::new();
+    for entry in std::fs::read_dir(&ls_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if is_leveldb_data_filename(name) {
+            leveldb_blobs.push(std::fs::read(&path)?);
+        }
+    }
+    build_backup_from_local_storage_blobs(leveldb_blobs, true)
+}
+
+fn is_local_storage_leveldb_file(zip_path: &str) -> bool {
+    let normalized = zip_path.replace('\\', "/");
+    let Some(file_name) = normalized.rsplit('/').next() else {
+        return false;
+    };
+    normalized.contains("Local Storage/") && is_leveldb_data_filename(file_name)
+}
+
+fn is_leveldb_data_filename(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".log") || lower.ends_with(".ldb")
+}
+
+/// Reconstruct a `CherryBackup` from Chromium Local Storage LevelDB files found in a full backup.
+///
+/// Cherry stores redux-persist state under `persist:cherry-studio` as a UTF-16LE JSON string.
+/// We scan LevelDB log/table bytes for the largest parseable `{"assistants":...}` root.
+fn build_backup_from_local_storage_blobs(
+    blobs: Vec<Vec<u8>>,
+    is_full_backup: bool,
+) -> Result<ParsedBackup> {
+    let Some(persist_root) = extract_largest_persist_root(&blobs) else {
+        return Err(AQBotError::Validation(
+            "Could not read Cherry Studio assistants from full backup Local Storage. \
+             Try Settings → Data Settings → Export Data (data.json) instead."
+                .into(),
+        ));
+    };
+
+    let mut local_storage = HashMap::new();
+    local_storage.insert("persist:cherry-studio".to_string(), persist_root);
+
+    let backup = CherryBackup {
+        local_storage,
+        indexed_db: CherryIndexedDb::default(),
+    };
+
+    let mut warnings = Vec::new();
+    if is_full_backup {
+        warnings.push(warning(
+            "full_backup_roles_only",
+            "Detected a Cherry Studio full backup (no data.json). \
+             Assistants will be imported as roles. Conversation history in IndexedDB is not imported yet — \
+             use Settings → Data Settings → Export Data for chats.",
+            None,
+        ));
+    }
+    collect_block_warnings(&backup, &mut warnings);
+    Ok(ParsedBackup { backup, warnings })
+}
+
+fn extract_largest_persist_root(blobs: &[Vec<u8>]) -> Option<Value> {
+    // Prefer direct root that starts with {"assistants" (common in real backups).
+    // Also handle serde key order like {"_persist":...,"assistants":...} by locating the
+    // "assistants" key and walking back to the nearest '{' candidate.
+    // LevelDB log blocks (~32KiB) inject binary control bytes into long UTF-16 values;
+    // parsing is intentionally multi-layered (strict → sanitize → per-section).
+    let direct_marker = utf16le_bytes(r#"{"assistants""#);
+    let assistants_key = utf16le_bytes(r#""assistants""#);
+    let brace = utf16le_bytes("{");
+    let mut best: Option<(usize, Value)> = None;
+
+    let consider = |best: &mut Option<(usize, Value)>, value: Value| {
+        let score = estimate_persist_score(&value);
+        if best.as_ref().is_none_or(|(best_score, _)| score > *best_score) {
+            *best = Some((score, value));
+        }
+    };
+
+    for blob in blobs {
+        // Path A: root begins with {"assistants"
+        let mut start = 0usize;
+        while let Some(rel) = find_bytes(blob, &direct_marker, start) {
+            let idx = start + rel;
+            if let Some(value) = try_parse_utf16le_json_at(blob, idx) {
+                consider(&mut best, value);
+            }
+            start = idx + 2;
+        }
+
+        // Path B: find "assistants" key, walk back over a few '{' candidates
+        start = 0;
+        while let Some(rel) = find_bytes(blob, &assistants_key, start) {
+            let key_pos = start + rel;
+            let window_start = key_pos.saturating_sub(400);
+            let mut search = window_start;
+            let mut brace_positions = Vec::new();
+            while let Some(brel) = find_bytes(blob, &brace, search) {
+                let bpos = search + brel;
+                if bpos >= key_pos {
+                    break;
+                }
+                brace_positions.push(bpos);
+                search = bpos + 2;
+            }
+            // Try nearest braces first (rightmost before the key)
+            for &bpos in brace_positions.iter().rev().take(8) {
+                if let Some(value) = try_parse_utf16le_json_at(blob, bpos) {
+                    if value.get("assistants").is_some() {
+                        consider(&mut best, value);
+                        break;
+                    }
+                }
+            }
+
+            // Path C: section-only recovery — decode UTF-16 from the key and pull
+            // individual redux-persist slices (assistants/llm/...). This survives
+            // LevelDB 32KiB block headers that corrupt a full-root parse.
+            if let Some(text) = decode_utf16le_from(blob, key_pos) {
+                if let Some(value) = reconstruct_persist_from_sections(&text) {
+                    consider(&mut best, value);
+                }
+            }
+
+            start = key_pos + 2;
+        }
+    }
+
+    best.map(|(_, value)| value)
+}
+
+fn estimate_persist_score(value: &Value) -> usize {
+    let mut score = 1usize;
+    if let Some(assistants) = value.get("assistants") {
+        match assistants {
+            Value::String(raw) => score = score.saturating_add(raw.len()),
+            other => score = score.saturating_add(other.to_string().len()),
+        }
+    }
+    if value.get("llm").is_some() {
+        score = score.saturating_add(10_000);
+    }
+    score
+}
+
+fn utf16le_bytes(s: &str) -> Vec<u8> {
+    s.encode_utf16().flat_map(|unit| unit.to_le_bytes()).collect()
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
+    if needle.is_empty() || start >= haystack.len() {
+        return None;
+    }
+    haystack[start..]
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn decode_utf16le_from(data: &[u8], start: usize) -> Option<String> {
+    // Chromium LevelDB may place UTF-16LE values at odd file offsets.
+    // Do NOT align `start` to even file positions — that mis-decodes real backups.
+    let max_bytes = 4_000_000usize;
+    let available = data.len().saturating_sub(start);
+    let take = available.min(max_bytes);
+    let take = take - (take % 2);
+    if take < 2 {
+        return None;
+    }
+    let units: Vec<u16> = data[start..start + take]
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    Some(String::from_utf16_lossy(&units))
+}
+
+/// Strip C0 control bytes that LevelDB log block headers inject into long values.
+/// Keeps `\n` `\r` `\t` so legitimate multiline prompts stay intact.
+fn sanitize_json_control_chars(input: &str) -> String {
+    input
+        .chars()
+        .map(|ch| {
+            let code = ch as u32;
+            if code < 0x20 && ch != '\n' && ch != '\r' && ch != '\t' {
+                ' '
+            } else if code == 0x7f {
+                ' '
+            } else {
+                ch
+            }
+        })
+        .collect()
+}
+
+fn try_parse_json_value(text: &str) -> Option<Value> {
+    // Strict first value (allows trailing garbage after a complete JSON value).
+    {
+        let mut de = serde_json::Deserializer::from_str(text);
+        if let Ok(value) = Value::deserialize(&mut de) {
+            return Some(value);
+        }
+    }
+
+    // Shrink from the end in case trailing LevelDB noise was included.
+    let mut len = text.len();
+    while len > 64 {
+        while len > 0 && !text.is_char_boundary(len) {
+            len -= 1;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(&text[..len]) {
+            return Some(value);
+        }
+        len = len.saturating_sub(1024);
+    }
+    None
+}
+
+fn try_parse_utf16le_json_at(data: &[u8], start: usize) -> Option<Value> {
+    let text = decode_utf16le_from(data, start)?;
+
+    // 1) Strict
+    if let Some(value) = try_parse_json_value(&text) {
+        if value.get("assistants").is_some() {
+            return Some(value);
+        }
+    }
+
+    // 2) Sanitize control characters (LevelDB ~32KiB block headers)
+    let cleaned = sanitize_json_control_chars(&text);
+    if cleaned != text {
+        if let Some(value) = try_parse_json_value(&cleaned) {
+            if value.get("assistants").is_some() {
+                return Some(value);
+            }
+        }
+    }
+
+    // 3) Rebuild from individual sections when the full root is unrecoverable
+    if let Some(value) = reconstruct_persist_from_sections(&text) {
+        return Some(value);
+    }
+    if cleaned != text {
+        if let Some(value) = reconstruct_persist_from_sections(&cleaned) {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+/// Recover redux-persist slices one key at a time.
+/// Real Cherry full backups often have a clean `assistants` section (<32KiB) even when
+/// later sections or block headers corrupt a whole-root parse.
+fn reconstruct_persist_from_sections(text: &str) -> Option<Value> {
+    let cleaned = sanitize_json_control_chars(text);
+    let sources = if cleaned == text {
+        vec![text]
+    } else {
+        vec![text, cleaned.as_str()]
+    };
+
+    let section_keys = [
+        "assistants",
+        "llm",
+        "settings",
+        "mcp",
+        "websearch",
+        "backup",
+        "paintings",
+        "codeTools",
+        "nutstore",
+        "_persist",
+    ];
+
+    let mut recovered = serde_json::Map::new();
+    for source in sources {
+        for key in section_keys {
+            if recovered.contains_key(key) {
+                continue;
+            }
+            if let Some(value) = extract_json_field(source, key) {
+                recovered.insert(key.to_string(), value);
+            }
+        }
+    }
+
+    if !recovered.contains_key("assistants") {
+        return None;
+    }
+    Some(Value::Object(recovered))
+}
+
+/// Extract `"key": <json-value>` from a (possibly truncated / dirty) text buffer.
+fn extract_json_field(text: &str, key: &str) -> Option<Value> {
+    let patterns = [
+        format!("\"{key}\":"),
+        format!("\"{key}\" :"),
+    ];
+    for pattern in &patterns {
+        let mut search_from = 0usize;
+        while let Some(rel) = text[search_from..].find(pattern.as_str()) {
+            let idx = search_from + rel + pattern.len();
+            let rest = text[idx..].trim_start();
+            if rest.is_empty() {
+                break;
+            }
+            // Prefer sanitized remainder so embedded C0 bytes don't abort the value.
+            let rest_clean = sanitize_json_control_chars(rest);
+            let mut de = serde_json::Deserializer::from_str(&rest_clean);
+            if let Ok(value) = Value::deserialize(&mut de) {
+                return Some(value);
+            }
+            // Also try the unsanitized remainder (clean data.json-like text).
+            let mut de = serde_json::Deserializer::from_str(rest);
+            if let Ok(value) = Value::deserialize(&mut de) {
+                return Some(value);
+            }
+            search_from = search_from + rel + 1;
+        }
+    }
+    None
 }
 
 async fn summarize_backup(
@@ -553,7 +1033,245 @@ async fn summarize_backup(
         .filter(|provider| provider.api_key.as_deref().is_some_and(is_importable_key))
         .count() as u32;
 
+    let assistants = collect_assistants(backup);
+    for assistant in &assistants {
+        match classify_assistant_for_role(assistant) {
+            AssistantRoleClass::Importable => {
+                summary.importable_role_count += 1;
+                if role_already_imported(db, assistant).await? {
+                    summary.duplicate_role_count += 1;
+                }
+            }
+            AssistantRoleClass::Empty => summary.skipped_empty_assistant_count += 1,
+            AssistantRoleClass::SkipDefault => {}
+        }
+    }
+
     Ok(summary)
+}
+
+const CHERRY_ROLE_SOURCE_KIND: &str = "cherry_studio";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AssistantRoleClass {
+    Importable,
+    Empty,
+    SkipDefault,
+}
+
+fn classify_assistant_for_role(assistant: &CherryAssistant) -> AssistantRoleClass {
+    let id = assistant.id.as_deref().unwrap_or("").trim();
+    let prompt = assistant.prompt.as_deref().unwrap_or("").trim();
+    let description = assistant.description.as_deref().unwrap_or("").trim();
+    let name = assistant.name.as_deref().unwrap_or("").trim();
+
+    // Default empty assistant is noise in the roles list.
+    if id == "default" && prompt.is_empty() && description.is_empty() {
+        return AssistantRoleClass::SkipDefault;
+    }
+    if name.is_empty() {
+        return AssistantRoleClass::Empty;
+    }
+    if prompt.is_empty() && description.is_empty() {
+        return AssistantRoleClass::Empty;
+    }
+    AssistantRoleClass::Importable
+}
+
+fn assistant_source_ref(assistant: &CherryAssistant) -> Option<String> {
+    assistant
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn assistant_system_prompt(assistant: &CherryAssistant) -> Option<String> {
+    let prompt = assistant.prompt.as_deref().unwrap_or("").trim();
+    if !prompt.is_empty() {
+        return Some(prompt.to_string());
+    }
+    let description = assistant.description.as_deref().unwrap_or("").trim();
+    if !description.is_empty() {
+        return Some(description.to_string());
+    }
+    None
+}
+
+async fn role_already_imported<C>(db: &C, assistant: &CherryAssistant) -> Result<bool>
+where
+    C: ConnectionTrait,
+{
+    let Some(source_ref) = assistant_source_ref(assistant) else {
+        return Ok(false);
+    };
+    let existing = roles::Entity::find()
+        .filter(roles::Column::SourceKind.eq(CHERRY_ROLE_SOURCE_KIND))
+        .filter(roles::Column::SourceRef.eq(source_ref))
+        .one(db)
+        .await?;
+    Ok(existing.is_some())
+}
+
+fn collect_assistants(backup: &CherryBackup) -> Vec<CherryAssistant> {
+    let Some(assistants_value) = parse_persist_section(backup, "assistants") else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    let mut seen_ids = HashSet::new();
+
+    let mut push_assistant = |assistant: CherryAssistant| {
+        let id = assistant
+            .id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if let Some(ref id) = id {
+            if !seen_ids.insert(id.clone()) {
+                return;
+            }
+        }
+        out.push(assistant);
+    };
+
+    if let Some(default_assistant) = assistants_value
+        .get("defaultAssistant")
+        .and_then(|value| serde_json::from_value::<CherryAssistant>(value.clone()).ok())
+    {
+        push_assistant(default_assistant);
+    }
+
+    if let Some(assistants) = assistants_value.get("assistants").and_then(Value::as_array) {
+        for assistant_value in assistants {
+            if let Ok(assistant) =
+                serde_json::from_value::<CherryAssistant>(assistant_value.clone())
+            {
+                push_assistant(assistant);
+            }
+        }
+    }
+
+    out
+}
+
+async fn import_roles_from_assistants<C>(
+    db: &C,
+    backup: &CherryBackup,
+    result: &mut CherryStudioImportResult,
+) -> Result<()>
+where
+    C: ConnectionTrait,
+{
+    for assistant in collect_assistants(backup) {
+        match classify_assistant_for_role(&assistant) {
+            AssistantRoleClass::SkipDefault => continue,
+            AssistantRoleClass::Empty => {
+                result.skipped_empty_assistant_count += 1;
+                let display_name = assistant
+                    .name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| {
+                        assistant
+                            .id
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                    })
+                    .unwrap_or("unknown");
+                result.warnings.push(warning(
+                    "assistant_empty_prompt",
+                    format!(
+                        "Skipped Cherry Studio assistant '{display_name}' because it has no prompt or description."
+                    ),
+                    // Prefer display name for UI i18n interpolation ({{name}} / {{id}}).
+                    Some(display_name.to_string()),
+                ));
+                continue;
+            }
+            AssistantRoleClass::Importable => {}
+        }
+
+        if role_already_imported(db, &assistant).await? {
+            result.skipped_duplicate_role_count += 1;
+            continue;
+        }
+
+        let Some(system_prompt) = assistant_system_prompt(&assistant) else {
+            result.skipped_empty_assistant_count += 1;
+            continue;
+        };
+
+        let name = assistant
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Cherry Studio Assistant")
+            .to_string();
+        let emoji = assistant
+            .emoji
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let description = assistant
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        let tags = assistant.group.clone();
+        let (temperature, top_p) = assistant_temperature_top_p(&assistant);
+        let now = now_ts();
+        let source_ref = assistant_source_ref(&assistant);
+
+        roles::ActiveModel {
+            id: Set(gen_id()),
+            name: Set(name),
+            description: Set(description),
+            system_prompt: Set(system_prompt),
+            opening_message: Set(None),
+            opening_questions_json: Set("[]".to_string()),
+            tags_json: Set(serde_json::to_string(&tags).unwrap_or_else(|_| "[]".to_string())),
+            avatar: Set(emoji.clone()),
+            avatar_type: Set(emoji.as_ref().map(|_| "emoji".to_string())),
+            avatar_value: Set(emoji),
+            temperature: Set(temperature),
+            top_p: Set(top_p),
+            enabled_mcp_server_ids_json: Set("[]".to_string()),
+            enabled_skill_names_json: Set("[]".to_string()),
+            source_kind: Set(CHERRY_ROLE_SOURCE_KIND.to_string()),
+            source_ref: Set(source_ref),
+            created_at: Set(now),
+            updated_at: Set(now),
+        }
+        .insert(db)
+        .await?;
+        result.imported_role_count += 1;
+    }
+    Ok(())
+}
+
+fn assistant_temperature_top_p(assistant: &CherryAssistant) -> (Option<f64>, Option<f64>) {
+    let Some(settings) = assistant.settings.as_ref() else {
+        return (None, None);
+    };
+    let temperature = if settings.enable_temperature.unwrap_or(true) {
+        settings.temperature
+    } else {
+        None
+    };
+    let top_p = if settings.enable_top_p.unwrap_or(true) {
+        settings.top_p
+    } else {
+        None
+    };
+    (temperature, top_p)
 }
 
 fn collect_block_warnings(backup: &CherryBackup, warnings: &mut Vec<CherryStudioImportWarning>) {
@@ -1345,6 +2063,7 @@ mod tests {
                         "defaultAssistant": {
                             "id": "default",
                             "name": "Default Assistant",
+                            "emoji": "😀",
                             "prompt": "system prompt",
                             "topics": [{
                                 "id": "topic-1",
@@ -1355,7 +2074,42 @@ mod tests {
                                 "messages": []
                             }]
                         },
-                        "assistants": []
+                        "assistants": [
+                            {
+                                "id": "asst-pm",
+                                "name": "产品经理",
+                                "emoji": "👨‍💼",
+                                "prompt": "你是一名产品经理。",
+                                "description": "产品角色",
+                                "group": ["职业", "商业"],
+                                "type": "assistant",
+                                "topics": [],
+                                "settings": {
+                                    "temperature": 0.7,
+                                    "enableTemperature": true,
+                                    "topP": 0.9,
+                                    "enableTopP": true
+                                }
+                            },
+                            {
+                                "id": "asst-sales",
+                                "name": "销售员",
+                                "emoji": "💼",
+                                "prompt": "",
+                                "description": "扮演销售员推销产品。",
+                                "type": "assistant",
+                                "topics": []
+                            },
+                            {
+                                "id": "asst-empty",
+                                "name": "空助手",
+                                "emoji": "❔",
+                                "prompt": "",
+                                "description": "",
+                                "type": "assistant",
+                                "topics": []
+                            }
+                        ]
                     })),
                     "llm": encoded_persist(json!({
                         "providers": [{
@@ -1498,6 +2252,9 @@ mod tests {
         assert_eq!(summary.message_count, 3);
         assert_eq!(summary.file_count, 1);
         assert_eq!(summary.importable_provider_count, 1);
+        // default + 产品经理 + 销售员 (empty skipped)
+        assert_eq!(summary.importable_role_count, 3);
+        assert_eq!(summary.skipped_empty_assistant_count, 1);
         assert_eq!(summary.skipped_empty_topic_count, 0);
         assert!(summary.duplicate_conversation_count == 0);
         assert!(summary
@@ -1535,6 +2292,12 @@ mod tests {
         assert_eq!(result.imported_message_count, 3);
         assert_eq!(result.imported_file_count, 1);
         assert_eq!(result.imported_provider_count, 1);
+        assert_eq!(result.imported_role_count, 3);
+        assert_eq!(result.skipped_empty_assistant_count, 1);
+        assert!(result
+            .warnings
+            .iter()
+            .any(|warning| warning.code == "assistant_empty_prompt"));
 
         let conversation = conversations::Entity::find_by_id("topic-1")
             .one(&db.conn)
@@ -1544,6 +2307,31 @@ mod tests {
         assert_eq!(conversation.title, "Imported topic");
         assert_eq!(conversation.system_prompt.as_deref(), Some("system prompt"));
         assert_eq!(conversation.message_count, 3);
+
+        let imported_roles = roles::Entity::find()
+            .filter(roles::Column::SourceKind.eq("cherry_studio"))
+            .all(&db.conn)
+            .await
+            .unwrap();
+        assert_eq!(imported_roles.len(), 3);
+        let pm = imported_roles
+            .iter()
+            .find(|role| role.source_ref.as_deref() == Some("asst-pm"))
+            .unwrap();
+        assert_eq!(pm.name, "产品经理");
+        assert_eq!(pm.system_prompt, "你是一名产品经理。");
+        assert_eq!(pm.description.as_deref(), Some("产品角色"));
+        assert_eq!(pm.avatar.as_deref(), Some("👨‍💼"));
+        assert_eq!(pm.avatar_type.as_deref(), Some("emoji"));
+        assert_eq!(pm.temperature, Some(0.7));
+        assert_eq!(pm.top_p, Some(0.9));
+        let tags: Vec<String> = serde_json::from_str(&pm.tags_json).unwrap();
+        assert_eq!(tags, vec!["职业".to_string(), "商业".to_string()]);
+        let sales = imported_roles
+            .iter()
+            .find(|role| role.source_ref.as_deref() == Some("asst-sales"))
+            .unwrap();
+        assert_eq!(sales.system_prompt, "扮演销售员推销产品。");
 
         let imported_messages = messages::Entity::find()
             .filter(messages::Column::ConversationId.eq("topic-1"))
@@ -1617,6 +2405,17 @@ mod tests {
         .unwrap();
         assert_eq!(duplicate.imported_conversation_count, 0);
         assert_eq!(duplicate.skipped_duplicate_conversation_count, 1);
+        assert_eq!(duplicate.imported_role_count, 0);
+        assert_eq!(duplicate.skipped_duplicate_role_count, 3);
+        assert_eq!(
+            roles::Entity::find()
+                .filter(roles::Column::SourceKind.eq("cherry_studio"))
+                .all(&db.conn)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
     }
 
     #[tokio::test]
@@ -1663,6 +2462,11 @@ mod tests {
             .unwrap()
             .is_empty());
         assert!(stored_files::Entity::find()
+            .all(&db.conn)
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(roles::Entity::find()
             .all(&db.conn)
             .await
             .unwrap()
@@ -1725,7 +2529,250 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(err.to_string().contains("data.json"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("data.json") || msg.contains("full backup"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    fn write_full_backup_zip(path: &Path, persist_root: serde_json::Value) {
+        write_full_backup_zip_with_options(path, persist_root, false);
+    }
+
+    /// When `inject_leveldb_controls` is true, insert C0 control bytes every 32KiB of
+    /// UTF-16 text — matching real Cherry full backups where LevelDB log block headers
+    /// corrupt a naive whole-root JSON parse.
+    fn write_full_backup_zip_with_options(
+        path: &Path,
+        persist_root: serde_json::Value,
+        inject_leveldb_controls: bool,
+    ) {
+        use std::io::Write;
+        use zip::write::SimpleFileOptions;
+
+        let file = File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        // Stored keeps binary UTF-16LE payloads bit-identical for tests.
+        let options = SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        zip.start_file("metadata.json", options).unwrap();
+        zip.write_all(
+            br#"{"version":6,"appName":"Cherry Studio","appVersion":"1.8.2"}"#,
+        )
+        .unwrap();
+
+        // Chromium Local Storage stores values as UTF-16LE
+        let json = serde_json::to_string(&persist_root).unwrap();
+        let mut utf16: Vec<u8> = json
+            .encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect();
+
+        if inject_leveldb_controls {
+            // Insert a single-byte control every 32KiB of *decoded* UTF-16 text
+            // (every 65536 payload bytes), shifting subsequent alignment like real logs.
+            let mut injected = Vec::with_capacity(utf16.len() + 16);
+            let mut text_chars = 0usize;
+            let mut i = 0usize;
+            while i + 1 < utf16.len() {
+                injected.push(utf16[i]);
+                injected.push(utf16[i + 1]);
+                text_chars += 1;
+                i += 2;
+                if text_chars > 0 && text_chars % 32768 == 0 {
+                    injected.push(0x03); // breaks strict JSON; lenient path must survive
+                }
+            }
+            utf16 = injected;
+        }
+
+        zip.start_file("Local Storage/leveldb/000001.log", options)
+            .unwrap();
+        // Prefix some junk bytes then the UTF-16 JSON payload (odd offset case covered by real backups)
+        zip.write_all(&[0x00, 0x01, 0x02, 0x03]).unwrap();
+        zip.write_all(&utf16).unwrap();
+        zip.finish().unwrap();
+    }
+
+    #[tokio::test]
+    async fn full_backup_zip_imports_assistants_as_roles() {
+        let dir = tempdir().unwrap();
+        let zip_path = dir.path().join("full-backup.zip");
+        // Mirror real redux-persist shape: section values are JSON strings.
+        let assistants_section = json!({
+            "defaultAssistant": {
+                "id": "default",
+                "name": "默认助手",
+                "emoji": "😀",
+                "prompt": "",
+                "topics": []
+            },
+            "assistants": [{
+                "id": "asst-fe",
+                "name": "前端工程师",
+                "emoji": "💻",
+                "prompt": "你是前端工程师。",
+                "description": "前端角色",
+                "group": ["职业"],
+                "topics": []
+            }]
+        });
+        let persist = json!({
+            "assistants": serde_json::to_string(&assistants_section).unwrap(),
+            "_persist": {"version": 1, "rehydrated": true}
+        });
+        write_full_backup_zip(&zip_path, persist);
+
+        let db = create_test_pool().await.unwrap();
+        let summary = scan_cherry_studio_import_from_path(&db.conn, &zip_path)
+            .await
+            .unwrap();
+        assert_eq!(summary.importable_role_count, 1);
+        assert_eq!(summary.conversation_count, 0);
+        assert!(summary
+            .warnings
+            .iter()
+            .any(|w| w.code == "full_backup_roles_only"));
+
+        let result = import_cherry_studio_backup_from_path_with_root(
+            &db.conn,
+            &[3u8; 32],
+            &zip_path,
+            CherryStudioImportOptions {
+                import_provider_keys: false,
+            },
+            &dir.path().join("docs"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.imported_role_count, 1);
+        assert_eq!(result.imported_conversation_count, 0);
+        let roles = roles::Entity::find()
+            .filter(roles::Column::SourceKind.eq("cherry_studio"))
+            .all(&db.conn)
+            .await
+            .unwrap();
+        assert_eq!(roles.len(), 1);
+        assert_eq!(roles[0].name, "前端工程师");
+        assert_eq!(roles[0].system_prompt, "你是前端工程师。");
+        assert_eq!(roles[0].avatar.as_deref(), Some("💻"));
+    }
+
+    #[tokio::test]
+    async fn full_backup_with_leveldb_control_bytes_still_imports_roles() {
+        let dir = tempdir().unwrap();
+        let zip_path = dir.path().join("full-backup-dirty.zip");
+
+        // Pad the assistants section so the overall persist root exceeds 32KiB of text,
+        // ensuring injected control bytes land inside the value (mirrors real backups).
+        let long_prompt = "角色设定。".repeat(4000);
+        let assistants_section = json!({
+            "defaultAssistant": {
+                "id": "default",
+                "name": "默认助手",
+                "prompt": "",
+                "topics": []
+            },
+            "assistants": [{
+                "id": "asst-long",
+                "name": "长提示词助手",
+                "emoji": "📝",
+                "prompt": long_prompt,
+                "description": "测试 LevelDB 控制字符宽松解析",
+                "topics": []
+            }]
+        });
+        // Also pad a later section so full-root parse is more likely to hit controls
+        let padded_settings = format!("{{\"showAssistants\":true,\"pad\":\"{}\"}}", "x".repeat(40000));
+        let persist = json!({
+            "assistants": serde_json::to_string(&assistants_section).unwrap(),
+            "settings": padded_settings,
+            "_persist": {"version": 1, "rehydrated": true}
+        });
+        write_full_backup_zip_with_options(&zip_path, persist, true);
+
+        let db = create_test_pool().await.unwrap();
+        let summary = scan_cherry_studio_import_from_path(&db.conn, &zip_path)
+            .await
+            .expect("lenient full-backup scan should succeed despite control bytes");
+        assert!(
+            summary.importable_role_count >= 1,
+            "expected at least the long-prompt assistant, got {summary:?}"
+        );
+
+        let result = import_cherry_studio_backup_from_path_with_root(
+            &db.conn,
+            &[5u8; 32],
+            &zip_path,
+            CherryStudioImportOptions::default(),
+            &dir.path().join("docs"),
+        )
+        .await
+        .unwrap();
+        assert!(result.imported_role_count >= 1);
+        let roles = roles::Entity::find()
+            .filter(roles::Column::SourceKind.eq("cherry_studio"))
+            .all(&db.conn)
+            .await
+            .unwrap();
+        assert!(roles.iter().any(|r| r.name == "长提示词助手"));
+    }
+
+    #[tokio::test]
+    async fn full_backup_directory_imports_assistants_as_roles() {
+        let dir = tempdir().unwrap();
+        let backup_dir = dir.path().join("cherry-full");
+        let ls_dir = backup_dir.join("Local Storage").join("leveldb");
+        std::fs::create_dir_all(&ls_dir).unwrap();
+        std::fs::write(
+            backup_dir.join("metadata.json"),
+            br#"{"version":6,"appName":"Cherry Studio"}"#,
+        )
+        .unwrap();
+
+        let persist = json!({
+            "assistants": encoded_persist(json!({
+                "defaultAssistant": {
+                    "id": "default",
+                    "name": "默认助手",
+                    "prompt": "",
+                    "topics": []
+                },
+                "assistants": [{
+                    "id": "asst-pm",
+                    "name": "产品经理",
+                    "prompt": "你是产品经理。",
+                    "emoji": "👨‍💼",
+                    "topics": []
+                }]
+            }))
+        });
+        let json = serde_json::to_string(&persist).unwrap();
+        let utf16: Vec<u8> = json
+            .encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect();
+        std::fs::write(ls_dir.join("000001.log"), utf16).unwrap();
+
+        let db = create_test_pool().await.unwrap();
+        let summary = scan_cherry_studio_import_from_path(&db.conn, &backup_dir)
+            .await
+            .unwrap();
+        assert_eq!(summary.importable_role_count, 1);
+
+        let result = import_cherry_studio_backup_from_path_with_root(
+            &db.conn,
+            &[4u8; 32],
+            &backup_dir,
+            CherryStudioImportOptions::default(),
+            &dir.path().join("docs"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.imported_role_count, 1);
     }
 
     #[tokio::test]

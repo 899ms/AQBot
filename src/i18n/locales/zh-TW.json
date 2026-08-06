@@ -1342,17 +1342,26 @@
       "title": "匯入 Cherry Studio 備份",
       "selectFile": "選擇備份檔案",
       "uploadHint": "點擊或拖曳 Cherry Studio 備份到此處",
-      "supportedFormats": "支援格式：.zip、.json（data.json）",
-      "exportPath": "匯出路徑：Cherry Studio 設定 → 資料設定 → 匯出資料",
+      "supportedFormats": "支援格式：.zip、.json（data.json）；也支援 Cherry 全量備份 zip（匯入助手為角色）",
+      "exportPath": "匯出資料：設定 → 資料設定 → 匯出資料；全量備份：設定 → 備份",
       "preview": "匯入預覽",
       "conversations": "對話",
       "messages": "訊息",
       "files": "檔案",
+      "roles": "角色",
       "providers": "服務商",
       "duplicates": "重複項",
       "importProviderKeys": "同時匯入關聯的服務商與 API 金鑰",
       "emptyTopics": "將跳過 {{count}} 個空主題",
-      "success": "已匯入 Cherry Studio 備份"
+      "emptyAssistants": "將跳過 {{count}} 個無提示詞的助手",
+      "success": "已匯入 Cherry Studio 備份",
+      "warnings": {
+        "full_backup_roles_only": "偵測到 Cherry Studio 全量備份（無 data.json）。助手將匯入為角色；IndexedDB 中的會話歷史暫不支援匯入 — 請使用 設定 → 資料設定 → 匯出資料 匯入聊天記錄。",
+        "assistant_empty_prompt": "已跳過無提示詞或描述的助手（{{name}}）。",
+        "unsupported_block_type": "部分 Cherry Studio 訊息塊類型將以可讀 Markdown 形式保留。",
+        "provider_import_failed": "匯入 Cherry Studio 服務供應商失敗（{{id}}）。",
+        "missing_file": "備份中缺少附件，或該附件僅在 zip 備份中可用（{{id}}）。"
+      }
     },
     "kelivoImport": {
       "source": "Kelivo",

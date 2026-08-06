@@ -1342,17 +1342,26 @@
       "title": "استيراد نسخة Cherry Studio الاحتياطية",
       "selectFile": "اختر ملف النسخة الاحتياطية",
       "uploadHint": "انقر أو اسحب نسخة Cherry Studio هنا",
-      "supportedFormats": "الصيغ المدعومة: .zip، .json (data.json)",
-      "exportPath": "مسار التصدير: إعدادات Cherry Studio → البيانات → تصدير البيانات",
+      "supportedFormats": "Supported formats: .zip, .json (data.json); full backup zip also supported (assistants → roles)",
+      "exportPath": "Export Data: Settings → Data Settings → Export Data; Full backup: Settings → Backup",
       "preview": "معاينة الاستيراد",
       "conversations": "المحادثات",
       "messages": "الرسائل",
       "files": "الملفات",
+      "roles": "الأدوار",
       "providers": "المزودون",
       "duplicates": "مكررات",
       "importProviderKeys": "استيراد المزودين ومفاتيح API المشار إليها أيضًا",
       "emptyTopics": "سيتم تخطي {{count}} مواضيع فارغة",
-      "success": "تم استيراد نسخة Cherry Studio"
+      "emptyAssistants": "سيتم تخطي {{count}} من المساعدين بدون مطالبة",
+      "success": "تم استيراد نسخة Cherry Studio",
+      "warnings": {
+        "full_backup_roles_only": "تم اكتشاف نسخة Cherry Studio كاملة (بدون data.json). سيتم استيراد المساعدين كأدوار. سجل المحادثات في IndexedDB غير مدعوم بعد — استخدم الإعدادات → البيانات → تصدير البيانات للدردشات.",
+        "assistant_empty_prompt": "تم تخطي مساعد بلا موجه أو وصف ({{name}}).",
+        "unsupported_block_type": "سيتم الحفاظ على بعض أنواع كتل رسائل Cherry Studio كـ Markdown قابل للقراءة.",
+        "provider_import_failed": "فشل استيراد مزود Cherry Studio ({{id}}).",
+        "missing_file": "المرفق مفقود من النسخة الاحتياطية أو متاح فقط في ملفات zip ({{id}})."
+      }
     },
     "kelivoImport": {
       "source": "Kelivo",

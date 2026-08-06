@@ -1342,17 +1342,26 @@
       "title": "Импорт резервной копии Cherry Studio",
       "selectFile": "Выбрать файл резервной копии",
       "uploadHint": "Нажмите или перетащите резервную копию Cherry Studio сюда",
-      "supportedFormats": "Поддерживаемые форматы: .zip, .json (data.json)",
-      "exportPath": "Путь экспорта: Настройки Cherry Studio → Данные → Экспорт данных",
+      "supportedFormats": "Supported formats: .zip, .json (data.json); full backup zip also supported (assistants → roles)",
+      "exportPath": "Export Data: Settings → Data Settings → Export Data; Full backup: Settings → Backup",
       "preview": "Предпросмотр импорта",
       "conversations": "Диалоги",
       "messages": "Сообщения",
       "files": "Файлы",
+      "roles": "Роли",
       "providers": "Провайдеры",
       "duplicates": "Дубликаты",
       "importProviderKeys": "Также импортировать связанные провайдеры и API-ключи",
       "emptyTopics": "Будет пропущено пустых тем: {{count}}",
-      "success": "Резервная копия Cherry Studio импортирована"
+      "emptyAssistants": "Будет пропущено {{count}} ассистентов без промпта",
+      "success": "Резервная копия Cherry Studio импортирована",
+      "warnings": {
+        "full_backup_roles_only": "Обнаружен полный бэкап Cherry Studio (без data.json). Ассистенты будут импортированы как роли. История чатов в IndexedDB пока не импортируется — используйте Настройки → Данные → Экспорт данных.",
+        "assistant_empty_prompt": "Пропущен ассистент без промпта или описания ({{name}}).",
+        "unsupported_block_type": "Некоторые типы блоков сообщений Cherry Studio будут сохранены как читаемый Markdown.",
+        "provider_import_failed": "Не удалось импортировать провайдера Cherry Studio ({{id}}).",
+        "missing_file": "Вложение отсутствует в бэкапе или доступно только в zip ({{id}})."
+      }
     },
     "kelivoImport": {
       "source": "Kelivo",

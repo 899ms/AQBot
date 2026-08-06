@@ -1342,17 +1342,26 @@
       "title": "Cherry Studio バックアップをインポート",
       "selectFile": "バックアップファイルを選択",
       "uploadHint": "クリックまたはドラッグして Cherry Studio バックアップを追加",
-      "supportedFormats": "対応形式: .zip、.json（data.json）",
-      "exportPath": "エクスポート手順: Cherry Studio 設定 → データ設定 → データのエクスポート",
+      "supportedFormats": "Supported formats: .zip, .json (data.json); full backup zip also supported (assistants → roles)",
+      "exportPath": "Export Data: Settings → Data Settings → Export Data; Full backup: Settings → Backup",
       "preview": "インポートプレビュー",
       "conversations": "会話",
       "messages": "メッセージ",
       "files": "ファイル",
+      "roles": "ロール",
       "providers": "プロバイダー",
       "duplicates": "重複",
       "importProviderKeys": "参照先のプロバイダーと API キーもインポートする",
       "emptyTopics": "空のトピック {{count}} 件はスキップされます",
-      "success": "Cherry Studio バックアップをインポートしました"
+      "emptyAssistants": "プロンプトのないアシスタント {{count}} 件をスキップします",
+      "success": "Cherry Studio バックアップをインポートしました",
+      "warnings": {
+        "full_backup_roles_only": "Cherry Studio のフルバックアップ（data.json なし）を検出しました。アシスタントはロールとしてインポートされます。IndexedDB の会話履歴は未対応です — チャットは 設定 → データ設定 → データのエクスポート をご利用ください。",
+        "assistant_empty_prompt": "プロンプトまたは説明のないアシスタントをスキップしました（{{name}}）。",
+        "unsupported_block_type": "一部の Cherry Studio メッセージブロック種別は読みやすい Markdown として保持されます。",
+        "provider_import_failed": "Cherry Studio プロバイダーのインポートに失敗しました（{{id}}）。",
+        "missing_file": "添付ファイルがバックアップにないか、zip バックアップでのみ利用可能です（{{id}}）。"
+      }
     },
     "kelivoImport": {
       "source": "Kelivo",

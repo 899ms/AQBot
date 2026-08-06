@@ -1342,17 +1342,26 @@
       "title": "Cherry Studio बैकअप आयात करें",
       "selectFile": "बैकअप फ़ाइल चुनें",
       "uploadHint": "क्लिक करें या Cherry Studio बैकअप यहाँ खींचें",
-      "supportedFormats": "समर्थित प्रारूप: .zip, .json (data.json)",
-      "exportPath": "निर्यात पथ: Cherry Studio Settings → Data Settings → Export Data",
+      "supportedFormats": "Supported formats: .zip, .json (data.json); full backup zip also supported (assistants → roles)",
+      "exportPath": "Export Data: Settings → Data Settings → Export Data; Full backup: Settings → Backup",
       "preview": "आयात पूर्वावलोकन",
       "conversations": "वार्तालाप",
       "messages": "संदेश",
       "files": "फ़ाइलें",
+      "roles": "भूमिकाएँ",
       "providers": "प्रदाता",
       "duplicates": "डुप्लिकेट",
       "importProviderKeys": "संदर्भित प्रदाता और API कुंजियाँ भी आयात करें",
       "emptyTopics": "{{count}} खाली विषय छोड़ दिए जाएँगे",
-      "success": "Cherry Studio बैकअप आयात किया गया"
+      "emptyAssistants": "{{count}} खाली प्रॉम्प्ट वाले असिस्टेंट छोड़े जाएंगे",
+      "success": "Cherry Studio बैकअप आयात किया गया",
+      "warnings": {
+        "full_backup_roles_only": "Cherry Studio पूर्ण बैकअप मिला (data.json नहीं)। असिस्टेंट भूमिकाओं के रूप में आयात होंगे। IndexedDB चैट इतिहास अभी समर्थित नहीं — चैट के लिए सेटिंग्स → डेटा → डेटा निर्यात करें।",
+        "assistant_empty_prompt": "बिना प्रॉम्प्ट/विवरण वाले असिस्टेंट को छोड़ दिया ({{name}}).",
+        "unsupported_block_type": "कुछ Cherry Studio संदेश ब्लॉक प्रकार पठनीय Markdown के रूप में रखे जाएंगे।",
+        "provider_import_failed": "Cherry Studio प्रदाता आयात विफल ({{id}}).",
+        "missing_file": "अटैचमेंट बैकअप में नहीं है, या केवल zip में उपलब्ध है ({{id}})."
+      }
     },
     "kelivoImport": {
       "source": "Kelivo",
