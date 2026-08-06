@@ -745,9 +745,8 @@ fn parse_propfind_response(xml: &str) -> Result<Vec<WebDavFileInfo>> {
     let response_blocks = split_xml_responses(xml);
 
     for block in response_blocks {
-        let lower_block = block.to_lowercase();
-        // Skip collections (directories)
-        if lower_block.contains("<d:collection") || lower_block.contains("<collection") {
+        // Skip collections (directories) — any namespace prefix
+        if is_collection_block(&block) {
             continue;
         }
 
@@ -785,59 +784,59 @@ fn parse_propfind_response(xml: &str) -> Result<Vec<WebDavFileInfo>> {
     Ok(files)
 }
 
+fn is_collection_block(block: &str) -> bool {
+    // Match <collection ...>, <d:collection/>, <lp1:collection>, etc.
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"(?i)<(?:[\w.-]+:)?collection(?:\s|/|>)").expect("collection regex")
+    });
+    re.is_match(block)
+}
+
 fn split_xml_responses(xml: &str) -> Vec<String> {
     let mut blocks = Vec::new();
-    let lower = xml.to_lowercase();
+    // Any namespace prefix on <response> (d:, D:, a:, lp1:, bare, …)
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        regex::Regex::new(r"(?is)<(?:[\w.-]+:)?response(?:\s[^>]*)?>.*?</(?:[\w.-]+:)?response>")
+            .expect("response regex")
+    });
 
-    let tag_patterns = ["d:response", "response"];
-    for tag in &tag_patterns {
-        let open1 = format!("<{}>", tag);
-        let open2 = format!("<{} ", tag);
-        let close = format!("</{}>", tag);
-
-        let mut pos = 0;
-        while pos < lower.len() {
-            let start = lower[pos..]
-                .find(&open1)
-                .or_else(|| lower[pos..].find(&open2));
-            if let Some(s) = start {
-                let abs_start = pos + s;
-                if let Some(end) = lower[abs_start..].find(&close) {
-                    let abs_end = abs_start + end + close.len();
-                    blocks.push(xml[abs_start..abs_end].to_string());
-                    pos = abs_end;
-                } else {
-                    break;
-                }
-            } else {
-                break;
-            }
-        }
-        if !blocks.is_empty() {
-            break;
-        }
+    for m in re.find_iter(xml) {
+        blocks.push(m.as_str().to_string());
     }
     blocks
 }
 
+/// Extract text content of an XML element by local name, ignoring namespace
+/// prefix and optional attributes on the opening tag.
+///
+/// Real WebDAV servers often return properties as:
+/// - `<d:getcontentlength>123</d:getcontentlength>` (standard)
+/// - `<lp1:getcontentlength>123</lp1:getcontentlength>` (Apache mod_dav)
+/// - `<a:getcontentlength>123</a:getcontentlength>` (IIS-style)
+/// - `<D:getcontentlength xmlns:D="DAV:">123</D:getcontentlength>` (attrs)
+///
+/// Prefer the first **non-empty** match so empty 404 propstats do not hide a
+/// later 200 value.
 fn extract_xml_value(xml: &str, tag_local_name: &str) -> Option<String> {
-    let lower = xml.to_lowercase();
-    let tag = tag_local_name.to_lowercase();
+    let tag = regex::escape(&tag_local_name.to_lowercase());
+    let pattern = format!(
+        r"(?is)<(?:[\w.-]+:)?{tag}(?:\s[^>]*)?>(.*?)</(?:[\w.-]+:)?{tag}>"
+    );
+    let re = regex::Regex::new(&pattern).ok()?;
 
-    let patterns = [
-        (format!("<d:{}>", tag), format!("</d:{}>", tag)),
-        (format!("<{}>", tag), format!("</{}>", tag)),
-    ];
-
-    for (open, close) in &patterns {
-        if let Some(start) = lower.find(open) {
-            let content_start = start + open.len();
-            if let Some(end) = lower[content_start..].find(close) {
-                return Some(xml[content_start..content_start + end].trim().to_string());
-            }
+    let mut first_empty: Option<String> = None;
+    for caps in re.captures_iter(xml) {
+        let raw = caps.get(1).map(|m| m.as_str().trim()).unwrap_or("");
+        if !raw.is_empty() {
+            return Some(raw.to_string());
+        }
+        if first_empty.is_none() {
+            first_empty = Some(String::new());
         }
     }
-    None
+    first_empty
 }
 
 fn url_decode(s: &str) -> String {
@@ -986,5 +985,190 @@ mod tests {
         assert!(error
             .to_string()
             .contains("does not match stored-file metadata"));
+    }
+
+    #[test]
+    fn parse_propfind_standard_d_prefix_reports_size() {
+        let xml = r#"<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/dav/aqbot/</d:href>
+    <d:propstat>
+      <d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/aqbot/aqbot-backup-20240805-host.zip</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:getcontentlength>12345</d:getcontentlength>
+        <d:getlastmodified>Mon, 05 Aug 2024 12:00:00 GMT</d:getlastmodified>
+        <d:resourcetype/>
+      </d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#;
+
+        let files = parse_propfind_response(xml).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].file_name, "aqbot-backup-20240805-host.zip");
+        assert_eq!(files[0].size, 12345);
+        assert!(files[0].last_modified.contains("2024"));
+    }
+
+    #[test]
+    fn parse_propfind_apache_lp1_prefix_reports_size() {
+        // Apache mod_dav / many commercial servers put live props under lp1:
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response xmlns:lp1="DAV:" xmlns:lp2="http://apache.org/dav/props/">
+    <D:href>/aqbot/aqbot-backup-20240805-win.zip</D:href>
+    <D:propstat>
+      <D:prop>
+        <lp1:resourcetype/>
+        <lp1:getcontentlength>987654</lp1:getcontentlength>
+        <lp1:getlastmodified>Tue, 06 Aug 2024 08:00:00 GMT</lp1:getlastmodified>
+      </D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+</D:multistatus>"#;
+
+        let files = parse_propfind_response(xml).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].size, 987654);
+        assert_eq!(files[0].file_name, "aqbot-backup-20240805-win.zip");
+    }
+
+    #[test]
+    fn parse_propfind_attributed_open_tags_reports_size() {
+        let xml = r#"<?xml version="1.0"?>
+<D:multistatus xmlns:D="DAV:">
+  <D:response>
+    <D:href>/aqbot/aqbot-backup-20240805-attr.zip</D:href>
+    <D:propstat>
+      <D:prop>
+        <D:getcontentlength xmlns:D="DAV:">555</D:getcontentlength>
+        <D:getlastmodified xmlns:D="DAV:">Wed, 07 Aug 2024 01:00:00 GMT</D:getlastmodified>
+        <D:resourcetype xmlns:D="DAV:"/>
+      </D:prop>
+      <D:status>HTTP/1.1 200 OK</D:status>
+    </D:propstat>
+  </D:response>
+</D:multistatus>"#;
+
+        let files = parse_propfind_response(xml).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].size, 555);
+    }
+
+    #[test]
+    fn parse_propfind_iis_a_prefix_reports_size() {
+        let xml = r#"<?xml version="1.0"?>
+<a:multistatus xmlns:a="DAV:">
+  <a:response>
+    <a:href>/aqbot/aqbot-backup-20240805-iis.zip</a:href>
+    <a:propstat>
+      <a:prop>
+        <a:getcontentlength>4242</a:getcontentlength>
+        <a:getlastmodified>Thu, 08 Aug 2024 10:00:00 GMT</a:getlastmodified>
+        <a:resourcetype/>
+      </a:prop>
+      <a:status>HTTP/1.1 200 OK</a:status>
+    </a:propstat>
+  </a:response>
+</a:multistatus>"#;
+
+        let files = parse_propfind_response(xml).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].size, 4242);
+        assert_eq!(files[0].file_name, "aqbot-backup-20240805-iis.zip");
+    }
+
+    #[test]
+    fn parse_propfind_filters_non_backup_and_directories() {
+        let xml = r#"<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/dav/aqbot/notes.txt</d:href>
+    <d:propstat>
+      <d:prop><d:getcontentlength>10</d:getcontentlength></d:prop>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/aqbot/other-backup.zip</d:href>
+    <d:propstat>
+      <d:prop><d:getcontentlength>20</d:getcontentlength></d:prop>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/aqbot/subdir/</d:href>
+    <d:propstat>
+      <d:prop>
+        <d:resourcetype><d:collection/></d:resourcetype>
+        <d:getcontentlength>0</d:getcontentlength>
+      </d:prop>
+    </d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/dav/aqbot/aqbot-backup-20240805-keep.zip</d:href>
+    <d:propstat>
+      <d:prop><d:getcontentlength>100</d:getcontentlength></d:prop>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#;
+
+        let files = parse_propfind_response(xml).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].file_name, "aqbot-backup-20240805-keep.zip");
+        assert_eq!(files[0].size, 100);
+    }
+
+    #[test]
+    fn parse_propfind_prefers_nonempty_getcontentlength_over_empty_propstat() {
+        let xml = r#"<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/dav/aqbot/aqbot-backup-20240805-emptyfirst.zip</d:href>
+    <d:propstat>
+      <d:prop><d:getcontentlength></d:getcontentlength></d:prop>
+      <d:status>HTTP/1.1 404 Not Found</d:status>
+    </d:propstat>
+    <d:propstat>
+      <d:prop><d:getcontentlength>7777</d:getcontentlength></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#;
+
+        let files = parse_propfind_response(xml).unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].size, 7777);
+    }
+
+    #[test]
+    fn extract_xml_value_accepts_arbitrary_prefix_and_attributes() {
+        assert_eq!(
+            extract_xml_value(
+                r#"<lp1:getcontentlength>42</lp1:getcontentlength>"#,
+                "getcontentlength"
+            )
+            .as_deref(),
+            Some("42")
+        );
+        assert_eq!(
+            extract_xml_value(
+                r#"<D:getcontentlength xmlns:D="DAV:">99</D:getcontentlength>"#,
+                "getcontentlength"
+            )
+            .as_deref(),
+            Some("99")
+        );
+        assert_eq!(
+            extract_xml_value(r#"<a:href>/path/file.zip</a:href>"#, "href").as_deref(),
+            Some("/path/file.zip")
+        );
     }
 }
