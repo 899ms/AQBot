@@ -817,6 +817,7 @@
     "exitFullscreen": "退出全屏",
     "addModelToGroup": "添加到当前分组",
     "enableProvider": "启用服务商",
+    "disableProvider": "停用服务商",
     "addKey": "添加密钥",
     "viewKey": "查看密钥",
     "editKey": "编辑密钥",

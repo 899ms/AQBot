@@ -778,6 +778,7 @@
     "exitFullscreen": "Salir de pantalla completa",
     "addModelToGroup": "Añadir a este grupo",
     "enableProvider": "Activar proveedor",
+    "disableProvider": "Desactivar proveedor",
     "addKey": "Añadir clave",
     "viewKey": "Ver clave",
     "editKey": "Editar clave",

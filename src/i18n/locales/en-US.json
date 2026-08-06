@@ -817,6 +817,7 @@
     "exitFullscreen": "Exit fullscreen",
     "addModelToGroup": "Add to this group",
     "enableProvider": "Enable Provider",
+    "disableProvider": "Disable Provider",
     "addKey": "Add Key",
     "viewKey": "View Key",
     "editKey": "Edit Key",

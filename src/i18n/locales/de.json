@@ -778,6 +778,7 @@
     "exitFullscreen": "Vollbild beenden",
     "addModelToGroup": "Zu dieser Gruppe hinzufügen",
     "enableProvider": "Anbieter aktivieren",
+    "disableProvider": "Anbieter deaktivieren",
     "addKey": "Schlüssel hinzufügen",
     "viewKey": "Schlüssel anzeigen",
     "editKey": "Schlüssel bearbeiten",

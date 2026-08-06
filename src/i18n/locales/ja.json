@@ -778,6 +778,7 @@
     "exitFullscreen": "フルスクリーン解除",
     "addModelToGroup": "このグループに追加",
     "enableProvider": "プロバイダーを有効にする",
+    "disableProvider": "プロバイダーを無効にする",
     "addKey": "キーを追加",
     "viewKey": "キーを表示",
     "editKey": "キーを編集",

@@ -778,6 +778,7 @@
     "exitFullscreen": "전체 화면 종료",
     "addModelToGroup": "이 그룹에 추가",
     "enableProvider": "공급자 활성화",
+    "disableProvider": "공급자 비활성화",
     "addKey": "키 추가",
     "viewKey": "키 보기",
     "editKey": "키 편집",

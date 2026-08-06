@@ -1,5 +1,5 @@
 import { App } from 'antd';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
@@ -402,5 +402,96 @@ describe('ProviderList', () => {
       expect(mocks.importCcSwitchProviderConfigs).toHaveBeenCalledWith(['ready-1', 'add-key-1']);
     });
     expect(mocks.setSelectedProviderId).toHaveBeenCalledWith('provider-1');
+  });
+
+  it('toggles batch selection when clicking the provider row, not only the checkbox', async () => {
+    const user = userEvent.setup();
+    mocks.toggleProvider.mockResolvedValue(undefined);
+    providers = [
+      makeProvider({ id: 'p1', name: 'Provider One', enabled: true, builtin_id: null }),
+      makeProvider({ id: 'p2', name: 'Provider Two', enabled: true, builtin_id: null }),
+    ];
+    selectedProviderId = 'p1';
+
+    render(
+      <App>
+        <ProviderList />
+      </App>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'settings.providerBatchMode' }));
+    await user.click(screen.getByText('Provider One'));
+    await user.click(screen.getByRole('button', { name: 'settings.batchDisable' }));
+
+    await waitFor(() => {
+      expect(mocks.toggleProvider).toHaveBeenCalledWith('p1', false);
+    });
+    expect(mocks.toggleProvider).not.toHaveBeenCalledWith('p2', false);
+  });
+
+  it('disables a provider from the context menu', async () => {
+    const user = userEvent.setup();
+    mocks.toggleProvider.mockResolvedValue(undefined);
+    providers = [
+      makeProvider({ id: 'p1', name: 'Provider One', enabled: true, builtin_id: null }),
+    ];
+    selectedProviderId = 'p1';
+
+    render(
+      <App>
+        <ProviderList />
+      </App>,
+    );
+
+    fireEvent.contextMenu(screen.getByText('Provider One'));
+    await user.click(await screen.findByText('停用服务商'));
+
+    await waitFor(() => {
+      expect(mocks.toggleProvider).toHaveBeenCalledWith('p1', false);
+    });
+  });
+
+  it('deletes a custom provider from the context menu after modal confirm', async () => {
+    const user = userEvent.setup();
+    mocks.deleteProvider.mockResolvedValue(undefined);
+    providers = [
+      makeProvider({ id: 'custom-1', name: 'Custom Provider', enabled: true, builtin_id: null }),
+      makeProvider({ id: 'other-1', name: 'Other Provider', enabled: true, builtin_id: null }),
+    ];
+    selectedProviderId = 'custom-1';
+
+    render(
+      <App>
+        <ProviderList />
+      </App>,
+    );
+
+    fireEvent.contextMenu(screen.getByText('Custom Provider'));
+    await user.click(await screen.findByText('settings.deleteProvider'));
+
+    const confirm = await screen.findByRole('button', { name: 'common.confirm' });
+    await user.click(confirm);
+
+    await waitFor(() => {
+      expect(mocks.deleteProvider).toHaveBeenCalledWith('custom-1');
+    });
+    expect(mocks.setSelectedProviderId).toHaveBeenCalledWith('other-1');
+  });
+
+  it('hides delete from the context menu for built-in providers', async () => {
+    providers = [
+      makeProvider({ id: 'builtin-openai', name: 'OpenAI', enabled: true, builtin_id: 'openai' }),
+    ];
+    selectedProviderId = 'builtin-openai';
+
+    render(
+      <App>
+        <ProviderList />
+      </App>,
+    );
+
+    fireEvent.contextMenu(screen.getByText('OpenAI'));
+    expect(await screen.findByText('停用服务商')).toBeInTheDocument();
+    expect(screen.queryByText('settings.deleteProvider')).not.toBeInTheDocument();
   });
 });

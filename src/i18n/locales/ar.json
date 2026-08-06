@@ -778,6 +778,7 @@
     "exitFullscreen": "الخروج من ملء الشاشة",
     "addModelToGroup": "إضافة إلى هذه المجموعة",
     "enableProvider": "تمكين المزوّد",
+    "disableProvider": "تعطيل المزوّد",
     "addKey": "إضافة مفتاح",
     "viewKey": "عرض المفتاح",
     "editKey": "تعديل المفتاح",

@@ -789,6 +789,7 @@
     "exitFullscreen": "退出全螢幕",
     "addModelToGroup": "新增至目前分組",
     "enableProvider": "啟用供應商",
+    "disableProvider": "停用供應商",
     "addKey": "新增金鑰",
     "viewKey": "查看金鑰",
     "editKey": "編輯金鑰",

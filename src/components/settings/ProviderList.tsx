@@ -155,12 +155,17 @@ function BuiltinProviderIcon({
   );
 }
 
+function isBuiltinProvider(provider: ProviderConfig) {
+  return Boolean(provider.builtin_id || provider.id.startsWith('builtin_'));
+}
+
 function SortableProviderItem({
   provider,
   isSelected,
   token,
   onSelect,
   onToggle,
+  onRequestDelete,
   batchMode,
   batchChecked,
   onBatchCheck,
@@ -170,6 +175,7 @@ function SortableProviderItem({
   token: any;
   onSelect: () => void;
   onToggle: (checked: boolean) => void;
+  onRequestDelete: () => void;
   batchMode: boolean;
   batchChecked: boolean;
   onBatchCheck: (checked: boolean) => void;
@@ -193,13 +199,50 @@ function SortableProviderItem({
   };
 
   const disabled = !provider.enabled;
+  const isBuiltin = isBuiltinProvider(provider);
 
-  return (
+  const contextMenuItems = useMemo(() => {
+    const items: Array<{
+      key: string;
+      label: string;
+      icon: React.ReactNode;
+      danger?: boolean;
+    }> = [
+      provider.enabled
+        ? {
+            key: 'disable',
+            label: t('settings.disableProvider', '停用服务商'),
+            icon: <PowerOff size={14} />,
+          }
+        : {
+            key: 'enable',
+            label: t('settings.enableProvider'),
+            icon: <Power size={14} />,
+          },
+    ];
+    if (!isBuiltin) {
+      items.push({
+        key: 'delete',
+        label: t('settings.deleteProvider'),
+        icon: <Trash2 size={14} />,
+        danger: true,
+      });
+    }
+    return items;
+  }, [provider.enabled, isBuiltin, t]);
+
+  const row = (
     <div
       ref={setNodeRef}
       style={style}
       className="flex items-center cursor-pointer px-3 py-2.5 transition-colors"
-      onClick={onSelect}
+      onClick={() => {
+        if (batchMode) {
+          onBatchCheck(!batchChecked);
+          return;
+        }
+        onSelect();
+      }}
       onMouseEnter={(e) => {
         if (!isSelected && !(batchMode && batchChecked)) {
           e.currentTarget.style.backgroundColor = token.colorFillQuaternary;
@@ -250,12 +293,33 @@ function SortableProviderItem({
       )}
     </div>
   );
+
+  if (batchMode) {
+    return row;
+  }
+
+  return (
+    <Dropdown
+      trigger={['contextMenu']}
+      menu={{
+        items: contextMenuItems,
+        onClick: ({ key, domEvent }) => {
+          domEvent.stopPropagation();
+          if (key === 'enable') onToggle(true);
+          else if (key === 'disable') onToggle(false);
+          else if (key === 'delete') onRequestDelete();
+        },
+      }}
+    >
+      {row}
+    </Dropdown>
+  );
 }
 
 export function ProviderList() {
   const { t } = useTranslation();
   const { token } = theme.useToken();
-  const { message } = App.useApp();
+  const { message, modal } = App.useApp();
   const providers = useProviderStore((s) => s.providers);
   const createProvider = useProviderStore((s) => s.createProvider);
   const scanCcSwitchProviderImports = useProviderStore((s) => s.scanCcSwitchProviderImports);
@@ -265,6 +329,23 @@ export function ProviderList() {
   const reorderProviders = useProviderStore((s) => s.reorderProviders);
   const selectedProviderId = useUIStore((s) => s.selectedProviderId);
   const setSelectedProviderId = useUIStore((s) => s.setSelectedProviderId);
+
+  const handleRequestDeleteProvider = useCallback((providerId: string) => {
+    modal.confirm({
+      title: t('settings.deleteProviderConfirm'),
+      mask: { enabled: true, blur: true },
+      okText: t('common.confirm'),
+      cancelText: t('common.cancel'),
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        await deleteProvider(providerId);
+        if (selectedProviderId === providerId) {
+          const remaining = providers.filter((p) => p.id !== providerId);
+          setSelectedProviderId(remaining[0]?.id ?? null);
+        }
+      },
+    });
+  }, [modal, t, deleteProvider, selectedProviderId, providers, setSelectedProviderId]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -395,7 +476,7 @@ export function ProviderList() {
   const handleBatchDelete = useCallback(async () => {
     if (batchSelected.size === 0 || batchBusy) return;
     const selectedProviders = providers.filter((p) => batchSelected.has(p.id));
-    const deletable = selectedProviders.filter((p) => !p.builtin_id && !p.id.startsWith('builtin_'));
+    const deletable = selectedProviders.filter((p) => !isBuiltinProvider(p));
     const skipped = selectedProviders.length - deletable.length;
     if (deletable.length === 0) {
       if (skipped > 0) {
@@ -443,7 +524,7 @@ export function ProviderList() {
     filteredProviders.some((p) => batchSelected.has(p.id))
     && !allFilteredSelected;
   const deletableSelectedCount = providers.filter(
-    (p) => batchSelected.has(p.id) && !p.builtin_id && !p.id.startsWith('builtin_'),
+    (p) => batchSelected.has(p.id) && !isBuiltinProvider(p),
   ).length;
 
   const importColumns = useMemo(
@@ -763,6 +844,7 @@ export function ProviderList() {
                       token={token}
                       onSelect={() => setSelectedProviderId(provider.id)}
                       onToggle={(checked) => toggleProvider(provider.id, checked)}
+                      onRequestDelete={() => handleRequestDeleteProvider(provider.id)}
                       batchMode={batchMode}
                       batchChecked={batchSelected.has(provider.id)}
                       onBatchCheck={(checked) => handleBatchCheck(provider.id, checked)}
@@ -799,6 +881,7 @@ export function ProviderList() {
                       onSelect={() => setSelectedProviderId(provider.id)}
                       token={token}
                       onToggle={(checked) => toggleProvider(provider.id, checked)}
+                      onRequestDelete={() => handleRequestDeleteProvider(provider.id)}
                       batchMode={batchMode}
                       batchChecked={batchSelected.has(provider.id)}
                       onBatchCheck={(checked) => handleBatchCheck(provider.id, checked)}

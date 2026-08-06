@@ -778,6 +778,7 @@
     "exitFullscreen": "पूर्ण स्क्रीन से बाहर",
     "addModelToGroup": "इस समूह में जोड़ें",
     "enableProvider": "प्रदाता सक्षम करें",
+    "disableProvider": "प्रदाता अक्षम करें",
     "addKey": "कुंजी जोड़ें",
     "viewKey": "कुंजी देखें",
     "editKey": "कुंजी संपादित करें",
