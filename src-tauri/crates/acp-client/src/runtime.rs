@@ -265,6 +265,36 @@ impl AcpRuntime {
     }
 }
 
+/// Pull a human-readable reason out of agent-client-protocol / npm spawn errors.
+fn summarize_agent_spawn_error(raw: &str) -> String {
+    // Prefer the nested "data": "Process exited … npm error …" payload when present.
+    if let Some(idx) = raw.find("npm error") {
+        let slice = &raw[idx..];
+        let cleaned = slice
+            .replace("\\n", "\n")
+            .replace("\\\"", "\"")
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .take(4)
+            .collect::<Vec<_>>()
+            .join(" ");
+        if !cleaned.is_empty() {
+            return cleaned.chars().take(400).collect();
+        }
+    }
+    if let Some(idx) = raw.find("Process exited") {
+        return raw[idx..].chars().take(400).collect();
+    }
+    let trimmed = raw.trim();
+    if trimmed.len() > 400 {
+        format!("{}…", &trimmed[..400])
+    } else if trimmed.is_empty() {
+        "unknown error".into()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn spawn_live_session(
     agent: &ConfiguredAgent,
     cwd: PathBuf,
@@ -287,7 +317,9 @@ fn spawn_live_session(
         let event_slot_perm = event_slot.clone();
         let event_slot_jobs = event_slot.clone();
         let permissions_perm = permissions.clone();
-        let ready_tx = Mutex::new(Some(ready_tx));
+        // Shared so connect failure can still surface a useful error to ensure_live
+        // (process exit before initialize used to drop the oneshot → generic message).
+        let ready_tx = Arc::new(Mutex::new(Some(ready_tx)));
 
         let connect_result = agent_client_protocol::Client
             .builder()
@@ -334,10 +366,11 @@ fn spawn_live_session(
             )
             .connect_with(acp_agent, {
                 let event_slot = event_slot_jobs;
-                let ready_tx = ready_tx;
+                let ready_tx = ready_tx.clone();
                 move |connection: ConnectionTo<Agent>| {
                     let event_slot = event_slot.clone();
                     let cwd = cwd_for_worker.clone();
+                    let ready_tx = ready_tx.clone();
                     async move {
                         // Initialize once per process.
                         let init_result = connection
@@ -394,13 +427,19 @@ fn spawn_live_session(
             .await;
 
         if let Err(e) = connect_result {
-            // If initialize never completed, unblock ensure_live.
-            // ready_tx may already have been consumed.
+            let detail = summarize_agent_spawn_error(&e.to_string());
             tracing::warn!(
                 error = %e,
                 agent = %agent_name,
                 "acp live session exited"
             );
+            // Unblock ensure_live with the real failure (e.g. npm ETARGET) when
+            // the process died before initialize could send on ready_tx.
+            if let Some(tx) = ready_tx.lock().await.take() {
+                let _ = tx.send(Err(anyhow::anyhow!(
+                    "agent process exited during startup: {detail}"
+                )));
+            }
         }
     });
 

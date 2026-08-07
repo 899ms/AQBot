@@ -127,10 +127,105 @@ fn current_platform_key() -> String {
     format!("{os_part}-{arch_part}")
 }
 
+/// Resolve a CLI to an absolute path when possible.
+/// GUI apps often lack shell-augmented PATH entries like `~/.grok/bin` or nvm,
+/// so also probe well-known install locations for common agent CLIs.
+fn resolve_command_path(cmd: &str) -> Option<String> {
+    // Already absolute / relative with separator
+    if cmd.contains('/') || cmd.contains('\\') {
+        let p = PathBuf::from(cmd);
+        if p.is_file() {
+            return Some(cmd.to_string());
+        }
+    }
+
+    let which = if cfg!(windows) { "where" } else { "which" };
+    if let Ok(output) = std::process::Command::new(which).arg(cmd).output() {
+        if output.status.success() {
+            if let Ok(stdout) = String::from_utf8(output.stdout) {
+                if let Some(line) = stdout.lines().next() {
+                    let line = line.trim();
+                    if !line.is_empty() {
+                        return Some(line.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Well-known install dirs (macOS/Linux) when GUI PATH is minimal.
+    if let Some(home) = dirs::home_dir().or_else(|| std::env::var_os("HOME").map(PathBuf::from)) {
+        let candidates = [
+            home.join(".grok/bin").join(cmd),
+            home.join(".local/bin").join(cmd),
+            home.join(".cargo/bin").join(cmd),
+            PathBuf::from("/opt/homebrew/bin").join(cmd),
+            PathBuf::from("/usr/local/bin").join(cmd),
+        ];
+        for c in candidates {
+            if c.is_file() {
+                return Some(c.to_string_lossy().to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Official CDN / older builtin snapshots sometimes pin packages that never
+/// published (e.g. `@xai-official/grok@1.0.0`). Rewrite known-bad pins so
+/// enable-from-registry and launch stay usable offline and after refresh.
+fn normalize_registry(file: &mut RegistryFile) {
+    for agent in &mut file.agents {
+        if agent.id != "grok-build" {
+            continue;
+        }
+        let Some(dist) = agent.distribution.as_mut() else {
+            continue;
+        };
+        if let Some(npx) = dist.npx.as_mut() {
+            // 1.0.0 was advertised by ACP CDN but never published on npm.
+            // 0.2.x is the real line; pin a known-good release.
+            if npx.package == "@xai-official/grok@1.0.0"
+                || npx.package == "@xai-official/grok@1.0"
+                || npx.package == "@xai-official/grok"
+            {
+                npx.package = "@xai-official/grok@0.2.121".into();
+            }
+            if npx.args.is_empty() {
+                npx.args = vec!["agent".into(), "stdio".into()];
+            }
+        }
+        if agent.version.as_deref() == Some("1.0.0") {
+            agent.version = Some("0.2.121".into());
+        }
+    }
+}
+
 /// Resolve a launch command for the current platform.
-/// Prefer npx/uvx (no download); fall back to binary cmd name only (V1 does not install).
+/// Prefer an already-installed binary on PATH when the registry declares one
+/// (e.g. local `grok` from the official installer). Otherwise prefer npx/uvx
+/// (no manual download); fall back to binary cmd name only (V1 does not install).
 pub fn resolve_launch(agent: &RegistryAgent) -> Option<ResolvedLaunch> {
     let dist = agent.distribution.as_ref()?;
+
+    // Prefer local CLI when the user already installed it (faster, no npm pin issues).
+    if let Some(bin_map) = &dist.binary {
+        let key = current_platform_key();
+        if let Some(bin) = bin_map.get(&key) {
+            let cmd = PathBuf::from(&bin.cmd)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| bin.cmd.clone());
+            if let Some(resolved) = resolve_command_path(&cmd) {
+                return Some(ResolvedLaunch {
+                    command: resolved,
+                    args: bin.args.clone(),
+                    env: bin.env.clone(),
+                    kind: "binary".into(),
+                });
+            }
+        }
+    }
 
     if let Some(npx) = &dist.npx {
         let mut args = vec!["-y".to_string(), npx.package.clone()];
@@ -375,9 +470,12 @@ pub fn load_cached_registry() -> Option<RegistryFile> {
 pub fn load_registry() -> anyhow::Result<RegistryFile> {
     if let Some(mut cached) = load_cached_registry() {
         cached.source = Some(RegistrySource::Cache);
+        normalize_registry(&mut cached);
         return Ok(cached);
     }
-    load_builtin_registry()
+    let mut builtin = load_builtin_registry()?;
+    normalize_registry(&mut builtin);
+    Ok(builtin)
 }
 
 /// Fetch live registry and write cache. Falls back to cache/builtin on error.
@@ -394,6 +492,8 @@ pub async fn refresh_registry() -> anyhow::Result<RegistryFile> {
     let mut file = parse_registry(&text, RegistrySource::Live)?;
     file.fetched_at = Some(chrono::Utc::now().to_rfc3339());
     file.source = Some(RegistrySource::Live);
+    // Patch known-bad upstream pins before cache write so re-enable uses fixed launch.
+    normalize_registry(&mut file);
     // Cache original text for fidelity + our metadata wrapper
     let cache_body = serde_json::to_string_pretty(&file)?;
     std::fs::write(registry_cache_path(), cache_body)?;
@@ -425,5 +525,60 @@ mod tests {
         let launch = resolve_launch(agent).unwrap();
         assert_eq!(launch.command, "npx");
         assert!(launch.args.iter().any(|a| a.contains("codex-acp")));
+    }
+
+    #[test]
+    fn normalize_rewrites_missing_grok_1_0_0_pin() {
+        let mut reg = load_builtin_registry().unwrap();
+        // Simulate broken CDN pin
+        let agent = reg.agents.iter_mut().find(|a| a.id == "grok-build").unwrap();
+        if let Some(dist) = agent.distribution.as_mut() {
+            if let Some(npx) = dist.npx.as_mut() {
+                npx.package = "@xai-official/grok@1.0.0".into();
+            }
+        }
+        agent.version = Some("1.0.0".into());
+        normalize_registry(&mut reg);
+        let agent = find_registry_agent(&reg, "grok-build").unwrap();
+        let pkg = agent
+            .distribution
+            .as_ref()
+            .and_then(|d| d.npx.as_ref())
+            .map(|n| n.package.as_str())
+            .unwrap();
+        assert_eq!(pkg, "@xai-official/grok@0.2.121");
+        assert_ne!(agent.version.as_deref(), Some("1.0.0"));
+    }
+
+    #[test]
+    fn resolve_grok_uses_valid_npx_or_local_binary() {
+        let mut reg = load_builtin_registry().unwrap();
+        normalize_registry(&mut reg);
+        let agent = find_registry_agent(&reg, "grok-build").unwrap();
+        let launch = resolve_launch(agent).unwrap();
+        match launch.kind.as_str() {
+            "binary" => {
+                // May be basename or absolute well-known path (e.g. ~/.grok/bin/grok).
+                assert!(
+                    launch.command == "grok" || launch.command.ends_with("/grok") || launch.command.ends_with("\\grok.exe"),
+                    "unexpected binary command {}",
+                    launch.command
+                );
+                assert_eq!(launch.args, vec!["agent", "stdio"]);
+            }
+            "npx" => {
+                assert!(
+                    launch
+                        .args
+                        .iter()
+                        .any(|a| a.contains("@xai-official/grok@0.2.")),
+                    "expected fixed package, got {:?}",
+                    launch.args
+                );
+                assert!(launch.args.iter().any(|a| a == "agent"));
+                assert!(launch.args.iter().any(|a| a == "stdio"));
+            }
+            other => panic!("unexpected launch kind {other}"),
+        }
     }
 }

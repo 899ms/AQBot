@@ -51,15 +51,42 @@ type SizeProps = { size?: number | string; style?: CSSProperties };
 
 /**
  * Lobe icon pack surface we actually use.
- * NOTE: Do NOT use `.Avatar` for ACP agents — several brands (e.g. Codex, Gemini)
- * set AVATAR_BACKGROUND = AVATAR_COLOR = '#fff', which renders as a blank white circle.
- * Prefer Color (brand tile) → Mono. Requires @lobehub/icons ≥5.x with unique SVG fill ids
- * (5.15+ uses React useId) — older versions share one gradient id and go blank white after remounts.
+ * NOTE: Do NOT use `.Avatar` for brands that set AVATAR_BACKGROUND = AVATAR_COLOR = '#fff'
+ * (Codex, Gemini) — that renders as a blank white circle.
+ * Prefer Color (brand tile) → safe Avatar tile → Mono.
+ * Requires @lobehub/icons ≥5.x with unique SVG fill ids (5.15+ uses React useId).
  */
 type IconPack = {
   Color?: ComponentType<SizeProps>;
   Mono?: ComponentType<SizeProps>;
+  /** Brand Avatar only when background is not white-on-white (e.g. Grok). */
+  Avatar?: ComponentType<SizeProps>;
 };
+
+/**
+ * Build an IconPack from a Lobe compound icon.
+ * - Color brands: use `.Color` tile
+ * - Grok-style (no Color, dark Avatar): expose Avatar as the brand tile
+ * - Mono-only: default export / `.Mono`
+ */
+function lobePack(
+  icon: ComponentType<SizeProps> & {
+    Color?: ComponentType<SizeProps>;
+    Mono?: ComponentType<SizeProps>;
+    Avatar?: ComponentType<SizeProps>;
+  },
+  opts?: { preferAvatarAsColor?: boolean },
+): IconPack {
+  const mono = icon.Mono ?? (typeof icon === 'function' ? icon : undefined);
+  if (opts?.preferAvatarAsColor && icon.Avatar) {
+    return { Color: icon.Avatar, Mono: mono, Avatar: icon.Avatar };
+  }
+  return {
+    Color: icon.Color,
+    Mono: mono,
+    Avatar: icon.Avatar,
+  };
+}
 
 /**
  * Map ACP registry agent ids / names to LobeHub brand icons.
@@ -67,13 +94,15 @@ type IconPack = {
  * Order matters: more specific rules first (e.g. Codex before OpenAI).
  */
 const AGENT_ICON_RULES: Array<{ test: RegExp; Icon: IconPack }> = [
-  { test: /codex/i, Icon: Codex as unknown as IconPack },
-  { test: /claude.?code|claude-code/i, Icon: ClaudeCode as unknown as IconPack },
-  { test: /claude|anthropic/i, Icon: Claude as unknown as IconPack },
-  { test: /gemini.?cli|gemini-cli/i, Icon: GeminiCLI as unknown as IconPack },
-  { test: /gemini/i, Icon: Gemini as unknown as IconPack },
-  { test: /grok/i, Icon: Grok as unknown as IconPack },
-  { test: /\bxai\b/i, Icon: XAI as unknown as IconPack },
+  { test: /codex/i, Icon: lobePack(Codex as never) },
+  { test: /claude.?code|claude-code/i, Icon: lobePack(ClaudeCode as never) },
+  { test: /claude|anthropic/i, Icon: lobePack(Claude as never) },
+  { test: /gemini.?cli|gemini-cli/i, Icon: lobePack(GeminiCLI as never) },
+  { test: /gemini/i, Icon: lobePack(Gemini as never) },
+  // Grok has no Color; Avatar is black tile + white mark — correct brand tile.
+  // Default export is Mono (`import { Grok } from '@lobehub/icons'` → <Grok size={…} />).
+  { test: /grok-?build|grok/i, Icon: lobePack(Grok as never, { preferAvatarAsColor: true }) },
+  { test: /\bxai\b/i, Icon: lobePack(XAI as never) },
   { test: /opencode|open.?code/i, Icon: OpenCode as unknown as IconPack },
   { test: /cursor/i, Icon: Cursor as unknown as IconPack },
   { test: /github.?copilot|copilot-cli/i, Icon: GithubCopilot as unknown as IconPack },

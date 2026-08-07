@@ -676,7 +676,7 @@
     {
       "id": "grok-build",
       "name": "Grok Build",
-      "version": "1.0.0",
+      "version": "0.2.121",
       "description": "xAI's coding agent and CLI",
       "website": "https://x.ai/cli",
       "authors": [
@@ -685,11 +685,48 @@
       "license": "proprietary",
       "distribution": {
         "npx": {
-          "package": "@xai-official/grok@1.0.0",
+          "package": "@xai-official/grok@0.2.121",
           "args": [
             "agent",
             "stdio"
           ]
+        },
+        "binary": {
+          "darwin-aarch64": {
+            "cmd": "grok",
+            "args": [
+              "agent",
+              "stdio"
+            ]
+          },
+          "darwin-x86_64": {
+            "cmd": "grok",
+            "args": [
+              "agent",
+              "stdio"
+            ]
+          },
+          "linux-x86_64": {
+            "cmd": "grok",
+            "args": [
+              "agent",
+              "stdio"
+            ]
+          },
+          "linux-aarch64": {
+            "cmd": "grok",
+            "args": [
+              "agent",
+              "stdio"
+            ]
+          },
+          "windows-x86_64": {
+            "cmd": "grok",
+            "args": [
+              "agent",
+              "stdio"
+            ]
+          }
         }
       },
       "icon": "https://cdn.agentclientprotocol.com/registry/v1/latest/grok-build.svg"
