@@ -256,6 +256,104 @@ pub struct Model {
     /// until the user explicitly restores automatic detection.
     #[serde(default)]
     pub metadata_state: Option<ModelMetadataState>,
+    /// Gateway request aliases. Clients may send an alias as `model`; the gateway
+    /// rewrites the upstream request to the real `model_id`. Empty by default.
+    #[serde(default)]
+    pub aliases: Vec<String>,
+}
+
+/// Maximum length of a single model alias.
+pub const MODEL_ALIAS_MAX_LEN: usize = 128;
+
+/// Normalize aliases: trim, drop empty, de-duplicate while preserving order.
+pub fn normalize_model_aliases(aliases: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for alias in aliases {
+        let trimmed = alias.as_ref().trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if seen.insert(trimmed.to_string()) {
+            out.push(trimmed.to_string());
+        }
+    }
+    out
+}
+
+/// Validate aliases for a model within one provider's model list.
+///
+/// Rules:
+/// - each alias non-empty after trim, length ≤ [`MODEL_ALIAS_MAX_LEN`]
+/// - alias ≠ own `model_id`
+/// - unique among other models' `model_id` and aliases on the same provider
+pub fn validate_model_aliases(
+    model_id: &str,
+    aliases: &[String],
+    sibling_models: &[(String, Vec<String>)],
+) -> Result<(), String> {
+    let normalized = normalize_model_aliases(aliases.iter().map(|s| s.as_str()));
+    for alias in &normalized {
+        if alias.len() > MODEL_ALIAS_MAX_LEN {
+            return Err(format!(
+                "Alias '{}' exceeds max length of {}",
+                alias, MODEL_ALIAS_MAX_LEN
+            ));
+        }
+        if alias == model_id {
+            return Err(format!(
+                "Alias '{}' must not equal the model's own model_id",
+                alias
+            ));
+        }
+        for (other_id, other_aliases) in sibling_models {
+            if other_id == model_id {
+                continue;
+            }
+            if other_id == alias {
+                return Err(format!(
+                    "Alias '{}' conflicts with another model's model_id on this provider",
+                    alias
+                ));
+            }
+            if other_aliases.iter().any(|a| a == alias) {
+                return Err(format!(
+                    "Alias '{}' is already used by another model on this provider",
+                    alias
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether a model is addressable by the given request name (real id or alias).
+pub fn model_matches_request_name(model: &Model, name: &str) -> bool {
+    model.model_id == name || model.aliases.iter().any(|a| a == name)
+}
+
+#[cfg(test)]
+mod model_alias_tests {
+    use super::*;
+
+    #[test]
+    fn normalize_trims_and_dedups() {
+        assert_eq!(
+            normalize_model_aliases(["  a ", "a", "", "b"]),
+            vec!["a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn validate_rejects_own_model_id_and_sibling_conflict() {
+        let siblings = vec![
+            ("gpt-5.5".to_string(), vec!["5.5".to_string()]),
+            ("other".to_string(), vec![]),
+        ];
+        assert!(validate_model_aliases("gpt-5.5", &["gpt-5.5".into()], &siblings).is_err());
+        assert!(validate_model_aliases("other", &["5.5".into()], &siblings).is_err());
+        assert!(validate_model_aliases("other", &["fast".into()], &siblings).is_ok());
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1642,6 +1740,10 @@ pub struct AppSettings {
     pub gateway_ssl_key_path: Option<String>,
     pub gateway_ssl_port: u16,
     pub gateway_force_ssl: bool,
+    /// When true, the gateway pools providers that share the same model id or
+    /// alias and fails over on retriable upstream errors.
+    #[serde(default)]
+    pub gateway_auto_model_routing: bool,
     pub always_on_top: bool,
     pub tray_enabled: bool,
     pub global_shortcuts_enabled: bool,
@@ -1803,6 +1905,7 @@ impl Default for AppSettings {
             gateway_ssl_key_path: None,
             gateway_ssl_port: 8443,
             gateway_force_ssl: false,
+            gateway_auto_model_routing: false,
             always_on_top: false,
             tray_enabled: true,
             global_shortcuts_enabled: true,

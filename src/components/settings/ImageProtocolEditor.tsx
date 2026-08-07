@@ -93,7 +93,7 @@ export function ImageProtocolEditor({
         </Typography.Text>
       </div>
 
-      <Form layout="vertical" size="small">
+      <Form layout="vertical">
         <Form.Item label={t('imageProtocol.adapterProfile', '适配器预设（协议）')}>
           <Select
             value={config.adapter_id ?? ''}

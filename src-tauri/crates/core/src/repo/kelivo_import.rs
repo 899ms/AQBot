@@ -1147,6 +1147,7 @@ where
                 .and_then(|value| serde_json::to_string(&value).ok())),
             image_config_json: Set(None),
             metadata_state_json: Set(None),
+            aliases_json: Set(None),
         })
         .on_conflict(
             OnConflict::columns([models::Column::ProviderId, models::Column::ModelId])

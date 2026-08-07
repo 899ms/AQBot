@@ -226,6 +226,7 @@ async fn merge_candidate_models(
             param_overrides: empty_param_overrides_for_import(&provider_config.provider_type),
             image_config: None,
             metadata_state: None,
+            aliases: Vec::new(),
         });
     }
 

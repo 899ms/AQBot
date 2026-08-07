@@ -389,6 +389,8 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
   const [editExtraBody, setEditExtraBody] = useState('');
   const [editExtraBodyError, setEditExtraBodyError] = useState<string | null>(null);
   const [editImageConfig, setEditImageConfig] = useState<ImageAdapterConfig | null>(null);
+  const [editAliases, setEditAliases] = useState<string[]>([]);
+  const [editAliasInput, setEditAliasInput] = useState('');
   const [editMetadataDirty, setEditMetadataDirty] = useState<Set<ModelMetadataField>>(new Set());
 
   const [editMetadataAutomatic, setEditMetadataAutomatic] = useState<Set<ModelMetadataField>>(new Set());
@@ -562,6 +564,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
           enabled: true,
           param_overrides: null,
           metadata_state: null,
+          aliases: [],
         });
         if (!cancelled) {
           setAddModelPreview(preview);
@@ -856,6 +859,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
         enabled: true,
         param_overrides: null,
         metadata_state: null,
+        aliases: [],
       }),
       provider_id: providerId,
       model_id: nextModelId,
@@ -866,6 +870,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
         ? getDefaultCapabilitiesForType(addModelType)
         : (addModelPreview?.proposed_model.capabilities
           ?? getDefaultCapabilitiesForType(addModelType)),
+      aliases: addModelPreview?.proposed_model.aliases ?? [],
     };
 
     try {
@@ -906,6 +911,8 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
       setEditExtraBody(formatExtraBody(model.param_overrides?.extra_body));
       setEditExtraBodyError(null);
       setEditImageConfig(model.image_config ?? null);
+      setEditAliases(model.aliases ?? []);
+      setEditAliasInput('');
       setEditMetadataDirty(new Set());
       setEditMetadataAutomatic(new Set());
       setMetadataSyncModalOpen(false);
@@ -1061,6 +1068,14 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
       };
     }
     const nextCapabilities = sanitizeModelCapabilities(editModelType, editCapabilities);
+    const pendingAlias = editAliasInput.trim();
+    const normalizedAliases = Array.from(
+      new Set(
+        [...editAliases, ...(pendingAlias ? [pendingAlias] : [])]
+          .map((alias) => alias.trim())
+          .filter((alias) => alias.length > 0 && alias !== editingModel.model_id),
+      ),
+    );
     try {
       const updatedModel: Model = {
         ...editingModel,
@@ -1072,6 +1087,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
         model_type: editModelType,
         param_overrides: values,
         image_config: isImageModel ? editImageConfig : editingModel.image_config,
+        aliases: normalizedAliases,
       };
       const userFields = Array.from(editMetadataDirty);
       const automaticFields = Array.from(editMetadataAutomatic);
@@ -1085,7 +1101,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
     } catch {
       message.error(t('error.saveFailed'));
     }
-  }, [editingModel, editCapabilities, editContextWindow, editMaxOutputTokens, editModelType, editTemperature, editMaxTokensParam, editTopP, editFreqPenalty, editUseMaxCompletionTokens, editNoSystemRole, editOmitSamplingParams, editReasoningOptions, editForceMaxTokens, editThinkingParamStyle, editExtraBody, editImageConfig, editMetadataDirty, editMetadataAutomatic, providerId, updateModelMetadata, message, t]);
+  }, [editingModel, editCapabilities, editContextWindow, editMaxOutputTokens, editModelType, editTemperature, editMaxTokensParam, editTopP, editFreqPenalty, editUseMaxCompletionTokens, editNoSystemRole, editOmitSamplingParams, editReasoningOptions, editForceMaxTokens, editThinkingParamStyle, editExtraBody, editImageConfig, editAliases, editAliasInput, editMetadataDirty, editMetadataAutomatic, providerId, updateModelMetadata, message, t]);
 
   const handleApiHostChange = useCallback(
     (value: string) => {
@@ -2382,6 +2398,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
           setMetadataSyncModalOpen(false);
           setSettingsModalOpen(false);
           setEditingModel(null);
+          setEditAliasInput('');
         }}
         onOk={handleSaveSettings}
         okText={t('common.save')}
@@ -2443,6 +2460,74 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                     onClick={handleOpenMetadataSync}
                   />
                 </Tooltip>
+              </div>
+            </div>
+
+            <Divider className="!my-2" />
+
+            {/* Gateway model aliases */}
+            <div>
+              <div className="font-medium mb-1.5 flex items-center gap-1" style={{ fontSize: 13 }}>
+                <span>{t('settings.modelAliases')}</span>
+                <Tooltip title={t('settings.modelAliasesHelp')}>
+                  <CircleHelp
+                    size={14}
+                    style={{ color: token.colorTextSecondary, cursor: 'help', flexShrink: 0 }}
+                  />
+                </Tooltip>
+              </div>
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 6,
+                  alignItems: 'center',
+                  minHeight: 32,
+                  padding: '1px 11px',
+                  borderRadius: token.borderRadius,
+                  border: `1px solid ${token.colorBorder}`,
+                  background: token.colorBgContainer,
+                }}
+              >
+                {editAliases.map((alias) => (
+                  <Tag
+                    key={alias}
+                    closable
+                    onClose={(e) => {
+                      e.preventDefault();
+                      setEditAliases((prev) => prev.filter((item) => item !== alias));
+                    }}
+                    style={{ marginInlineEnd: 0 }}
+                  >
+                    {alias}
+                  </Tag>
+                ))}
+                <Input
+                  variant="borderless"
+                  placeholder={editAliases.length === 0 ? t('settings.modelAliasesPlaceholder') : undefined}
+                  value={editAliasInput}
+                  onChange={(e) => setEditAliasInput(e.target.value)}
+                  onPressEnter={(e) => {
+                    e.preventDefault();
+                    const next = editAliasInput.trim();
+                    if (!next || next === editingModel.model_id) {
+                      setEditAliasInput('');
+                      return;
+                    }
+                    setEditAliases((prev) => (prev.includes(next) ? prev : [...prev, next]));
+                    setEditAliasInput('');
+                  }}
+                  onBlur={() => {
+                    const next = editAliasInput.trim();
+                    if (!next || next === editingModel.model_id) {
+                      setEditAliasInput('');
+                      return;
+                    }
+                    setEditAliases((prev) => (prev.includes(next) ? prev : [...prev, next]));
+                    setEditAliasInput('');
+                  }}
+                  style={{ flex: 1, minWidth: 120, paddingInline: 0 }}
+                />
               </div>
             </div>
 
@@ -2532,7 +2617,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                   <div className="flex items-center justify-between" style={{ padding: '8px 0' }}>
                     <span className="text-sm shrink-0" style={{ color: token.colorText }}>{t('settings.contextWindow')}</span>
                     <Switch
-                      size="small"
                       aria-label={t('settings.contextWindow')}
                       checked={editContextWindow != null}
                       onChange={(enabled) => {
@@ -2553,8 +2637,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                           min={1024}
                           max={10000000}
                           step={1024}
-                          style={{ width: 110 }}
-                          size="small"
+                          style={{ width: 120 }}
                           formatter={(value) => value ? `${Number(value).toLocaleString()}` : ''}
                         />
                       </div>
@@ -2594,7 +2677,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                     max={10000000}
                     placeholder={t('settings.automatic')}
                     style={{ width: 120 }}
-                    size="small"
                   />
                 </div>
 
@@ -2624,12 +2706,11 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                 {/* Switches — horizontal */}
                 <div className="flex items-center justify-between">
                   <span className="text-sm" style={{ color: token.colorText }}>{t('settings.useMaxCompletionTokens')}</span>
-                  <Switch size="small" checked={editUseMaxCompletionTokens} onChange={setEditUseMaxCompletionTokens} />
+                  <Switch checked={editUseMaxCompletionTokens} onChange={setEditUseMaxCompletionTokens} />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm" style={{ color: token.colorText }}>{t('settings.noSystemRole')}</span>
                   <Switch
-                    size="small"
                     checked={editNoSystemRole ?? false}
                     onChange={(value) => {
                       setEditNoSystemRole(value);
@@ -2642,7 +2723,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                     {t('settings.omitSamplingParams')}
                   </span>
                   <Switch
-                    size="small"
                     checked={editOmitSamplingParams ?? false}
                     onChange={(value) => {
                       setEditOmitSamplingParams(value);
@@ -2652,12 +2732,11 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm" style={{ color: token.colorText }}>{t('settings.forceMaxTokens')}</span>
-                  <Switch size="small" checked={editForceMaxTokens} onChange={setEditForceMaxTokens} />
+                  <Switch checked={editForceMaxTokens} onChange={setEditForceMaxTokens} />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm" style={{ color: token.colorText }}>{t('settings.thinkingParamStyle')}</span>
                   <Select
-                    size="small"
                     style={{ width: REASONING_PROFILE_SELECT_WIDTH }}
                     popupMatchSelectWidth={REASONING_PROFILE_POPUP_WIDTH}
                     value={editThinkingParamStyle}

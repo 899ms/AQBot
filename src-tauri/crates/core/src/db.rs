@@ -135,6 +135,7 @@ impl BuiltinModel {
             param_overrides: self.param_overrides.clone(),
             image_config: None,
             metadata_state: None,
+            aliases: Vec::new(),
         }
     }
 }

@@ -61,6 +61,7 @@ pub(crate) fn jina_models(provider_id: &str) -> Vec<Model> {
         param_overrides: None,
         image_config: None,
         metadata_state: None,
+        aliases: Vec::new(),
     })
     .collect()
 }

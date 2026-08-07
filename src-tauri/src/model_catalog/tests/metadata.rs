@@ -203,6 +203,7 @@ fn model(model_id: &str) -> Model {
         param_overrides: None,
         image_config: None,
         metadata_state: None,
+        aliases: Vec::new(),
     }
 }
 

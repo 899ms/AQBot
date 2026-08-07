@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod auto_route;
 pub mod handlers;
 pub mod middleware;
 pub mod native;

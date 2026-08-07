@@ -56,12 +56,10 @@ function ParamRow({
               step={step}
               value={value!}
               onChange={(v) => v !== null && onChange(v)}
-              size="small"
             />
           )}
           {showSwitch && (
             <Switch
-              size="small"
               checked={isOn}
               onChange={(checked) => onChange(checked ? defaultValue : null)}
             />

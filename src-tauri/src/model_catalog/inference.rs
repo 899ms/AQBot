@@ -489,6 +489,7 @@ fn metadata_changes_for_new(model: &Model) -> Vec<ModelMetadataChange> {
             capabilities: Vec::new(),
             model_type: ModelType::Chat,
             metadata_state: None,
+            aliases: Vec::new(),
             ..model.clone()
         },
         model,

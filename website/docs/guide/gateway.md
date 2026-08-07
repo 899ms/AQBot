@@ -96,6 +96,31 @@ Click any log entry to inspect the full request and response. Use the **Clear Lo
 
 ---
 
+## Automatic Model Routing
+
+When several providers expose the **same model ID** (for example two midways both list `gpt-5.5`), or you assign the **same alias** on different providers, the gateway can treat that name as a single external model.
+
+1. Open **API Gateway → Settings**.
+2. Enable **Automatic model routing**.
+
+With the switch on:
+
+- `/v1/models` shows one bare id for the shared name (`owned_by: aqbot`), and still lists `provider/name` entries so you can pin a source.
+- Requests that use the bare id (or shared alias) pick an upstream by **provider sort order** and skip sources that recently failed (rate limit, 5xx, timeout).
+- Failover happens on retriable errors **before** a streaming response starts writing to the client.
+
+With the switch off (default), colliding models keep the existing `provider/model` listing behaviour and multi-source failover is disabled.
+
+Use `provider_public_id/model_or_alias` at any time to force a single upstream.
+
+### Model aliases
+
+In **Settings → Providers → model settings**, you can set one or more **aliases** for a model. Gateway clients may send an alias as `model`; AQBot rewrites the upstream request to the real `model_id`. The same alias on multiple providers participates in automatic routing when that feature is enabled.
+
+Aliases are intended for the **gateway**. In-app chat continues to use real model IDs.
+
+---
+
 ## Configuration Templates
 
 AQBot ships with ready-made configuration snippets for popular CLI tools. Go to the **Templates** tab, pick a tool, and click **Copy** to get the configuration you need.

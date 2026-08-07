@@ -16,7 +16,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::{
     auth::AuthenticatedKey,
     handlers::{
-        build_provider_public_id_map, error_response, parse_model_field, resolve_provider_for_model,
+        build_provider_public_id_map, error_response, parse_model_field, resolve_route_targets,
     },
     server::GatewayAppState,
 };
@@ -541,45 +541,40 @@ async fn resolve_native_context(
         ));
     }
 
+    let global_settings = aqbot_core::repo::settings::get_settings(&state.db)
+        .await
+        .unwrap_or_default();
+
     let (provider, model_id) = if let Some(model) = model {
         let public_id_map = build_provider_public_id_map(&candidates);
         let known_public_ids = public_id_map.values().cloned().collect();
         let parsed = parse_model_field(model, &known_public_ids);
-        if parsed.provider_hint.is_some() {
-            let (provider, resolved_model_id) =
-                resolve_provider_for_model(&candidates, &public_id_map, &parsed)?;
-            (provider, Some(resolved_model_id))
-        } else {
-            let matching: Vec<&ProviderConfig> = candidates
-                .iter()
-                .filter(|provider| {
-                    provider
-                        .models
-                        .iter()
-                        .any(|model| model.enabled && model.model_id == parsed.model_id)
-                })
-                .collect();
-            let fallback = matching.first().ok_or_else(|| {
-                error_response(
-                    StatusCode::NOT_FOUND,
-                    &format!("Model '{}' not found", parsed.model_id),
-                )
-            })?;
-            let mut preferred_provider = None;
-            for provider in &matching {
-                if aqbot_core::repo::provider::get_active_key(&state.db, &provider.id)
-                    .await
-                    .is_ok()
-                {
-                    preferred_provider = Some((*provider).clone());
+        // Always collect the full match set so we can prefer a provider with an
+        // active key (compat with pre-routing behaviour). Failover across
+        // sources for native protocols is gated by gateway_auto_model_routing
+        // only after this selection path; for now we pin one upstream.
+        let targets = resolve_route_targets(&candidates, &public_id_map, &parsed, true)?;
+
+        // Prefer a target with an active key when multiple are available.
+        // When auto routing is disabled, still prefer keys but stay on first
+        // healthy match by sort_order among those with keys.
+        let auto_routing = global_settings.gateway_auto_model_routing;
+        let mut selected = None;
+        for (provider, real_model_id) in &targets {
+            if aqbot_core::repo::provider::get_active_key(&state.db, &provider.id)
+                .await
+                .is_ok()
+            {
+                selected = Some((provider.clone(), real_model_id.clone()));
+                if !auto_routing {
+                    // Keep first-with-key; targets are sort_order ordered.
                     break;
                 }
+                break;
             }
-            (
-                preferred_provider.unwrap_or_else(|| (*fallback).clone()),
-                Some(parsed.model_id),
-            )
         }
+        let (provider, real_model_id) = selected.unwrap_or_else(|| targets[0].clone());
+        (provider, Some(real_model_id))
     } else {
         (candidates[0].clone(), None)
     };
@@ -597,9 +592,6 @@ async fn resolve_native_context(
         error_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal key error")
     })?;
 
-    let global_settings = aqbot_core::repo::settings::get_settings(&state.db)
-        .await
-        .unwrap_or_default();
     let resolved_proxy = ProviderProxyConfig::resolve(&provider.proxy_config, &global_settings);
 
     Ok(ResolvedNativeContext {
@@ -1255,6 +1247,7 @@ mod tests {
                 param_overrides: None,
                 image_config: None,
                 metadata_state: None,
+                aliases: Vec::new(),
             }],
         )
         .await
@@ -1321,6 +1314,7 @@ mod tests {
                 param_overrides: None,
                 image_config: None,
                 metadata_state: None,
+                aliases: Vec::new(),
             }],
         )
         .await

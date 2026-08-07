@@ -43,6 +43,7 @@ mod m20260725_000001_add_provider_aws_region;
 mod m20260806_000001_add_role_capability_bindings;
 mod m20260807_000001_add_conversation_context_message_limit;
 mod m20260808_000001_compression_keep_and_source;
+mod m20260809_000001_add_model_aliases_and_auto_route;
 
 pub struct Migrator;
 
@@ -93,6 +94,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260806_000001_add_role_capability_bindings::Migration),
             Box::new(m20260807_000001_add_conversation_context_message_limit::Migration),
             Box::new(m20260808_000001_compression_keep_and_source::Migration),
+            Box::new(m20260809_000001_add_model_aliases_and_auto_route::Migration),
         ]
     }
 }
@@ -212,7 +214,7 @@ mod tests {
             .expect("run sqlite migrations");
         let manager = SchemaManager::new(&db);
 
-        for column in ["max_output_tokens", "metadata_state_json"] {
+        for column in ["max_output_tokens", "metadata_state_json", "aliases_json"] {
             assert!(
                 manager
                     .has_column("models", column)

@@ -214,6 +214,8 @@ export interface Model {
   param_overrides: ModelParamOverrides | null;
   image_config?: ImageAdapterConfig | null;
   metadata_state?: ModelMetadataState | null;
+  /** Gateway request aliases; requests using an alias are rewritten to model_id. */
+  aliases?: string[];
 }
 
 export type ImageOperation = 'generate' | 'edit' | 'mask_edit';
@@ -749,6 +751,8 @@ export interface AppSettings {
   gateway_ssl_key_path: string | null;
   gateway_ssl_port: number;
   gateway_force_ssl: boolean;
+  /** When true, pool same model id/alias across providers and fail over. */
+  gateway_auto_model_routing?: boolean;
   // Desktop integration
   always_on_top?: boolean;
   tray_enabled?: boolean;

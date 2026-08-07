@@ -71,6 +71,12 @@ fn model_from_entity(m: models::Model) -> Model {
             })
             .ok()
     });
+    let aliases = m
+        .aliases_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
+        .map(normalize_model_aliases)
+        .unwrap_or_default();
     Model {
         provider_id: m.provider_id,
         model_id: m.model_id,
@@ -88,6 +94,7 @@ fn model_from_entity(m: models::Model) -> Model {
             .image_config_json
             .and_then(|value| serde_json::from_str(&value).ok()),
         metadata_state,
+        aliases,
     }
 }
 
@@ -666,6 +673,12 @@ where
             .metadata_state
             .as_ref()
             .and_then(|state| serde_json::to_string(state).ok());
+        let aliases = normalize_model_aliases(model.aliases.iter().map(|s| s.as_str()));
+        let aliases_json = if aliases.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(&aliases).unwrap_or_else(|_| "[]".to_string()))
+        };
 
         models::ActiveModel {
             provider_id: Set(provider_id.to_string()),
@@ -680,6 +693,7 @@ where
             param_overrides: Set(param_overrides),
             image_config_json: Set(image_config_json),
             metadata_state_json: Set(metadata_state_json),
+            aliases_json: Set(aliases_json),
         }
         .insert(conn)
         .await?;
@@ -688,11 +702,31 @@ where
     Ok(())
 }
 
+fn validate_provider_model_aliases(input_models: &[Model]) -> Result<()> {
+    let siblings: Vec<(String, Vec<String>)> = input_models
+        .iter()
+        .map(|m| {
+            (
+                m.model_id.clone(),
+                normalize_model_aliases(m.aliases.iter().map(|s| s.as_str())),
+            )
+        })
+        .collect();
+    for model in input_models {
+        let aliases = normalize_model_aliases(model.aliases.iter().map(|s| s.as_str()));
+        validate_model_aliases(&model.model_id, &aliases, &siblings)
+            .map_err(AQBotError::Validation)?;
+    }
+    Ok(())
+}
+
 pub async fn save_models(
     db: &DatabaseConnection,
     provider_id: &str,
     input_models: &[Model],
 ) -> Result<()> {
+    validate_provider_model_aliases(input_models)?;
+
     let provider_id = provider_id.to_string();
     let input_models = input_models.to_vec();
 
@@ -721,6 +755,8 @@ pub async fn save_models_from_user_selection(
     provider_id: &str,
     input_models: &[Model],
 ) -> Result<()> {
+    validate_provider_model_aliases(input_models)?;
+
     let provider = get_provider(db, provider_id).await?;
     let Some(builtin_id) = provider.builtin_id.clone() else {
         return save_models(db, provider_id, input_models).await;
@@ -1192,6 +1228,7 @@ mod tests {
                     max_output_tokens: ModelMetadataSource::Catalog,
                     ..ModelMetadataState::default()
                 }),
+                aliases: Vec::new(),
             }],
         )
         .await
@@ -1261,6 +1298,7 @@ mod tests {
                     max_output_tokens: ModelMetadataSource::Catalog,
                     ..ModelMetadataState::default()
                 }),
+                aliases: Vec::new(),
             }],
         )
         .await

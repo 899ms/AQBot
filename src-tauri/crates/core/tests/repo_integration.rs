@@ -229,9 +229,12 @@ async fn test_provider_model_operations() {
         model_type: ModelType::Chat,
         capabilities: vec![ModelCapability::TextChat],
         context_window: Some(4096),
+        max_output_tokens: None,
         enabled: true,
         param_overrides: None,
         image_config: None,
+        metadata_state: None,
+        aliases: Vec::new(),
     }];
 
     // save models

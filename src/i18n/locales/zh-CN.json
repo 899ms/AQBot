@@ -481,7 +481,10 @@
     "templateDescCodex": "OpenAI 轻量级编程代理，支持在沙盒中自主完成编码任务",
     "templateDescOpencode": "开源终端 AI 编程助手，支持多模型后端的灵活代码工具",
     "templateDescGemini": "Google Gemini CLI 编程代理，直接在终端中使用 Gemini 模型",
-    "templateDescCursor": "基于 VS Code 的 AI 原生编辑器，深度集成代码补全与对话"
+    "templateDescCursor": "基于 VS Code 的 AI 原生编辑器，深度集成代码补全与对话",
+    "autoModelRouting": "自动模型路由",
+    "autoModelRoutingTooltip": "将多个服务商上相同的模型 ID 或别名聚合成一个，并在限流/故障时自动切换。",
+    "autoModelRoutingDesc": "开启后，当多个服务商配置了相同的模型 ID 或相同的别名时，网关对外呈现为一个模型名，并按服务商排序与可用性自动选择上游；限流或故障时会尝试其他源。使用「服务商/模型」可强制指定单一上游。"
   },
   "settings": {
     "selectionToolbar": {
@@ -1405,7 +1408,10 @@
     "batchEditTitle": "批量编辑 ({{count}} 个模型)",
     "batchEditHint": "开启右侧开关的选项将被应用到所有选中的模型",
     "batchApply": "应用",
-    "batchEditSuccess": "已更新 {{count}} 个模型的设置"
+    "batchEditSuccess": "已更新 {{count}} 个模型的设置",
+    "modelAliases": "模型别名",
+    "modelAliasesPlaceholder": "输入别名后回车",
+    "modelAliasesHelp": "网关可用别名接收请求，并转发为真实模型 ID。多个服务商配置相同别名时，可配合「自动模型路由」做多源切换。"
   },
   "backup": {
     "title": "备份中心",

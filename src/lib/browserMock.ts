@@ -65,6 +65,7 @@ function chatModel(
     max_output_tokens: null,
     enabled,
     param_overrides: paramOverrides,
+    aliases: [],
     metadata_state: null,
   };
 }
@@ -81,6 +82,7 @@ function imageModel(providerId: string, modelId: string, enabled = true) {
     max_output_tokens: null,
     enabled,
     param_overrides: null,
+    aliases: [],
     metadata_state: null,
   };
 }
@@ -96,6 +98,7 @@ function rerankModel(providerId: string, modelId: string, name: string, enabled 
     max_output_tokens: null,
     enabled,
     param_overrides: null,
+    aliases: [],
     metadata_state: null,
   };
 }

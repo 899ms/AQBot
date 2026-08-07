@@ -481,7 +481,10 @@
     "templateDescCodex": "OpenAI's lightweight coding agent, autonomously complete coding tasks in a sandbox",
     "templateDescOpencode": "Open-source terminal AI coding assistant, flexible code tool supporting multiple model backends",
     "templateDescGemini": "Google Gemini CLI coding agent, use Gemini models directly in the terminal",
-    "templateDescCursor": "AI-native editor based on VS Code, with deep integration of code completion and chat"
+    "templateDescCursor": "AI-native editor based on VS Code, with deep integration of code completion and chat",
+    "autoModelRouting": "Automatic model routing",
+    "autoModelRoutingTooltip": "Pool the same model ID or alias across providers and fail over on rate limits or outages.",
+    "autoModelRoutingDesc": "When enabled, the same model ID or alias on multiple providers is exposed as one model. The gateway chooses an upstream by provider order and availability, and fails over on rate limits or outages. Use provider/model to pin a single upstream."
   },
   "settings": {
     "selectionToolbar": {
@@ -1405,7 +1408,10 @@
     "batchEditTitle": "Batch Edit ({{count}} models)",
     "batchEditHint": "Toggle on the options you want to apply to all selected models",
     "batchApply": "Apply",
-    "batchEditSuccess": "Updated settings for {{count}} models"
+    "batchEditSuccess": "Updated settings for {{count}} models",
+    "modelAliases": "Model aliases",
+    "modelAliasesPlaceholder": "Add alias and press Enter",
+    "modelAliasesHelp": "Gateway clients can request these aliases; the request is rewritten to the real model ID. Identical aliases across providers work with Automatic model routing."
   },
   "backup": {
     "title": "Backup Center",

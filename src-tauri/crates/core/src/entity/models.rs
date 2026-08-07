@@ -18,6 +18,8 @@ pub struct Model {
     pub param_overrides: Option<String>,
     pub image_config_json: Option<String>,
     pub metadata_state_json: Option<String>,
+    /// JSON array of gateway request aliases for this model.
+    pub aliases_json: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

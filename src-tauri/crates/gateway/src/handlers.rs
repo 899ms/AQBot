@@ -27,14 +27,13 @@ pub async fn health_check() -> impl IntoResponse {
 
 /// GET /v1/models — list enabled models from all enabled providers.
 ///
-/// Model IDs are emitted as plain `model_id` when globally unique across all
-/// enabled providers, or as `provider_slug/model_id` when the same `model_id`
-/// exists on more than one enabled provider (collision).  The legacy
-/// `provider_uuid:model_id` format is **no longer emitted**.
+/// Model IDs and aliases are listed. When the same request name collides across
+/// providers:
+/// - **auto routing off**: emit `public_id/name` (existing collision rule).
+/// - **auto routing on**: emit a single bare name with `owned_by: "aqbot"`, and
+///   still emit namespaced `public_id/name` entries so clients can pin a source.
 ///
-/// Results are sorted deterministically: primary key is the displayed model ID
-/// (lexicographic), secondary key is the provider name (tiebreaker for the rare
-/// case of identical display IDs across multiple providers).
+/// Results are sorted deterministically by displayed model ID, then owner.
 pub async fn list_models(State(state): State<GatewayAppState>) -> impl IntoResponse {
     let providers = match aqbot_core::repo::provider::list_providers(&state.db).await {
         Ok(p) => p,
@@ -47,26 +46,80 @@ pub async fn list_models(State(state): State<GatewayAppState>) -> impl IntoRespo
         }
     };
 
-    let display_map = build_model_display_map(&providers);
+    let auto_routing = aqbot_core::repo::settings::get_settings(&state.db)
+        .await
+        .map(|s| s.gateway_auto_model_routing)
+        .unwrap_or(false);
+
+    let models = build_gateway_model_list(&providers, auto_routing);
+
+    Json(json!({
+        "object": "list",
+        "data": models,
+    }))
+    .into_response()
+}
+
+/// Build OpenAI-style model list entries for the gateway.
+pub(crate) fn build_gateway_model_list(
+    providers: &[ProviderConfig],
+    auto_routing: bool,
+) -> Vec<serde_json::Value> {
+    use crate::auto_route::request_name_provider_counts;
+
+    let public_id_map = build_provider_public_id_map(providers);
+    let name_counts = request_name_provider_counts(providers);
 
     let mut models: Vec<serde_json::Value> = Vec::new();
+    let mut emitted_aggregated: HashSet<String> = HashSet::new();
+
     for provider in providers.iter().filter(|p| p.enabled) {
+        let public_id = public_id_map
+            .get(&provider.id)
+            .cloned()
+            .unwrap_or_else(|| provider.name.clone());
+
         for model in provider.models.iter().filter(|m| m.enabled) {
-            let key = (provider.id.clone(), model.model_id.clone());
-            let display_id = display_map
-                .get(&key)
-                .cloned()
-                .unwrap_or_else(|| model.model_id.clone());
-            models.push(json!({
-                "id": display_id,
-                "object": "model",
-                "created": provider.created_at,
-                "owned_by": provider.name,
-            }));
+            let mut names = vec![model.model_id.clone()];
+            names.extend(model.aliases.iter().cloned());
+
+            for name in names {
+                let count = *name_counts.get(&name).unwrap_or(&0);
+                if auto_routing && count > 1 {
+                    if emitted_aggregated.insert(name.clone()) {
+                        models.push(json!({
+                            "id": name,
+                            "object": "model",
+                            "created": provider.created_at,
+                            "owned_by": "aqbot",
+                        }));
+                    }
+                    // Always keep namespaced pin entry when auto-routing aggregates.
+                    models.push(json!({
+                        "id": format!("{}/{}", public_id, name),
+                        "object": "model",
+                        "created": provider.created_at,
+                        "owned_by": provider.name,
+                    }));
+                } else if count > 1 {
+                    models.push(json!({
+                        "id": format!("{}/{}", public_id, name),
+                        "object": "model",
+                        "created": provider.created_at,
+                        "owned_by": provider.name,
+                    }));
+                } else {
+                    models.push(json!({
+                        "id": name,
+                        "object": "model",
+                        "created": provider.created_at,
+                        "owned_by": provider.name,
+                    }));
+                }
+            }
         }
     }
 
-    // Deterministic ordering: display ID first, provider name as tiebreaker.
     models.sort_by(|a, b| {
         let id_a = a["id"].as_str().unwrap_or("");
         let id_b = b["id"].as_str().unwrap_or("");
@@ -74,12 +127,7 @@ pub async fn list_models(State(state): State<GatewayAppState>) -> impl IntoRespo
         let ob_b = b["owned_by"].as_str().unwrap_or("");
         id_a.cmp(id_b).then(ob_a.cmp(ob_b))
     });
-
-    Json(json!({
-        "object": "list",
-        "data": models,
-    }))
-    .into_response()
+    models
 }
 
 /// POST /v1/chat/completions — main proxy handler
@@ -117,108 +165,186 @@ pub async fn chat_completions(
     let known_public_ids: HashSet<String> = public_id_map.values().cloned().collect();
 
     // Parse model field: supports "provider_public_id/model_id" (preferred),
-    // legacy "provider_id:model_id" (compat), or bare "model_id".
+    // or bare "model_id" / alias.
     let parsed = parse_model_field(&request.model, &known_public_ids);
-
-    // Resolve the provider and canonical model_id.
-    let (provider, model_id) = match resolve_provider_for_model(&providers, &public_id_map, &parsed)
-    {
-        Ok(pair) => pair,
-        Err(resp) => return resp,
-    };
-
-    // Get active key and decrypt
-    let provider_key =
-        match aqbot_core::repo::provider::get_active_key(&state.db, &provider.id).await {
-            Ok(k) => k,
-            Err(_) => {
-                return error_response(
-                    StatusCode::BAD_GATEWAY,
-                    &format!("No active API key for provider '{}'", provider.name),
-                );
-            }
-        };
-
-    let api_key = match decrypt_key(&provider_key.key_encrypted, &state.master_key) {
-        Ok(k) => k,
-        Err(e) => {
-            tracing::error!("Failed to decrypt provider key: {}", e);
-            return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal key error");
-        }
-    };
-
-    let provider_type_str = provider_type_to_str(&provider.provider_type);
 
     let global_settings = aqbot_core::repo::settings::get_settings(&state.db)
         .await
         .unwrap_or_default();
-    let resolved_proxy = ProviderProxyConfig::resolve(&provider.proxy_config, &global_settings);
+    let auto_routing = global_settings.gateway_auto_model_routing;
 
-    let ctx = ProviderRequestContext {
-        api_key,
-        key_id: provider_key.id.clone(),
-        provider_id: provider.id.clone(),
-        base_url: Some(resolve_base_url_for_type(
-            &provider.api_host,
-            &provider.provider_type,
-        )),
-        api_path: provider.api_path.clone(),
-        aws_region: provider.aws_region.clone(),
-        proxy_config: resolved_proxy,
-        custom_headers: provider
-            .custom_headers
-            .as_ref()
-            .and_then(|s| serde_json::from_str(s).ok()),
-    };
+    let targets =
+        match resolve_route_targets(&providers, &public_id_map, &parsed, auto_routing) {
+            Ok(t) => t,
+            Err(resp) => return resp,
+        };
 
     let registry = aqbot_providers::registry::ProviderRegistry::create_default();
-    let adapter = match registry.get(provider_type_str) {
-        Some(a) => a,
-        None => {
-            // Fallback to openai-compatible for custom providers
-            match registry.get("openai") {
+    let pinned = parsed.provider_hint.is_some() || targets.len() == 1 || !auto_routing;
+
+    let mut last_error: Option<String> = None;
+    for (idx, (provider, model_id)) in targets.into_iter().enumerate() {
+        // Get active key and decrypt
+        let provider_key =
+            match aqbot_core::repo::provider::get_active_key(&state.db, &provider.id).await {
+                Ok(k) => k,
+                Err(_) => {
+                    let msg = format!("No active API key for provider '{}'", provider.name);
+                    crate::auto_route::mark_failure(&provider.id, &model_id);
+                    last_error = Some(msg.clone());
+                    if pinned {
+                        return error_response(StatusCode::BAD_GATEWAY, &msg);
+                    }
+                    continue;
+                }
+            };
+
+        let api_key = match decrypt_key(&provider_key.key_encrypted, &state.master_key) {
+            Ok(k) => k,
+            Err(e) => {
+                tracing::error!("Failed to decrypt provider key: {}", e);
+                return error_response(StatusCode::INTERNAL_SERVER_ERROR, "Internal key error");
+            }
+        };
+
+        let provider_type_str = provider_type_to_str(&provider.provider_type);
+        let resolved_proxy =
+            ProviderProxyConfig::resolve(&provider.proxy_config, &global_settings);
+
+        let ctx = ProviderRequestContext {
+            api_key,
+            key_id: provider_key.id.clone(),
+            provider_id: provider.id.clone(),
+            base_url: Some(resolve_base_url_for_type(
+                &provider.api_host,
+                &provider.provider_type,
+            )),
+            api_path: provider.api_path.clone(),
+            aws_region: provider.aws_region.clone(),
+            proxy_config: resolved_proxy,
+            custom_headers: provider
+                .custom_headers
+                .as_ref()
+                .and_then(|s| serde_json::from_str(s).ok()),
+        };
+
+        let adapter = match registry.get(provider_type_str) {
+            Some(a) => a,
+            None => match registry.get("openai") {
                 Some(a) => a,
                 None => {
-                    return error_response(
-                        StatusCode::BAD_GATEWAY,
-                        &format!("No adapter for provider type '{}'", provider_type_str),
-                    );
+                    let msg = format!("No adapter for provider type '{}'", provider_type_str);
+                    last_error = Some(msg.clone());
+                    if pinned {
+                        return error_response(StatusCode::BAD_GATEWAY, &msg);
+                    }
+                    continue;
                 }
+            },
+        };
+
+        let mut attempt_request = request.clone();
+        // Always send the real upstream model id.
+        attempt_request.model = model_id.clone();
+
+        if attempt_request.stream {
+            // Streaming: try until we get a stream handle; mid-stream failures
+            // cannot failover (handle_stream owns the response after first byte).
+            let response = handle_stream(
+                adapter,
+                &ctx,
+                attempt_request,
+                &state,
+                &gateway_key,
+                &provider.id,
+                &model_id,
+                start_time,
+            )
+            .await;
+            // Success path returns 200 SSE; failure returns 502 JSON before stream starts.
+            if response.status().is_success() {
+                crate::auto_route::mark_success(&provider.id, &model_id);
+                return response;
+            }
+            let msg = format!(
+                "Upstream '{}' failed for model '{}'",
+                provider.name, model_id
+            );
+            crate::auto_route::mark_failure(&provider.id, &model_id);
+            last_error = Some(msg);
+            if pinned {
+                return response;
+            }
+            tracing::warn!(
+                attempt = idx + 1,
+                provider = %provider.name,
+                model = %model_id,
+                "gateway auto-route stream attempt failed; trying next"
+            );
+            continue;
+        }
+
+        match try_non_stream(
+            adapter,
+            &ctx,
+            attempt_request,
+            &state,
+            &gateway_key,
+            &provider.id,
+            &model_id,
+            start_time,
+        )
+        .await
+        {
+            Ok(response) => {
+                crate::auto_route::mark_success(&provider.id, &model_id);
+                return response;
+            }
+            Err(err_msg) => {
+                let retriable = crate::auto_route::is_retriable_error_message(&err_msg);
+                crate::auto_route::mark_failure(&provider.id, &model_id);
+                last_error = Some(err_msg.clone());
+                if pinned || !retriable {
+                    let elapsed = start_time.elapsed().as_millis() as i32;
+                    let _ = aqbot_core::repo::gateway_request_log::record_request_log(
+                        &state.db,
+                        &gateway_key.id,
+                        &gateway_key.name,
+                        "POST",
+                        "/v1/chat/completions",
+                        Some(&model_id),
+                        Some(&provider.id),
+                        502,
+                        elapsed,
+                        0,
+                        0,
+                        Some(&err_msg),
+                    )
+                    .await;
+                    return error_response(StatusCode::BAD_GATEWAY, &err_msg);
+                }
+                tracing::warn!(
+                    attempt = idx + 1,
+                    provider = %provider.name,
+                    model = %model_id,
+                    error = %err_msg,
+                    "gateway auto-route attempt failed; trying next"
+                );
             }
         }
-    };
-
-    let mut request = request;
-    request.model = model_id.clone();
-
-    if request.stream {
-        handle_stream(
-            adapter,
-            &ctx,
-            request,
-            &state,
-            &gateway_key,
-            &provider.id,
-            &model_id,
-            start_time,
-        )
-        .await
-    } else {
-        handle_non_stream(
-            adapter,
-            &ctx,
-            request,
-            &state,
-            &gateway_key,
-            &provider.id,
-            &model_id,
-            start_time,
-        )
-        .await
     }
+
+    error_response(
+        StatusCode::BAD_GATEWAY,
+        last_error
+            .as_deref()
+            .unwrap_or("All upstream providers failed for this model"),
+    )
 }
 
-async fn handle_non_stream(
+/// Attempt a non-streaming chat call. On success returns the HTTP response.
+/// On failure returns the error message (caller decides failover / logging).
+async fn try_non_stream(
     adapter: &dyn ProviderAdapter,
     ctx: &ProviderRequestContext,
     request: ChatRequest,
@@ -227,10 +353,9 @@ async fn handle_non_stream(
     provider_id: &str,
     model_id: &str,
     start_time: Instant,
-) -> axum::response::Response {
+) -> Result<axum::response::Response, String> {
     match adapter.chat(ctx, request).await {
         Ok(response) => {
-            // Record usage
             let _ = aqbot_core::repo::gateway::record_usage(
                 &state.db,
                 &gateway_key.id,
@@ -258,28 +383,9 @@ async fn handle_non_stream(
             )
             .await;
 
-            Json(build_non_stream_response_body(&response)).into_response()
+            Ok(Json(build_non_stream_response_body(&response)).into_response())
         }
-        Err(e) => {
-            let elapsed = start_time.elapsed().as_millis() as i32;
-            let _ = aqbot_core::repo::gateway_request_log::record_request_log(
-                &state.db,
-                &gateway_key.id,
-                &gateway_key.name,
-                "POST",
-                "/v1/chat/completions",
-                Some(model_id),
-                Some(provider_id),
-                502,
-                elapsed,
-                0,
-                0,
-                Some(&e.to_string()),
-            )
-            .await;
-
-            error_response(StatusCode::BAD_GATEWAY, &e.to_string())
-        }
+        Err(e) => Err(e.to_string()),
     }
 }
 
@@ -589,20 +695,38 @@ pub(crate) fn parse_model_field(model: &str, known_public_ids: &HashSet<String>)
     }
 }
 
-/// Resolve the `ProviderConfig` and canonical `model_id` string from a parsed
-/// model field.
-///
-/// - Slug hint (`/`): match enabled provider by its public ID (from the map),
-///   verify model exists.
-/// - No hint: scan all enabled providers for an enabled model with that ID;
-///   succeed only when exactly one provider has it — otherwise error with a
-///   helpful message asking the caller to use the `provider/model` form.
+/// Resolve a single target (legacy helper / native pin). Prefer [`resolve_route_targets`].
+#[allow(dead_code)]
 pub(crate) fn resolve_provider_for_model(
     providers: &[ProviderConfig],
     public_id_map: &HashMap<String, String>,
     parsed: &ParsedModel,
 ) -> Result<(ProviderConfig, String), axum::response::Response> {
+    let mut targets = resolve_route_targets(providers, public_id_map, parsed, false)?;
+    // When auto_routing is false only one target is returned; take the first.
+    let first = targets.remove(0);
+    Ok(first)
+}
+
+/// Resolve one or more `(provider, real_model_id)` targets for a request.
+///
+/// - With provider hint: always a single pinned target (model id or alias).
+/// - Bare name: all matching providers (id or alias). When `auto_routing` is
+///   false only the first (by sort_order) is returned; when true, the full
+///   ordered pool is returned for failover.
+pub(crate) fn resolve_route_targets(
+    providers: &[ProviderConfig],
+    public_id_map: &HashMap<String, String>,
+    parsed: &ParsedModel,
+    auto_routing: bool,
+) -> Result<Vec<(ProviderConfig, String)>, axum::response::Response> {
+    use crate::auto_route::{
+        candidates_for_attempt, collect_candidates, resolve_real_model_id, RouteCandidate,
+    };
+
     let enabled: Vec<&ProviderConfig> = providers.iter().filter(|p| p.enabled).collect();
+    let provider_by_id: HashMap<&str, &ProviderConfig> =
+        enabled.iter().map(|p| (p.id.as_str(), *p)).collect();
 
     match &parsed.provider_hint {
         Some(hint) => {
@@ -617,40 +741,52 @@ pub(crate) fn resolve_provider_for_model(
                 )
             })?;
 
-            if !provider
+            let real_id = provider
                 .models
                 .iter()
-                .any(|m| m.enabled && m.model_id == parsed.model_id)
-            {
+                .filter(|m| m.enabled)
+                .find_map(|m| resolve_real_model_id(m, &parsed.model_id))
+                .ok_or_else(|| {
+                    error_response(
+                        StatusCode::NOT_FOUND,
+                        &format!(
+                            "Model '{}' not found on provider '{}'",
+                            parsed.model_id, hint
+                        ),
+                    )
+                })?;
+
+            Ok(vec![((*provider).clone(), real_id)])
+        }
+        None => {
+            let cands = collect_candidates(providers, &parsed.model_id);
+            if cands.is_empty() {
                 return Err(error_response(
                     StatusCode::NOT_FOUND,
-                    &format!(
-                        "Model '{}' not found on provider '{}'",
-                        parsed.model_id, hint
-                    ),
+                    &format!("Model '{}' not found", parsed.model_id),
                 ));
             }
 
-            Ok(((*provider).clone(), parsed.model_id.clone()))
-        }
-        None => {
-            // Bare model_id: find matching enabled providers.
-            let matching: Vec<&&ProviderConfig> = enabled
-                .iter()
-                .filter(|p| {
-                    p.models
-                        .iter()
-                        .any(|m| m.enabled && m.model_id == parsed.model_id)
-                })
-                .collect();
+            let ordered: Vec<RouteCandidate> = if auto_routing && cands.len() > 1 {
+                candidates_for_attempt(&cands)
+            } else {
+                // First-match by sort_order (compat when auto routing is off).
+                cands.into_iter().take(1).collect()
+            };
 
-            match matching.len() {
-                0 => Err(error_response(
+            let mut out = Vec::with_capacity(ordered.len());
+            for cand in ordered {
+                if let Some(provider) = provider_by_id.get(cand.provider_id.as_str()) {
+                    out.push(((*provider).clone(), cand.real_model_id));
+                }
+            }
+            if out.is_empty() {
+                return Err(error_response(
                     StatusCode::NOT_FOUND,
                     &format!("Model '{}' not found", parsed.model_id),
-                )),
-                _ => Ok(((*matching[0]).clone(), parsed.model_id.clone())),
+                ));
             }
+            Ok(out)
         }
     }
 }
@@ -803,6 +939,7 @@ mod tests {
                     param_overrides: None,
                     image_config: None,
                     metadata_state: None,
+                    aliases: Vec::new(),
                 }],
             )
             .await
@@ -971,6 +1108,7 @@ mod tests {
                     param_overrides: None,
                     image_config: None,
                     metadata_state: None,
+                    aliases: Vec::new(),
                 })
                 .collect(),
             keys: vec![],
@@ -1058,6 +1196,58 @@ mod tests {
         assert_eq!(map[&("p1".to_string(), "gpt-4o".to_string())], "gpt-4o");
         // p2 is disabled → not in map at all
         assert!(!map.contains_key(&("p2".to_string(), "gpt-4o".to_string())));
+    }
+
+    #[test]
+    fn resolve_route_targets_alias_rewrites_to_real_model_id() {
+        let mut providers = vec![make_provider("p1", "OpenAI", &["claude-sonnet-real"])];
+        providers[0].models[0].aliases = vec!["sonnet".into()];
+        let map = build_provider_public_id_map(&providers);
+        let parsed = parse_model_field("sonnet", &HashSet::new());
+        let targets = resolve_route_targets(&providers, &map, &parsed, false).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].1, "claude-sonnet-real");
+    }
+
+    #[test]
+    fn resolve_route_targets_auto_routing_returns_pool() {
+        let mut providers = vec![
+            make_provider("p1", "OpenAI", &["gpt-5.5"]),
+            make_provider("p2", "OtherAI", &["gpt-5.5"]),
+        ];
+        providers[0].sort_order = 10;
+        providers[1].sort_order = 0;
+        let map = build_provider_public_id_map(&providers);
+        let parsed = parse_model_field("gpt-5.5", &HashSet::new());
+        let single = resolve_route_targets(&providers, &map, &parsed, false).unwrap();
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0].0.id, "p2");
+
+        let multi = resolve_route_targets(&providers, &map, &parsed, true).unwrap();
+        assert_eq!(multi.len(), 2);
+        assert_eq!(multi[0].0.id, "p2");
+        assert_eq!(multi[1].0.id, "p1");
+    }
+
+    #[test]
+    fn gateway_model_list_aggregates_when_auto_routing() {
+        let providers = vec![
+            make_provider("p1", "OpenAI", &["gpt-5.5"]),
+            make_provider("p2", "OtherAI", &["gpt-5.5"]),
+        ];
+        let off = build_gateway_model_list(&providers, false);
+        let off_ids: Vec<&str> = off.iter().filter_map(|v| v["id"].as_str()).collect();
+        assert!(off_ids.iter().all(|id| id.contains('/')));
+
+        let on = build_gateway_model_list(&providers, true);
+        let on_ids: Vec<&str> = on.iter().filter_map(|v| v["id"].as_str()).collect();
+        assert!(on_ids.contains(&"gpt-5.5"));
+        assert!(on_ids.iter().any(|id| id.contains("gpt-5.5") && id.contains('/')));
+        let bare = on
+            .iter()
+            .find(|v| v["id"] == "gpt-5.5")
+            .expect("aggregated bare id");
+        assert_eq!(bare["owned_by"], "aqbot");
     }
 
     #[test]

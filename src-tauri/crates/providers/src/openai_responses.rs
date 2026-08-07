@@ -995,6 +995,7 @@ impl ProviderAdapter for OpenAIResponsesAdapter {
                     param_overrides: None,
                     image_config: None,
                     metadata_state: None,
+                    aliases: Vec::new(),
                 }
             })
             .collect())

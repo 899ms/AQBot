@@ -787,6 +787,7 @@ impl ProviderAdapter for GeminiAdapter {
                     param_overrides: None,
                     image_config,
                     metadata_state: None,
+                    aliases: Vec::new(),
                 }
             })
             .collect())

@@ -97,6 +97,7 @@ mod function_calling_gate_tests {
             param_overrides: None,
             image_config: None,
             metadata_state: None,
+            aliases: Vec::new(),
         }
     }
 
