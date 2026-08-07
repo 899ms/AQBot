@@ -143,6 +143,8 @@
     "stop": "停止",
     "commandHint": "输入 / 使用命令",
     "you": "你",
+    "assistant": "助手",
+    "system": "系统",
     "archive": "归档",
     "archived": "已归档",
     "unarchive": "取消归档",
@@ -225,6 +227,7 @@
     "shareSelectNone": "请先选择要分享的消息",
     "shareSelectedCount": "已选 {{count}} 条",
     "shareSelectAll": "全选",
+    "shareMoreFormats": "更多",
     "mcp": {
       "title": "MCP 工具",
       "noServers": "请先在设置中配置并启用 MCP 服务器",

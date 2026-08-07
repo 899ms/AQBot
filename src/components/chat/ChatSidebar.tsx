@@ -2,14 +2,16 @@ import { useState, useMemo, useCallback, useEffect, useRef, memo } from 'react'
 import { Button, Input, App, theme, Tooltip, Checkbox, Dropdown, Empty } from 'antd'
 import { MessageSquarePlus, Search, Archive, ListTodo, Trash2, Pencil, Share, Pin, PinOff, Loader, X, Undo2, ArrowLeft, FileImage, FileCode, FileType, FileText, FolderPlus, FolderOpen, GripVertical, ChevronRight, MessageSquareText, Sparkles } from 'lucide-react'
 import { exportAsMarkdown, exportAsText, exportMessagesAsPNG, exportAsJSON } from '@/lib/exportChat'
+import { buildExportOptions } from '@/lib/exportChatPresentation'
 import { invoke } from '@/lib/invoke'
+import { useUserProfileStore } from '@/stores/userProfileStore'
+import { useResolvedAvatarSrc } from '@/hooks/useResolvedAvatarSrc'
 import type { ConversationItemType } from '@ant-design/x/es/conversations/interface'
 import { useTranslation } from 'react-i18next'
 import { useConversationStore, useProviderStore, useSettingsStore, useCategoryStore } from '@/stores'
 import { getShortcutBinding, formatShortcutForDisplay } from '@/lib/shortcuts'
 import type { ShortcutAction } from '@/lib/shortcuts'
 import type { Conversation, Message, ConversationCategory } from '@/types'
-import { useResolvedAvatarSrc } from '@/hooks/useResolvedAvatarSrc'
 import type { AvatarType } from '@/stores/userProfileStore'
 import { CategoryEditModal, type CategoryEditFormData } from './CategoryEditModal'
 import { ConversationIcon } from './ConversationIcon'
@@ -173,6 +175,7 @@ export function ChatSidebar() {
   const providers = useProviderStore((s) => s.providers)
   const settings = useSettingsStore((s) => s.settings)
   const settingsLoading = useSettingsStore((s) => s.loading)
+  const profile = useUserProfileStore((s) => s.profile)
 
   const categories = useCategoryStore((s) => s.categories)
   const ensureCategoriesLoaded = useCategoryStore((s) => s.ensureCategoriesLoaded)
@@ -935,6 +938,19 @@ export function ChatSidebar() {
 
   const buildExportChildren = useCallback(
     (convId: string, title: string) => {
+      const conv = conversationById.get(convId)
+      const exportOptions = buildExportOptions({
+        userName: profile.name,
+        theme: {
+          colorPrimary: token.colorPrimary,
+          colorPrimaryBg: token.colorPrimaryBg,
+          colorPrimaryBorder: token.colorPrimaryBorder,
+          colorFillSecondary: token.colorFillSecondary,
+        },
+        providers,
+        conversationModelId: conv?.model_id,
+        conversationProviderId: conv?.provider_id,
+      })
       return [
       {
         key: 'export-png',
@@ -945,7 +961,10 @@ export function ChatSidebar() {
             const msgs = await invoke<Message[]>('list_messages', { conversationId: convId })
             const shareable = msgs.filter((m) => m.role === 'user' || m.role === 'assistant')
             if (shareable.length === 0) { messageApi.warning(t('chat.noMessages')); return }
-            const ok = await exportMessagesAsPNG(shareable, title, { includeThinking: false })
+            const ok = await exportMessagesAsPNG(shareable, title, {
+              ...exportOptions,
+              includeThinking: false,
+            })
             if (ok) messageApi.success(t('chat.exportSuccess'))
           } catch (e) {
             console.error('Export PNG failed:', e)
@@ -961,7 +980,7 @@ export function ChatSidebar() {
           try {
             const msgs = await invoke<Message[]>('list_messages', { conversationId: convId })
             if (msgs.length === 0) { messageApi.warning(t('chat.noMessages')); return }
-            const ok = await exportAsMarkdown(msgs, title)
+            const ok = await exportAsMarkdown(msgs, title, exportOptions)
             if (ok) messageApi.success(t('chat.exportSuccess'))
           } catch (e) {
             console.error('Export MD failed:', e)
@@ -977,7 +996,7 @@ export function ChatSidebar() {
           try {
             const msgs = await invoke<Message[]>('list_messages', { conversationId: convId })
             if (msgs.length === 0) { messageApi.warning(t('chat.noMessages')); return }
-            const ok = await exportAsText(msgs, title)
+            const ok = await exportAsText(msgs, title, exportOptions)
             if (ok) messageApi.success(t('chat.exportSuccess'))
           } catch (e) {
             console.error('Export TXT failed:', e)
@@ -993,7 +1012,7 @@ export function ChatSidebar() {
           try {
             const msgs = await invoke<Message[]>('list_messages', { conversationId: convId })
             if (msgs.length === 0) { messageApi.warning(t('chat.noMessages')); return }
-            const ok = await exportAsJSON(msgs, title)
+            const ok = await exportAsJSON(msgs, title, exportOptions)
             if (ok) messageApi.success(t('chat.exportSuccess'))
           } catch (e) {
             console.error('Export JSON failed:', e)
@@ -1003,7 +1022,17 @@ export function ChatSidebar() {
       },
       ]
     },
-    [messageApi, t],
+    [
+      conversationById,
+      messageApi,
+      profile.name,
+      providers,
+      t,
+      token.colorFillSecondary,
+      token.colorPrimary,
+      token.colorPrimaryBg,
+      token.colorPrimaryBorder,
+    ],
   )
 
   const menuConfig = useCallback<ConversationMenuFactory>(

@@ -39,8 +39,14 @@ describe('Phase C output control regressions', () => {
     expect(chatView).toContain("key: 'select-share'");
     expect(chatView).toContain('exportMessagesAsPNG');
     expect(chatView).toContain('shareSelectMode');
+    expect(chatView).toContain('handleShareSelectableClick');
+    expect(chatView).toContain('wrapShareSelectableContent');
+    // Primary CTA exports PNG directly (not only via dropdown)
+    expect(chatView).toContain("void exportSelectedShare('png')");
     expect(exportChat).toContain('exportMessagesAsPNG');
     expect(exportChat).toContain('prepareClonedExportRoot');
+    expect(exportChat).toContain('renderExportMarkdownHtml');
+    expect(exportChat).toContain('sanitizeExportFilename');
   });
 
   it('lets export helpers optionally strip thinking content before saving or copying', () => {

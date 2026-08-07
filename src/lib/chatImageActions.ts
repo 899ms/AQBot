@@ -1,5 +1,6 @@
 import { invoke, isTauri } from './invoke';
 import { Image as TauriImage } from '@tauri-apps/api/image';
+import { sanitizeFilenamePart as sanitizeFilenamePartShared } from './filename';
 
 const IMAGE_MIME_EXTENSIONS: Record<string, string> = {
   'image/png': 'png',
@@ -75,13 +76,7 @@ function getExtensionForImage(src: string, mimeType?: string | null) {
 }
 
 function sanitizeFilenamePart(value: string) {
-  const normalized = value
-    .trim()
-    .replace(/[\\/:*?"<>|]+/g, '-')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '');
-  return normalized || 'aqbot-image';
+  return sanitizeFilenamePartShared(value, 'aqbot-image');
 }
 
 function ensureImageExtension(filename: string, src: string, mimeType?: string | null) {

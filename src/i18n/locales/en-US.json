@@ -143,6 +143,8 @@
     "stop": "Stop",
     "commandHint": "Type / for commands",
     "you": "You",
+    "assistant": "Assistant",
+    "system": "System",
     "archive": "Archive",
     "archived": "Archived",
     "unarchive": "Unarchive",
@@ -225,6 +227,7 @@
     "shareSelectNone": "Select messages to share first",
     "shareSelectedCount": "{{count}} selected",
     "shareSelectAll": "Select all",
+    "shareMoreFormats": "More",
     "mcp": {
       "title": "MCP Tools",
       "noServers": "Please configure and enable MCP servers in settings first",

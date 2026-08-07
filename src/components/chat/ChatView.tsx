@@ -1806,6 +1806,7 @@ function AssistantFooter({
 // ── Export helpers ──────────────────────────────────────────────────────
 
 import { copyTranscript, exportMessagesAsPNG, exportAsMarkdown, exportAsJSON, exportAsText } from '@/lib/exportChat';
+import { buildExportOptions } from '@/lib/exportChatPresentation';
 
 // ── Stats Popover ──────────────────────────────────────────────────────
 
@@ -2721,6 +2722,44 @@ export function ChatView() {
     ));
   }, []);
 
+  /** Click message body/header (not interactive controls) to toggle share selection. */
+  const handleShareSelectableClick = useCallback((messageId: string | undefined, e: React.MouseEvent) => {
+    if (!shareSelectMode || !messageId) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest(
+      'a, button, input, textarea, .ant-checkbox-wrapper, .ant-checkbox, [data-share-ignore="true"]',
+    )) {
+      return;
+    }
+    toggleShareMessage(messageId);
+  }, [shareSelectMode, toggleShareMessage]);
+
+  const wrapShareSelectableContent = useCallback((messageId: string | undefined, node: React.ReactNode) => {
+    if (!shareSelectMode || !messageId) return node;
+    return (
+      <div
+        data-share-selectable="true"
+        onClick={(e) => handleShareSelectableClick(messageId, e)}
+        style={{ cursor: 'pointer' }}
+      >
+        {node}
+      </div>
+    );
+  }, [handleShareSelectableClick, shareSelectMode]);
+
+  const getShareSelectBubbleStyles = useCallback((messageId: string | undefined) => {
+    if (!shareSelectMode || !messageId) return undefined;
+    const selected = selectedShareMessageIds.includes(messageId);
+    return {
+      root: { cursor: 'pointer' as const },
+      content: {
+        cursor: 'pointer' as const,
+        boxShadow: selected ? `0 0 0 2px ${token.colorPrimary}` : undefined,
+        transition: 'box-shadow 0.15s ease',
+      },
+    };
+  }, [selectedShareMessageIds, shareSelectMode, token.colorPrimary]);
+
   const selectAllShareMessages = useCallback(() => {
     setSelectedShareMessageIds(shareableMessages.map((m) => m.id));
   }, [shareableMessages]);
@@ -2730,6 +2769,31 @@ export function ChatView() {
     return shareableMessages.filter((m) => selected.has(m.id));
   }, [selectedShareMessageIds, shareableMessages]);
 
+  const buildChatExportOptions = useCallback((includeThinking = false) => ({
+    ...buildExportOptions({
+      userName: profile.name,
+      theme: {
+        colorPrimary: token.colorPrimary,
+        colorPrimaryBg: token.colorPrimaryBg,
+        colorPrimaryBorder: token.colorPrimaryBorder,
+        colorFillSecondary: token.colorFillSecondary,
+      },
+      providers,
+      conversationModelId: activeConversation?.model_id,
+      conversationProviderId: activeConversation?.provider_id,
+    }),
+    includeThinking,
+  }), [
+    activeConversation?.model_id,
+    activeConversation?.provider_id,
+    profile.name,
+    providers,
+    token.colorFillSecondary,
+    token.colorPrimary,
+    token.colorPrimaryBg,
+    token.colorPrimaryBorder,
+  ]);
+
   const exportSelectedShare = useCallback(async (format: 'png' | 'md' | 'copy-md') => {
     const selected = getSelectedShareMessagesOrdered();
     if (selected.length === 0) {
@@ -2737,22 +2801,23 @@ export function ChatView() {
       return;
     }
     const title = activeConversation?.title ?? 'chat';
+    const exportOptions = buildChatExportOptions(false);
     setShareExporting(true);
     try {
       if (format === 'png') {
-        const ok = await exportMessagesAsPNG(selected, title, { includeThinking: false });
+        const ok = await exportMessagesAsPNG(selected, title, exportOptions);
         if (ok) {
           messageApi.success(t('chat.exportSuccess'));
           exitShareSelectMode();
         }
       } else if (format === 'md') {
-        const ok = await exportAsMarkdown(selected, title, { includeThinking: false });
+        const ok = await exportAsMarkdown(selected, title, exportOptions);
         if (ok) {
           messageApi.success(t('chat.exportSuccess'));
           exitShareSelectMode();
         }
       } else {
-        const ok = await copyTranscript(selected, title, 'markdown', { includeThinking: false });
+        const ok = await copyTranscript(selected, title, 'markdown', exportOptions);
         if (ok) {
           messageApi.success(t('chat.copied'));
           exitShareSelectMode();
@@ -2764,7 +2829,7 @@ export function ChatView() {
     } finally {
       setShareExporting(false);
     }
-  }, [activeConversation?.title, exitShareSelectMode, getSelectedShareMessagesOrdered, messageApi, t]);
+  }, [activeConversation?.title, buildChatExportOptions, exitShareSelectMode, getSelectedShareMessagesOrdered, messageApi, t]);
 
   const exportMenuItems = useMemo(
     () => [
@@ -2788,7 +2853,12 @@ export function ChatView() {
           try {
             const transcript = await loadCompleteTranscript();
             if (transcript.length === 0) { messageApi.warning(t('chat.noMessages')); return; }
-            const ok = await copyTranscript(transcript, activeConversation?.title ?? 'chat', 'markdown', { includeThinking: false });
+            const ok = await copyTranscript(
+              transcript,
+              activeConversation?.title ?? 'chat',
+              'markdown',
+              buildChatExportOptions(false),
+            );
             if (ok) messageApi.success(t('chat.copied'));
           } catch (e) { console.error('Copy MD failed:', e); messageApi.error(t('chat.exportFailed')); }
         },
@@ -2803,7 +2873,11 @@ export function ChatView() {
             const transcript = await loadCompleteTranscript();
             const shareable = transcript.filter((m) => m.role === 'user' || m.role === 'assistant');
             if (shareable.length === 0) { messageApi.warning(t('chat.noMessages')); return; }
-            const ok = await exportMessagesAsPNG(shareable, activeConversation?.title ?? 'chat', { includeThinking: false });
+            const ok = await exportMessagesAsPNG(
+              shareable,
+              activeConversation?.title ?? 'chat',
+              buildChatExportOptions(false),
+            );
             if (ok) messageApi.success(t('chat.exportSuccess'));
           } catch (e) { console.error('Export PNG failed:', e); messageApi.error(t('chat.exportFailed')); }
         },
@@ -2816,7 +2890,11 @@ export function ChatView() {
           try {
             const transcript = await loadCompleteTranscript();
             if (transcript.length === 0) { messageApi.warning(t('chat.noMessages')); return; }
-            const ok = await exportAsMarkdown(transcript, activeConversation?.title ?? 'chat');
+            const ok = await exportAsMarkdown(
+              transcript,
+              activeConversation?.title ?? 'chat',
+              buildChatExportOptions(true),
+            );
             if (ok) messageApi.success(t('chat.exportSuccess'));
           } catch (e) { console.error('Export MD failed:', e); messageApi.error(t('chat.exportFailed')); }
         },
@@ -2829,7 +2907,11 @@ export function ChatView() {
           try {
             const transcript = await loadCompleteTranscript();
             if (transcript.length === 0) { messageApi.warning(t('chat.noMessages')); return; }
-            const ok = await exportAsMarkdown(transcript, activeConversation?.title ?? 'chat', { includeThinking: false });
+            const ok = await exportAsMarkdown(
+              transcript,
+              activeConversation?.title ?? 'chat',
+              buildChatExportOptions(false),
+            );
             if (ok) messageApi.success(t('chat.exportSuccess'));
           } catch (e) { console.error('Export MD (no thinking) failed:', e); messageApi.error(t('chat.exportFailed')); }
         },
@@ -2842,7 +2924,11 @@ export function ChatView() {
           try {
             const transcript = await loadCompleteTranscript();
             if (transcript.length === 0) { messageApi.warning(t('chat.noMessages')); return; }
-            const ok = await exportAsText(transcript, activeConversation?.title ?? 'chat');
+            const ok = await exportAsText(
+              transcript,
+              activeConversation?.title ?? 'chat',
+              buildChatExportOptions(true),
+            );
             if (ok) messageApi.success(t('chat.exportSuccess'));
           } catch (e) { console.error('Export TXT failed:', e); messageApi.error(t('chat.exportFailed')); }
         },
@@ -2855,7 +2941,11 @@ export function ChatView() {
           try {
             const transcript = await loadCompleteTranscript();
             if (transcript.length === 0) { messageApi.warning(t('chat.noMessages')); return; }
-            const ok = await exportAsText(transcript, activeConversation?.title ?? 'chat', { includeThinking: false });
+            const ok = await exportAsText(
+              transcript,
+              activeConversation?.title ?? 'chat',
+              buildChatExportOptions(false),
+            );
             if (ok) messageApi.success(t('chat.exportSuccess'));
           } catch (e) { console.error('Export TXT (no thinking) failed:', e); messageApi.error(t('chat.exportFailed')); }
         },
@@ -2868,7 +2958,11 @@ export function ChatView() {
           try {
             const transcript = await loadCompleteTranscript();
             if (transcript.length === 0) { messageApi.warning(t('chat.noMessages')); return; }
-            const ok = await exportAsJSON(transcript, activeConversation?.title ?? 'chat');
+            const ok = await exportAsJSON(
+              transcript,
+              activeConversation?.title ?? 'chat',
+              buildChatExportOptions(true),
+            );
             if (ok) messageApi.success(t('chat.exportSuccess'));
           } catch (e) { console.error('Export JSON failed:', e); messageApi.error(t('chat.exportFailed')); }
         },
@@ -2881,13 +2975,17 @@ export function ChatView() {
           try {
             const transcript = await loadCompleteTranscript();
             if (transcript.length === 0) { messageApi.warning(t('chat.noMessages')); return; }
-            const ok = await exportAsJSON(transcript, activeConversation?.title ?? 'chat', { includeThinking: false });
+            const ok = await exportAsJSON(
+              transcript,
+              activeConversation?.title ?? 'chat',
+              buildChatExportOptions(false),
+            );
             if (ok) messageApi.success(t('chat.exportSuccess'));
           } catch (e) { console.error('Export JSON (no thinking) failed:', e); messageApi.error(t('chat.exportFailed')); }
         },
       },
     ],
-    [activeConversation, enterShareSelectMode, loadCompleteTranscript, messageApi, shareableMessages.length, t],
+    [activeConversation, buildChatExportOptions, enterShareSelectMode, loadCompleteTranscript, messageApi, shareableMessages.length, t],
   );
 
   // ── Welcome prompt items ───────────────────────────────────────────
@@ -3650,8 +3748,9 @@ export function ChatView() {
       placement: 'end' as const,
       ...getBubbleVariant(true),
       avatar: userAvatar,
+      styles: getShareSelectBubbleStyles(msg?.id),
       contentRender: attachments.length > 0
-        ? (content: string) => (
+        ? (content: string) => wrapShareSelectableContent(msg?.id, (
             <div style={{ textAlign: 'right' }}>
               <span data-aqbot-msg={msg?.id} style={{ height: 0, overflow: 'hidden', lineHeight: 0 }} />
               {renderUserContent(content, 'right')}
@@ -3665,16 +3764,16 @@ export function ChatView() {
                 ))}
               </div>
             </div>
-          )
-        : (content: string) => (
+          ))
+        : (content: string) => wrapShareSelectableContent(msg?.id, (
             <>
               <span data-aqbot-msg={msg?.id} style={{ height: 0, overflow: 'hidden', lineHeight: 0 }} />
               {renderUserContent(content)}
             </>
-          ),
+          )),
       header: (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div onClick={(e) => handleShareSelectableClick(msg?.id, e)}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: shareSelectMode ? 'pointer' : undefined }}>
             {shareSelectMode && msg && (
               <Checkbox
                 checked={selectedShareMessageIds.includes(msg.id)}
@@ -3755,7 +3854,7 @@ export function ChatView() {
         />
       ),
     };
-  }, [activeConversationId, codeBlockDarkTheme, codeBlockLightTheme, codeBlockThemes, deleteMessageGroup, formatTime, getBubbleVariant, handleEditMessage, isDarkMode, messageApi, messageById, profile.name, regenerateMessage, selectedShareMessageIds, settings.code_font_family, settings.render_user_markdown, shareSelectMode, t, toggleShareMessage, token.colorError, token.colorPrimary, userAvatar]);
+  }, [activeConversationId, codeBlockDarkTheme, codeBlockLightTheme, codeBlockThemes, deleteMessageGroup, formatTime, getBubbleVariant, getShareSelectBubbleStyles, handleEditMessage, handleShareSelectableClick, isDarkMode, messageApi, messageById, profile.name, regenerateMessage, selectedShareMessageIds, settings.code_font_family, settings.render_user_markdown, shareSelectMode, t, toggleShareMessage, token.colorError, token.colorPrimary, userAvatar, wrapShareSelectableContent]);
 
   const renderStreamingStatusIndicator = useCallback((
     activity: StreamActivity | undefined,
@@ -3892,6 +3991,7 @@ export function ChatView() {
       ...getBubbleVariant(false),
       avatar: isNonTabsMultiModel ? undefined : renderConvIconForChat(32, msg?.model_id),
       loading: bubbleLoading,
+      styles: getShareSelectBubbleStyles(msg?.id),
       contentRender: (content: string) => {
         const baseRenderContent = typeof content === 'string' && content.length > 0
           ? content
@@ -4076,7 +4176,7 @@ export function ChatView() {
         };
 
         if (isStreaming && msg?.id) {
-          return (
+          return wrapShareSelectableContent(msg.id, (
             <StreamingAssistantContent
               messageId={msg.id}
               baseContent={baseRenderContent}
@@ -4087,16 +4187,19 @@ export function ChatView() {
                 thinkingActiveMessageIds.has(msg.id) || isStreaming,
               ))}
             </StreamingAssistantContent>
-          );
+          ));
         }
 
-        return renderContentNode(baseRenderContent);
+        return wrapShareSelectableContent(msg?.id, renderContentNode(baseRenderContent));
       },
       header: (() => {
         if (isNonTabsMultiModel && !shareSelectMode) return null;
         const { modelName, providerName } = getModelDisplayInfo(msg?.model_id, msg?.provider_id);
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <div
+            style={{ display: 'flex', flexDirection: 'column', gap: 2, cursor: shareSelectMode ? 'pointer' : undefined }}
+            onClick={(e) => handleShareSelectableClick(msg?.id, e)}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               {shareSelectMode && msg && (
                 <Checkbox
@@ -4167,7 +4270,7 @@ export function ChatView() {
         </div>
       ) : null,
     };
-  }, [activeConversation, activeConversationId, activeMessages, agentPendingPermissions, agentToolCalls, aiContentNodesById, assistantByParentId, codeBlockDarkTheme, codeBlockLightTheme, codeBlockThemes, currentMessageVersionsByParentId, deleteMessage, displayModeOverrides, displayVersionOverrides, formatTime, getBubbleVariant, getModelDisplayInfo, handleBranchDisplayedVersion, handleDisplayModeOverride, handleDisplayVersionOverride, handleEditMessage, handleGeneratedVersionCreated, handleMultiModelDetected, handleRegenerateDisplayedVersion, handleSetContextVersion, handleSwitchDisplayedVersionModel, isDarkMode, messageById, messages, multiModelDoneMessageIds, multiModelParentId, multiModelResponseParents, ragDisplayByMessageId, renderConvIconForChat, renderStreamingStatusIndicator, searchDisplayByMessageId, selectedShareMessageIds, settings, shareSelectMode, streamActivityByMessageId, streaming, streamingMessageId, switchMessageVersion, t, toggleShareMessage, token.colorPrimary, token.colorTextDescription]);
+  }, [activeConversation, activeConversationId, activeMessages, agentPendingPermissions, agentToolCalls, aiContentNodesById, assistantByParentId, codeBlockDarkTheme, codeBlockLightTheme, codeBlockThemes, currentMessageVersionsByParentId, deleteMessage, displayModeOverrides, displayVersionOverrides, formatTime, getBubbleVariant, getModelDisplayInfo, getShareSelectBubbleStyles, handleBranchDisplayedVersion, handleDisplayModeOverride, handleDisplayVersionOverride, handleEditMessage, handleGeneratedVersionCreated, handleMultiModelDetected, handleRegenerateDisplayedVersion, handleSetContextVersion, handleShareSelectableClick, handleSwitchDisplayedVersionModel, isDarkMode, messageById, messages, multiModelDoneMessageIds, multiModelParentId, multiModelResponseParents, ragDisplayByMessageId, renderConvIconForChat, renderStreamingStatusIndicator, searchDisplayByMessageId, selectedShareMessageIds, settings, shareSelectMode, streamActivityByMessageId, streaming, streamingMessageId, switchMessageVersion, t, toggleShareMessage, token.colorPrimary, token.colorTextDescription, wrapShareSelectableContent]);
 
   const contextClearRole = useCallback((bubbleData: BubbleItemType) => {
     const msgId = String(bubbleData.content ?? '');
@@ -4642,16 +4745,19 @@ export function ChatView() {
                 <Button size="small" onClick={selectAllShareMessages}>
                   {t('chat.shareSelectAll', '全选')}
                 </Button>
+                <Button
+                  size="small"
+                  type="primary"
+                  icon={<FileImage size={14} />}
+                  loading={shareExporting}
+                  disabled={selectedShareMessageIds.length === 0}
+                  onClick={() => { void exportSelectedShare('png'); }}
+                >
+                  {t('chat.exportPng')}
+                </Button>
                 <Dropdown
                   menu={{
                     items: [
-                      {
-                        key: 'png',
-                        icon: <FileImage size={14} />,
-                        label: t('chat.exportPng'),
-                        disabled: selectedShareMessageIds.length === 0 || shareExporting,
-                        onClick: () => { void exportSelectedShare('png'); },
-                      },
                       {
                         key: 'md',
                         icon: <FileCode size={14} />,
@@ -4674,13 +4780,10 @@ export function ChatView() {
                 >
                   <Button
                     size="small"
-                    type="primary"
-                    icon={<FileImage size={14} />}
-                    loading={shareExporting}
-                    disabled={selectedShareMessageIds.length === 0}
+                    disabled={selectedShareMessageIds.length === 0 || shareExporting}
                   >
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                      {t('chat.exportPng')}
+                      {t('chat.shareMoreFormats', '更多')}
                       <ChevronDown size={12} />
                     </span>
                   </Button>
