@@ -1434,34 +1434,51 @@ fn is_compressible_boundary_message(message: &Message) -> bool {
         && message.role != MessageRole::Tool
 }
 
-fn last_compressible_message_id_before(
+/// Pick `compressed_until_message_id` so the last `keep_last_n` compressible
+/// messages (and everything from `force_retain_from_id` onward) stay cleartext.
+///
+/// Returns `None` when there is nothing left to compress.
+fn resolve_compressed_until_with_keep(
     db_messages: &[Message],
     start_index: usize,
-    before_message_id: &str,
+    keep_last_n: u32,
+    force_retain_from_id: Option<&str>,
 ) -> Option<String> {
-    let end_index = db_messages
-        .iter()
-        .position(|message| message.id == before_message_id)
-        .unwrap_or(db_messages.len());
-    db_messages
-        .iter()
-        .skip(start_index)
-        .take(end_index.saturating_sub(start_index))
-        .filter(|message| is_compressible_boundary_message(message))
-        .last()
-        .map(|message| message.id.clone())
-}
+    let force_idx = force_retain_from_id.and_then(|id| {
+        db_messages
+            .iter()
+            .position(|message| message.id == id)
+    });
 
-fn last_compressible_message_id_from_start(
-    db_messages: &[Message],
-    start_index: usize,
-) -> Option<String> {
-    db_messages
+    let compressible_indices: Vec<usize> = db_messages
         .iter()
+        .enumerate()
         .skip(start_index)
-        .filter(|message| is_compressible_boundary_message(message))
-        .last()
-        .map(|message| message.id.clone())
+        .filter(|(_, message)| is_compressible_boundary_message(message))
+        .map(|(idx, _)| idx)
+        .collect();
+
+    if compressible_indices.is_empty() {
+        return None;
+    }
+
+    let keep_start_by_n = compressible_indices
+        .len()
+        .saturating_sub(keep_last_n as usize);
+    let keep_start_by_force = force_idx
+        .and_then(|force| {
+            compressible_indices
+                .iter()
+                .position(|&idx| idx >= force)
+        })
+        .unwrap_or(compressible_indices.len());
+    let keep_start = keep_start_by_n.min(keep_start_by_force);
+
+    if keep_start == 0 {
+        return None;
+    }
+
+    Some(db_messages[compressible_indices[keep_start - 1]].id.clone())
 }
 
 fn count_compressible_messages_from_start(db_messages: &[Message], start_index: usize) -> u32 {
@@ -1724,28 +1741,13 @@ fn build_provider_context_messages_from_index(
 fn split_auto_compression_history(
     history_messages: &[ChatMessage],
     current_user_index: Option<usize>,
+    keep_last_n: u32,
 ) -> (Vec<ChatMessage>, Vec<ChatMessage>) {
-    let Some(current_index) = current_user_index else {
-        return (history_messages.to_vec(), Vec::new());
-    };
-    if current_index >= history_messages.len() {
-        return (history_messages.to_vec(), Vec::new());
-    }
-
-    let messages_to_compress = history_messages
-        .iter()
-        .enumerate()
-        .filter_map(|(index, message)| {
-            if index == current_index {
-                None
-            } else {
-                Some(message.clone())
-            }
-        })
-        .collect();
-    let post_compression_history = vec![history_messages[current_index].clone()];
-
-    (messages_to_compress, post_compression_history)
+    crate::context_manager::split_history_keep_last(
+        history_messages,
+        keep_last_n,
+        current_user_index,
+    )
 }
 
 #[tauri::command]
@@ -4395,15 +4397,25 @@ pub async fn send_message(
             model_context_window,
         )
     {
-        let (messages_to_compress, post_compression_history) =
-            split_auto_compression_history(&history_messages, current_user_history_index);
-        let compressed_until_message_id = last_compressible_message_id_before(
+        let keep_last_n = crate::context_manager::resolve_compression_keep_last_n(
+            conversation.compression_keep_last_n,
+            global_settings.default_compression_keep_last_n,
+        );
+        let (messages_to_compress, post_compression_history) = split_auto_compression_history(
+            &history_messages,
+            current_user_history_index,
+            keep_last_n,
+        );
+        let compressed_until_message_id = resolve_compressed_until_with_keep(
             &db_messages,
             context_boundary.start_index,
-            &user_message.id,
+            keep_last_n,
+            Some(&user_message.id),
         );
         // Perform synchronous compression before sending
-        let compression_result = if messages_to_compress.is_empty() {
+        let compression_result = if messages_to_compress.is_empty()
+            || compressed_until_message_id.is_none()
+        {
             None
         } else {
             do_compress(
@@ -4450,8 +4462,7 @@ pub async fn send_message(
                 );
             }
 
-            // After compression, history is now empty (marker splits it)
-            // Context = system + summary + current user message only
+            // Context = system + summary + retained trailing messages
             chat_messages = crate::context_manager::build_context(
                 &chat_messages,
                 &post_compression_history,
@@ -5359,6 +5370,7 @@ async fn do_compress(
         messages_to_compress: history_messages.to_vec(),
     };
 
+    let source_text = crate::context_manager::format_compression_source_text(&sum_req);
     let custom_prompt = settings.compression_prompt.as_deref();
     let summary_messages = if let Some(prompt) = custom_prompt {
         crate::context_manager::build_summary_prompt_with_custom(&sum_req, prompt)
@@ -5366,8 +5378,52 @@ async fn do_compress(
         crate::context_manager::build_summary_prompt(&sum_req)
     };
 
+    let (response_content, comp_model_id) = run_compression_llm(
+        &comp_provider,
+        &comp_key,
+        &comp_key_id,
+        &comp_proxy,
+        &comp_model_id,
+        comp_use_max,
+        summary_messages,
+        settings,
+    )
+    .await?;
+
+    let token_count = aqbot_core::token_counter::estimate_tokens(&response_content);
+    let summary = aqbot_core::repo::conversation::upsert_summary(
+        db,
+        conversation_id,
+        &response_content,
+        compressed_until_message_id,
+        Some(token_count as u32),
+        Some(&comp_model_id),
+        Some(&source_text),
+    )
+    .await
+    .map_err(|e| format!("Failed to save summary: {}", e))?;
+
+    tracing::debug!(
+        "Compressed context for {} ({} tokens)",
+        conversation_id,
+        token_count
+    );
+    Ok(summary)
+}
+
+/// Shared LLM call for compression / retry.
+async fn run_compression_llm(
+    comp_provider: &ProviderConfig,
+    comp_key: &str,
+    comp_key_id: &str,
+    comp_proxy: &Option<ProviderProxyConfig>,
+    comp_model_id: &str,
+    comp_use_max: Option<bool>,
+    summary_messages: Vec<ChatMessage>,
+    settings: &AppSettings,
+) -> Result<(String, String), String> {
     let request = ChatRequest {
-        model: comp_model_id.clone(),
+        model: comp_model_id.to_string(),
         messages: summary_messages,
         stream: false,
         temperature: settings
@@ -5386,8 +5442,8 @@ async fn do_compress(
     };
 
     let ctx = ProviderRequestContext {
-        api_key: comp_key,
-        key_id: comp_key_id,
+        api_key: comp_key.to_string(),
+        key_id: comp_key_id.to_string(),
         provider_id: comp_provider.id.clone(),
         base_url: Some(resolve_base_url_for_type(
             &comp_provider.api_host,
@@ -5395,7 +5451,7 @@ async fn do_compress(
         )),
         api_path: comp_provider.api_path.clone(),
         aws_region: comp_provider.aws_region.clone(),
-        proxy_config: comp_proxy,
+        proxy_config: comp_proxy.clone(),
         custom_headers: comp_provider
             .custom_headers
             .as_ref()
@@ -5416,24 +5472,7 @@ async fn do_compress(
         return Err("Summary generation returned inline image data".to_string());
     }
 
-    let token_count = aqbot_core::token_counter::estimate_tokens(&response.content);
-    let summary = aqbot_core::repo::conversation::upsert_summary(
-        db,
-        conversation_id,
-        &response.content,
-        compressed_until_message_id,
-        Some(token_count as u32),
-        Some(&comp_model_id),
-    )
-    .await
-    .map_err(|e| format!("Failed to save summary: {}", e))?;
-
-    tracing::debug!(
-        "Compressed context for {} ({} tokens)",
-        conversation_id,
-        token_count
-    );
-    Ok(summary)
+    Ok((response.content, comp_model_id.to_string()))
 }
 
 /// Tauri command: manually compress the current conversation context.
@@ -5483,45 +5522,48 @@ pub async fn compress_context(
             .ok()
             .flatten();
     let context_boundary = resolve_context_boundary(&db_messages, existing_summary.as_ref());
+    let keep_last_n = crate::context_manager::resolve_compression_keep_last_n(
+        conversation.compression_keep_last_n,
+        global_settings.default_compression_keep_last_n,
+    );
+
     let mut boundary_start_index = context_boundary.start_index;
-    let mut history_messages = build_provider_context_messages_from_index(
+    let mut compressed_until_message_id = resolve_compressed_until_with_keep(
+        &db_messages,
+        boundary_start_index,
+        keep_last_n,
+        None,
+    );
+
+    // Fall back: if nothing to compress after boundary (only keep-N left), try full history.
+    if compressed_until_message_id.is_none() && boundary_start_index > 0 {
+        boundary_start_index = 0;
+        compressed_until_message_id =
+            resolve_compressed_until_with_keep(&db_messages, 0, keep_last_n, None);
+    }
+
+    let Some(compressed_until_message_id) = compressed_until_message_id else {
+        return Err("No messages to compress (not enough beyond keep-last-N)".to_string());
+    };
+
+    let history_messages = build_provider_context_messages_from_index(
         &file_store,
         &db_messages,
         boundary_start_index,
         global_settings.document_attachment_reading_enabled,
         None,
         None,
-        None,
+        Some(&compressed_until_message_id),
     )
     .map_err(|e| e.to_string())?;
-
-    // If nothing after the last boundary, try all messages.
-    if history_messages.is_empty() && boundary_start_index > 0 {
-        let all_without_markers = db_messages
-            .iter()
-            .filter(|message| !is_context_boundary_marker(message))
-            .cloned()
-            .collect::<Vec<_>>();
-        boundary_start_index = 0;
-        history_messages = build_provider_context_messages(
-            &file_store,
-            &all_without_markers,
-            global_settings.document_attachment_reading_enabled,
-            None,
-            None,
-            None,
-        )
-        .map_err(|e| e.to_string())?;
-    }
 
     if history_messages.is_empty() {
         return Err("No messages to compress".to_string());
     }
-    let compressed_until_message_id =
-        last_compressible_message_id_from_start(&db_messages, boundary_start_index);
+
     let effective_existing_summary = existing_summary
         .as_ref()
-        .filter(|_| context_boundary.use_summary);
+        .filter(|_| context_boundary.use_summary && boundary_start_index == context_boundary.start_index);
 
     // Compress
     let use_max_completion_tokens = aqbot_core::repo::provider::get_model(
@@ -5539,7 +5581,7 @@ pub async fn compress_context(
         &conversation_id,
         &history_messages,
         effective_existing_summary.map(|s| s.summary_text.as_str()),
-        compressed_until_message_id.as_deref(),
+        Some(&compressed_until_message_id),
         &provider,
         &decrypted_key,
         &key_row.id,
@@ -5577,6 +5619,177 @@ pub async fn compress_context(
     Ok(summary)
 }
 
+/// Tauri command: re-run compression on the stored source text with the current
+/// global compression prompt. Does not change the boundary or insert a new marker.
+#[tauri::command]
+pub async fn retry_compression(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    conversation_id: String,
+) -> Result<ConversationSummary, String> {
+    let conversation =
+        aqbot_core::repo::conversation::get_conversation(&state.sea_db, &conversation_id)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    let existing = aqbot_core::repo::conversation::get_summary(&state.sea_db, &conversation_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "No compression summary to retry".to_string())?;
+
+    let source_text = existing
+        .source_text
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| {
+            "No compression source text saved (legacy summary). Compress again to enable retry."
+                .to_string()
+        })?;
+
+    let provider =
+        aqbot_core::repo::provider::get_provider(&state.sea_db, &conversation.provider_id)
+            .await
+            .map_err(|e| e.to_string())?;
+    let fallback_key_id = provider
+        .keys
+        .first()
+        .map(|k| k.id.clone())
+        .ok_or_else(|| "No API key configured".to_string())?;
+    let fallback_key_encrypted = provider
+        .keys
+        .first()
+        .map(|k| k.key_encrypted.clone())
+        .ok_or_else(|| "No API key configured".to_string())?;
+    let decrypted_key =
+        aqbot_core::crypto::decrypt_key(&fallback_key_encrypted, &state.master_key)
+            .map_err(|e| e.to_string())?;
+
+    let global_settings = aqbot_core::repo::settings::get_settings(&state.sea_db)
+        .await
+        .unwrap_or_default();
+    let resolved_proxy = ProviderProxyConfig::resolve(&provider.proxy_config, &global_settings);
+
+    // Resolve compression model (same cascade as do_compress)
+    let (comp_provider, comp_key, comp_key_id, comp_proxy, comp_model_id, comp_use_max) = if let (
+        Some(ref pid),
+        Some(ref mid),
+    ) = (
+        &global_settings.compression_provider_id,
+        &global_settings.compression_model_id,
+    ) {
+        match aqbot_core::repo::provider::get_provider(&state.sea_db, pid).await {
+            Ok(p) => {
+                let first_key = p.keys.first().cloned();
+                match first_key {
+                    Some(k) => {
+                        let dk = aqbot_core::crypto::decrypt_key(&k.key_encrypted, &state.master_key)
+                            .map_err(|e| e.to_string())?;
+                        let override_umc =
+                            aqbot_core::repo::provider::get_model(&state.sea_db, pid, mid)
+                                .await
+                                .ok()
+                                .and_then(|m| m.param_overrides)
+                                .and_then(|po| po.use_max_completion_tokens);
+                        let proxy = ProviderProxyConfig::resolve(&p.proxy_config, &global_settings);
+                        (p, dk, k.id, proxy, mid.clone(), override_umc)
+                    }
+                    None => (
+                        provider.clone(),
+                        decrypted_key.clone(),
+                        fallback_key_id.clone(),
+                        resolved_proxy.clone(),
+                        conversation.model_id.clone(),
+                        aqbot_core::repo::provider::get_model(
+                            &state.sea_db,
+                            &conversation.provider_id,
+                            &conversation.model_id,
+                        )
+                        .await
+                        .ok()
+                        .and_then(|m| m.param_overrides)
+                        .and_then(|po| po.use_max_completion_tokens),
+                    ),
+                }
+            }
+            Err(_) => (
+                provider.clone(),
+                decrypted_key.clone(),
+                fallback_key_id.clone(),
+                resolved_proxy.clone(),
+                conversation.model_id.clone(),
+                None,
+            ),
+        }
+    } else {
+        let use_max = aqbot_core::repo::provider::get_model(
+            &state.sea_db,
+            &conversation.provider_id,
+            &conversation.model_id,
+        )
+        .await
+        .ok()
+        .and_then(|m| m.param_overrides)
+        .and_then(|po| po.use_max_completion_tokens);
+        (
+            provider,
+            decrypted_key,
+            fallback_key_id,
+            resolved_proxy,
+            conversation.model_id.clone(),
+            use_max,
+        )
+    };
+
+    let system_prompt = global_settings
+        .compression_prompt
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(
+            "你是一个对话摘要助手。请将以下对话历史压缩为简洁摘要。\n\n\
+             要求：\n\
+             1. 保留所有用户明确表达的需求、偏好和决策\n\
+             2. 保留关键技术细节（代码片段、配置、错误信息等）\n\
+             3. 保留待办事项和未解决的问题\n\
+             4. 用简洁的要点形式组织\n\
+             5. 保持摘要简洁，不超过 500 字",
+        );
+
+    let summary_messages =
+        crate::context_manager::build_summary_prompt_from_source(source_text, system_prompt);
+
+    let (response_content, used_model) = run_compression_llm(
+        &comp_provider,
+        &comp_key,
+        &comp_key_id,
+        &comp_proxy,
+        &comp_model_id,
+        comp_use_max,
+        summary_messages,
+        &global_settings,
+    )
+    .await?;
+
+    let token_count = aqbot_core::token_counter::estimate_tokens(&response_content);
+    let summary = aqbot_core::repo::conversation::update_summary_text(
+        &state.sea_db,
+        &conversation_id,
+        &response_content,
+        Some(token_count as u32),
+        Some(&used_model),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    ensure_conversation_summary_safe_for_ipc(&summary)?;
+
+    let _ = app.emit(
+        "conversation:summary-updated",
+        summary.clone(),
+    );
+
+    Ok(summary)
+}
+
 /// Tauri command: get the compression summary for a conversation.
 #[tauri::command]
 pub async fn get_compression_summary(
@@ -5602,6 +5815,7 @@ fn ensure_conversation_summary_safe_for_ipc(summary: &ConversationSummary) -> Re
             "compressed_until_message_id",
             summary.compressed_until_message_id.as_deref(),
         ),
+        ("source_text", summary.source_text.as_deref()),
         ("model_used", summary.model_used.as_deref()),
     ]
     .into_iter()
@@ -5832,6 +6046,7 @@ mod tests {
             is_archived: false,
             context_compression: false,
             context_message_limit: None,
+            compression_keep_last_n: None,
             category_id: None,
             parent_conversation_id: None,
             mode: "chat".to_string(),
@@ -5991,6 +6206,7 @@ mod tests {
             conversation_id: "conv-1".to_string(),
             summary_text: "compressed old context".to_string(),
             compressed_until_message_id: boundary_message_id.map(str::to_string),
+            source_text: None,
             token_count: Some(12),
             model_used: Some("summary-model".to_string()),
             created_at: 1,
@@ -7011,6 +7227,43 @@ mod tests {
     }
 
     #[test]
+    fn resolve_compressed_until_with_keep_last_n() {
+        let messages = vec![
+            test_message("u1", MessageRole::User, "u1", None, 0, true, None, None),
+            test_message("a1", MessageRole::Assistant, "a1", Some("u1"), 0, true, None, None),
+            test_message("u2", MessageRole::User, "u2", None, 0, true, None, None),
+            test_message("a2", MessageRole::Assistant, "a2", Some("u2"), 0, true, None, None),
+            test_message("u3", MessageRole::User, "u3", None, 0, true, None, None),
+        ];
+
+        // keep 0 → compress all
+        assert_eq!(
+            resolve_compressed_until_with_keep(&messages, 0, 0, None).as_deref(),
+            Some("u3")
+        );
+        // keep 3 → compress u1,a1; until a1
+        assert_eq!(
+            resolve_compressed_until_with_keep(&messages, 0, 3, None).as_deref(),
+            Some("a1")
+        );
+        // keep 5 → nothing to compress
+        assert_eq!(
+            resolve_compressed_until_with_keep(&messages, 0, 5, None),
+            None
+        );
+        // auto: force retain from u3, keep 0 → until a2
+        assert_eq!(
+            resolve_compressed_until_with_keep(&messages, 0, 0, Some("u3")).as_deref(),
+            Some("a2")
+        );
+        // auto: force u3, keep 3 → retain u2,a2,u3 → until a1
+        assert_eq!(
+            resolve_compressed_until_with_keep(&messages, 0, 3, Some("u3")).as_deref(),
+            Some("a1")
+        );
+    }
+
+    #[test]
     fn auto_compression_excludes_current_user_from_summary_and_keeps_it_for_request() {
         let history_messages = vec![
             ChatMessage {
@@ -7036,8 +7289,9 @@ mod tests {
             },
         ];
 
+        // keep_last_n=0 still retains the current user turn
         let (messages_to_compress, post_compression_history) =
-            split_auto_compression_history(&history_messages, Some(2));
+            split_auto_compression_history(&history_messages, Some(2), 0);
 
         assert_eq!(messages_to_compress.len(), 2);
         assert_eq!(post_compression_history.len(), 1);
@@ -7051,6 +7305,12 @@ mod tests {
                 ChatContent::Text(content) if content.contains("current user message")
             )
         }));
+
+        // keep_last_n=3 retains last 3 including current user
+        let (to_compress_n3, retained_n3) =
+            split_auto_compression_history(&history_messages, Some(2), 3);
+        assert!(to_compress_n3.is_empty());
+        assert_eq!(retained_n3.len(), 3);
     }
 
     #[test]

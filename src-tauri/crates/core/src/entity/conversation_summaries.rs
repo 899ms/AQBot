@@ -9,6 +9,9 @@ pub struct Model {
     pub conversation_id: String,
     pub summary_text: String,
     pub compressed_until_message_id: Option<String>,
+    /// Rendered compression input (conversation body + optional prior summary)
+    /// used for display and retry. `None` for summaries created before this field.
+    pub source_text: Option<String>,
     pub token_count: Option<i64>,
     pub model_used: Option<String>,
     pub created_at: i64,

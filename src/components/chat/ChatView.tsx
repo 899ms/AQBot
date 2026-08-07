@@ -1,6 +1,6 @@
 import React, { useMemo, useCallback, useRef, useState, useEffect, useSyncExternalStore } from 'react';
 import { CloseCircleFilled, SyncOutlined } from '@ant-design/icons';
-import { Typography, Button, Dropdown, Input, App, Avatar, Alert, Popconfirm, Popover, theme, Tag, Image, Tooltip, Modal, Spin, Checkbox } from 'antd';
+import { Typography, Button, Dropdown, Input, App, Avatar, Alert, Popconfirm, Popover, theme, Tag, Image, Tooltip, Modal, Spin, Checkbox, Tabs } from 'antd';
 import type { InputRef } from 'antd';
 import { Pencil, Share2, FileImage, FileCode, FileText, FileType, Bot, Lightbulb, Code, Languages, Copy, Check, RotateCcw, User, Trash2, ChevronLeft, ChevronRight, ChevronDown, Scissors, Paperclip, AlertCircle, X, ArrowDown, ArrowUp, ArrowLeftRight, Zap, Sparkles, TextCursorInput, GitBranch, ChartNoAxesColumn, MessageSquare, ArrowUpRight, ArrowDownRight, Coins, Clock, Timer, Download, PanelLeftClose, PanelLeftOpen, ListChecks } from 'lucide-react';
 import { ModelIcon } from '@lobehub/icons';
@@ -1965,12 +1965,16 @@ export function ChatView() {
   const branchConversation = useConversationStore((s) => s.branchConversation);
   const removeContextClear = useConversationStore((s) => s.removeContextClear);
   const getCompressionSummary = useConversationStore((s) => s.getCompressionSummary);
+  const retryCompression = useConversationStore((s) => s.retryCompression);
   const deleteCompression = useConversationStore((s) => s.deleteCompression);
+  const openCompressionSummaryToken = useConversationStore((s) => s.openCompressionSummaryToken);
   const listMessageVersionsBatch = useConversationStore((s) => s.listMessageVersionsBatch);
   const hydrateMessageVersions = useConversationStore((s) => s.hydrateMessageVersions);
   const [summaryModalOpen, setSummaryModalOpen] = useState(false);
   const [summaryModalText, setSummaryModalText] = useState('');
   const [summaryModalSummary, setSummaryModalSummary] = useState<ConversationSummary | null>(null);
+  const [summaryModalTab, setSummaryModalTab] = useState<'summary' | 'source'>('summary');
+  const [summaryRetrying, setSummaryRetrying] = useState(false);
   const [previewPayload, setPreviewPayload] = useState<CodeBlockPreviewPayload | null>(null);
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const [mermaidPreviewSvg, setMermaidPreviewSvg] = useState<string | null>(null);
@@ -2185,6 +2189,31 @@ export function ChatView() {
   const titleInputRef = useRef<InputRef>(null);
   const skipTitleSaveRef = useRef(false);
 
+  const openCompressionSummaryModal = useCallback(async () => {
+    const convId = activeConversationId;
+    if (!convId) return;
+    const connectionGeneration = pageConnectionGenerationRef.current;
+    const summary = await getCompressionSummary(convId);
+    if (
+      !pageActiveRef.current
+      || pageConnectionGenerationRef.current !== connectionGeneration
+      || useConversationStore.getState().activeConversationId !== convId
+    ) return;
+    setSummaryModalText(summary?.summary_text ?? t('chat.noSummary'));
+    setSummaryModalSummary(summary ?? null);
+    setSummaryModalTab('summary');
+    setSummaryModalOpen(true);
+  }, [activeConversationId, getCompressionSummary, t]);
+
+  // InputArea context circle requests opening this modal
+  const lastOpenCompressionSummaryTokenRef = useRef(0);
+  useEffect(() => {
+    if (openCompressionSummaryToken === 0) return;
+    if (openCompressionSummaryToken === lastOpenCompressionSummaryTokenRef.current) return;
+    lastOpenCompressionSummaryTokenRef.current = openCompressionSummaryToken;
+    void openCompressionSummaryModal();
+  }, [openCompressionSummaryToken, openCompressionSummaryModal]);
+
   usePageSuspendCleanup(() => {
     setStatsOpen(false);
     setStats(null);
@@ -2196,6 +2225,8 @@ export function ChatView() {
     setCardBranchTitle('');
     setSummaryModalOpen(false);
     setSummaryModalSummary(null);
+    setSummaryModalTab('summary');
+    setSummaryRetrying(false);
     setPreviewModalOpen(false);
     setPreviewPayload(null);
     setMermaidPreviewOpen(false);
@@ -4332,19 +4363,8 @@ export function ChatView() {
           >
             <span
               style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-              onClick={async () => {
-                const convId = activeConversationId;
-                if (!convId) return;
-                const connectionGeneration = pageConnectionGenerationRef.current;
-                const summary = await getCompressionSummary(convId);
-                if (
-                  !pageActiveRef.current
-                  || pageConnectionGenerationRef.current !== connectionGeneration
-                  || useConversationStore.getState().activeConversationId !== convId
-                ) return;
-                setSummaryModalText(summary?.summary_text ?? t('chat.noSummary'));
-                setSummaryModalSummary(summary ?? null);
-                setSummaryModalOpen(true);
+              onClick={() => {
+                void openCompressionSummaryModal();
               }}
             >
               <Zap size={14} /> {t('chat.contextCompressed')}
@@ -4372,7 +4392,7 @@ export function ChatView() {
         </div>
       ),
     };
-  }, [activeConversationId, deleteCompression, getCompressionSummary, t, token.colorPrimary, token.colorPrimaryBorder, token.colorTextTertiary]);
+  }, [activeConversationId, deleteCompression, openCompressionSummaryModal, t, token.colorPrimary, token.colorPrimaryBorder, token.colorTextTertiary]);
 
   const contextCompressingRole = useCallback(() => {
     return {
@@ -4862,8 +4882,48 @@ export function ChatView() {
         onCancel={() => {
           setSummaryModalOpen(false);
           setSummaryModalSummary(null);
+          setSummaryModalTab('summary');
         }}
-        footer={null}
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+            <Button
+              icon={<RotateCcw size={14} />}
+              loading={summaryRetrying || compressing}
+              disabled={!summaryModalSummary?.source_text}
+              onClick={async () => {
+                if (!summaryModalSummary?.source_text) {
+                  messageApi.warning(t('chat.retryCompressionNoSource'));
+                  return;
+                }
+                setSummaryRetrying(true);
+                try {
+                  const next = await retryCompression();
+                  if (next) {
+                    setSummaryModalSummary(next);
+                    setSummaryModalText(next.summary_text);
+                    setSummaryModalTab('summary');
+                    messageApi.success(t('chat.retryCompressionSuccess'));
+                  }
+                } catch {
+                  messageApi.error(t('chat.retryCompressionFailed'));
+                } finally {
+                  setSummaryRetrying(false);
+                }
+              }}
+            >
+              {t('chat.retryCompression')}
+            </Button>
+            <Button
+              onClick={() => {
+                setSummaryModalOpen(false);
+                setSummaryModalSummary(null);
+                setSummaryModalTab('summary');
+              }}
+            >
+              {t('common.close', '关闭')}
+            </Button>
+          </div>
+        }
         width={640}
       >
         <div style={{ maxHeight: 480, overflow: 'auto', padding: '8px 0' }}>
@@ -4880,14 +4940,48 @@ export function ChatView() {
               )}
             </div>
           )}
-          <NodeRenderer
-            content={summaryModalText}
-            isDark={isDarkMode}
-            customId="summary"
-            final
-            themes={codeBlockThemes}
-            codeBlockLightTheme={codeBlockLightTheme}
-            codeBlockDarkTheme={codeBlockDarkTheme}
+          <Tabs
+            activeKey={summaryModalTab}
+            onChange={(key) => setSummaryModalTab(key as 'summary' | 'source')}
+            items={[
+              {
+                key: 'summary',
+                label: t('chat.compressionSummary'),
+                children: (
+                  <NodeRenderer
+                    content={summaryModalText || t('chat.noSummary')}
+                    isDark={isDarkMode}
+                    customId="summary"
+                    final
+                    themes={codeBlockThemes}
+                    codeBlockLightTheme={codeBlockLightTheme}
+                    codeBlockDarkTheme={codeBlockDarkTheme}
+                  />
+                ),
+              },
+              {
+                key: 'source',
+                label: t('chat.compressionSource'),
+                children: summaryModalSummary?.source_text ? (
+                  <pre
+                    style={{
+                      margin: 0,
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      fontSize: 12,
+                      lineHeight: 1.5,
+                      color: token.colorText,
+                    }}
+                  >
+                    {summaryModalSummary.source_text}
+                  </pre>
+                ) : (
+                  <div style={{ color: token.colorTextSecondary, fontSize: 13 }}>
+                    {t('chat.noSourceText')}
+                  </div>
+                ),
+              },
+            ]}
           />
         </div>
       </Modal>

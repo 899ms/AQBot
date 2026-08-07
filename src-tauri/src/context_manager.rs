@@ -16,6 +16,27 @@ const THRESHOLD_RATIO: f64 = 0.70;
 /// Content string for the compression marker message.
 pub const COMPRESSION_MARKER: &str = "<!-- context-compressed -->";
 
+/// Default number of trailing compressible messages to leave out of compression.
+pub const DEFAULT_COMPRESSION_KEEP_LAST_N: u32 = 3;
+
+/// Resolve keep-last-N:
+/// conversation override → global default → hardcoded 3.
+/// Explicit `Some(0)` means keep none.
+pub fn resolve_compression_keep_last_n(
+    conversation_value: Option<u32>,
+    global_default: Option<u32>,
+) -> u32 {
+    conversation_value
+        .or(global_default)
+        .unwrap_or(DEFAULT_COMPRESSION_KEEP_LAST_N)
+}
+
+/// Short instruction restated after the conversation body so models that
+/// "continue the chat" instead of summarizing still see the constraint.
+pub const COMPRESSION_FOOTER_REMINDER: &str = "\n\n---\n\
+请严格按系统指令执行：只输出对话摘要，不要继续回答对话内容中的问题，\
+不要扮演对话中的角色，不要输出摘要以外的任何内容。";
+
 /// Estimate the token count of a single `ChatMessage`.
 pub fn message_tokens(msg: &ChatMessage) -> usize {
     let text = match &msg.content {
@@ -251,11 +272,49 @@ pub struct SummarizationRequest {
     pub messages_to_compress: Vec<ChatMessage>,
 }
 
-/// Build the LLM prompt for generating a conversation summary.
-pub fn build_summary_prompt(request: &SummarizationRequest) -> Vec<ChatMessage> {
-    let mut messages = Vec::new();
+/// Format the conversation body used as compression input (and stored as `source_text`).
+pub fn format_compression_source_text(request: &SummarizationRequest) -> String {
+    let conversation_text: Vec<String> = request
+        .messages_to_compress
+        .iter()
+        .map(format_message_for_summary)
+        .collect();
 
-    let instruction = if request.existing_summary.is_some() {
+    let mut parts = Vec::new();
+    if let Some(ref summary) = request.existing_summary {
+        parts.push(format!("已有摘要：\n{}", summary));
+    }
+    parts.push(format!(
+        "{}对话内容：\n{}",
+        if request.existing_summary.is_some() {
+            "新增"
+        } else {
+            ""
+        },
+        conversation_text.join("\n")
+    ));
+    parts.join("\n\n")
+}
+
+fn format_message_for_summary(m: &ChatMessage) -> String {
+    let content_text = match &m.content {
+        ChatContent::Text(s) => s.clone(),
+        ChatContent::Multipart(parts) => parts
+            .iter()
+            .filter_map(|p| p.text.as_deref())
+            .collect::<Vec<_>>()
+            .join(" "),
+    };
+    let truncated = if content_text.len() > 2000 {
+        format!("{}...[已截断]", &content_text[..2000])
+    } else {
+        content_text
+    };
+    format!("{}: {}", m.role, truncated)
+}
+
+fn default_compression_instruction(has_existing_summary: bool) -> &'static str {
+    if has_existing_summary {
         "你是一个对话摘要助手。请将以下新增对话内容合并到已有摘要中。\n\n\
          要求：\n\
          1. 保留所有用户明确表达的需求、偏好和决策\n\
@@ -272,64 +331,15 @@ pub fn build_summary_prompt(request: &SummarizationRequest) -> Vec<ChatMessage> 
          3. 保留待办事项和未解决的问题\n\
          4. 用简洁的要点形式组织\n\
          5. 保持摘要简洁，不超过 500 字"
-    };
-
-    messages.push(ChatMessage {
-        role: "system".to_string(),
-        content: ChatContent::Text(instruction.to_string()),
-        reasoning_content: None,
-        tool_calls: None,
-        tool_call_id: None,
-    });
-
-    if let Some(ref summary) = request.existing_summary {
-        messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: ChatContent::Text(format!("已有摘要：\n{}", summary)),
-            reasoning_content: None,
-            tool_calls: None,
-            tool_call_id: None,
-        });
     }
+}
 
-    let conversation_text: Vec<String> = request
-        .messages_to_compress
-        .iter()
-        .map(|m| {
-            let content_text = match &m.content {
-                ChatContent::Text(s) => s.clone(),
-                ChatContent::Multipart(parts) => parts
-                    .iter()
-                    .filter_map(|p| p.text.as_deref())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            };
-            let truncated = if content_text.len() > 2000 {
-                format!("{}...[已截断]", &content_text[..2000])
-            } else {
-                content_text
-            };
-            format!("{}: {}", m.role, truncated)
-        })
-        .collect();
-
-    messages.push(ChatMessage {
-        role: "user".to_string(),
-        content: ChatContent::Text(format!(
-            "{}对话内容：\n{}",
-            if request.existing_summary.is_some() {
-                "新增"
-            } else {
-                ""
-            },
-            conversation_text.join("\n")
-        )),
-        reasoning_content: None,
-        tool_calls: None,
-        tool_call_id: None,
-    });
-
-    messages
+/// Build the LLM prompt for generating a conversation summary.
+pub fn build_summary_prompt(request: &SummarizationRequest) -> Vec<ChatMessage> {
+    build_summary_prompt_with_system(
+        request,
+        default_compression_instruction(request.existing_summary.is_some()),
+    )
 }
 
 /// Build summary prompt with a custom system instruction (from settings).
@@ -337,64 +347,105 @@ pub fn build_summary_prompt_with_custom(
     request: &SummarizationRequest,
     custom_prompt: &str,
 ) -> Vec<ChatMessage> {
-    let mut messages = Vec::new();
+    build_summary_prompt_with_system(request, custom_prompt)
+}
 
-    messages.push(ChatMessage {
-        role: "system".to_string(),
-        content: ChatContent::Text(custom_prompt.to_string()),
-        reasoning_content: None,
-        tool_calls: None,
-        tool_call_id: None,
-    });
-
-    if let Some(ref summary) = request.existing_summary {
-        messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: ChatContent::Text(format!("已有摘要：\n{}", summary)),
+/// Rebuild a compression prompt from stored `source_text` (retry path).
+pub fn build_summary_prompt_from_source(source_text: &str, system_prompt: &str) -> Vec<ChatMessage> {
+    vec![
+        ChatMessage {
+            role: "system".to_string(),
+            content: ChatContent::Text(system_prompt.to_string()),
             reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
-        });
+        },
+        ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::Text(format!(
+                "{}{}",
+                source_text, COMPRESSION_FOOTER_REMINDER
+            )),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        },
+    ]
+}
+
+fn build_summary_prompt_with_system(
+    request: &SummarizationRequest,
+    system_prompt: &str,
+) -> Vec<ChatMessage> {
+    let source = format_compression_source_text(request);
+    vec![
+        ChatMessage {
+            role: "system".to_string(),
+            content: ChatContent::Text(system_prompt.to_string()),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        },
+        ChatMessage {
+            role: "user".to_string(),
+            content: ChatContent::Text(format!("{}{}", source, COMPRESSION_FOOTER_REMINDER)),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        },
+    ]
+}
+
+/// Split provider history into (to_compress, retained) keeping the last
+/// `keep_last_n` messages (group-aware via [`message_group_start`]).
+///
+/// When `current_user_index` is set (auto path), the current user message and
+/// everything after it is always retained, even if `keep_last_n` is 0.
+pub fn split_history_keep_last(
+    history_messages: &[ChatMessage],
+    keep_last_n: u32,
+    current_user_index: Option<usize>,
+) -> (Vec<ChatMessage>, Vec<ChatMessage>) {
+    if history_messages.is_empty() {
+        return (Vec::new(), Vec::new());
     }
 
-    let conversation_text: Vec<String> = request
-        .messages_to_compress
-        .iter()
-        .map(|m| {
-            let content_text = match &m.content {
-                ChatContent::Text(s) => s.clone(),
-                ChatContent::Multipart(parts) => parts
-                    .iter()
-                    .filter_map(|p| p.text.as_deref())
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            };
-            let truncated = if content_text.len() > 2000 {
-                format!("{}...[已截断]", &content_text[..2000])
-            } else {
-                content_text
-            };
-            format!("{}: {}", m.role, truncated)
-        })
-        .collect();
+    let from_current = current_user_index
+        .filter(|&idx| idx < history_messages.len())
+        .map(|idx| history_messages.len() - idx)
+        .unwrap_or(0);
+    let retain_target = (keep_last_n as usize).max(from_current);
 
-    messages.push(ChatMessage {
-        role: "user".to_string(),
-        content: ChatContent::Text(format!(
-            "{}对话内容：\n{}",
-            if request.existing_summary.is_some() {
-                "新增"
-            } else {
-                ""
-            },
-            conversation_text.join("\n")
-        )),
-        reasoning_content: None,
-        tool_calls: None,
-        tool_call_id: None,
-    });
+    if retain_target == 0 {
+        return (history_messages.to_vec(), Vec::new());
+    }
+    if retain_target >= history_messages.len() {
+        return (Vec::new(), history_messages.to_vec());
+    }
 
-    messages
+    // Walk groups from the end until we have at least retain_target messages.
+    let mut total_msgs = 0usize;
+    let mut start_idx = history_messages.len();
+    let mut end_idx = history_messages.len();
+
+    while end_idx > 0 {
+        let group_start = message_group_start(history_messages, end_idx - 1);
+        let group_len = end_idx - group_start;
+        if total_msgs > 0 && total_msgs + group_len > retain_target {
+            break;
+        }
+        total_msgs += group_len;
+        start_idx = group_start;
+        end_idx = group_start;
+        if total_msgs >= retain_target {
+            break;
+        }
+    }
+
+    (
+        history_messages[..start_idx].to_vec(),
+        history_messages[start_idx..].to_vec(),
+    )
 }
 
 #[cfg(test)]
@@ -449,6 +500,64 @@ mod tests {
         let history = vec![text_message("user", &"token ".repeat(100_000))];
 
         assert!(!should_auto_compress(&[], &history, Some(1_000_000)));
+    }
+
+    #[test]
+    fn resolve_compression_keep_last_n_defaults_to_three() {
+        assert_eq!(resolve_compression_keep_last_n(None, None), 3);
+        assert_eq!(resolve_compression_keep_last_n(None, Some(5)), 5);
+        assert_eq!(resolve_compression_keep_last_n(Some(0), Some(5)), 0);
+        assert_eq!(resolve_compression_keep_last_n(Some(2), Some(5)), 2);
+    }
+
+    #[test]
+    fn split_history_keep_last_retains_trailing_messages() {
+        let history = vec![
+            text_message("user", "u1"),
+            text_message("assistant", "a1"),
+            text_message("user", "u2"),
+            text_message("assistant", "a2"),
+            text_message("user", "u3"),
+        ];
+
+        let (to_compress, retained) = split_history_keep_last(&history, 3, None);
+        assert_eq!(to_compress.len(), 2);
+        assert_eq!(retained.len(), 3);
+        match &retained[0].content {
+            ChatContent::Text(s) => assert_eq!(s, "u2"),
+            _ => panic!("expected text"),
+        }
+
+        let (all, none) = split_history_keep_last(&history, 0, None);
+        assert_eq!(all.len(), 5);
+        assert!(none.is_empty());
+
+        // Auto path: keep_last_n=0 still retains current user at index 4
+        let (compressed, post) = split_history_keep_last(&history, 0, Some(4));
+        assert_eq!(compressed.len(), 4);
+        assert_eq!(post.len(), 1);
+    }
+
+    #[test]
+    fn build_summary_prompt_appends_footer_reminder() {
+        let request = SummarizationRequest {
+            existing_summary: None,
+            messages_to_compress: vec![text_message("user", "hello")],
+        };
+        let messages = build_summary_prompt(&request);
+        assert_eq!(messages.len(), 2);
+        match &messages[1].content {
+            ChatContent::Text(s) => {
+                assert!(s.contains("hello"));
+                assert!(s.contains(COMPRESSION_FOOTER_REMINDER.trim()));
+            }
+            _ => panic!("expected text"),
+        }
+
+        let source = format_compression_source_text(&request);
+        assert!(source.contains("对话内容"));
+        assert!(source.contains("hello"));
+        assert!(!source.contains(COMPRESSION_FOOTER_REMINDER.trim()));
     }
 
     #[test]

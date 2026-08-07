@@ -58,6 +58,7 @@ describe('DefaultModelSettings', () => {
       compression_provider_id: null,
       compression_model_id: null,
       compression_prompt: null,
+      default_compression_keep_last_n: null,
     };
   });
 

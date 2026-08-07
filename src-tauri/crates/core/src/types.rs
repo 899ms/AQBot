@@ -585,6 +585,9 @@ pub struct Conversation {
     /// Per-conversation cap on history messages sent to the model.
     /// `None` falls back to global `default_context_count`. Values ≥ 50 mean unlimited.
     pub context_message_limit: Option<u32>,
+    /// Keep the last N compressible messages out of compression.
+    /// `None` uses the default (3). `Some(0)` keeps none (compress all eligible).
+    pub compression_keep_last_n: Option<u32>,
     pub category_id: Option<String>,
     pub parent_conversation_id: Option<String>,
     pub mode: String,
@@ -700,6 +703,9 @@ pub struct ConversationSummary {
     pub conversation_id: String,
     pub summary_text: String,
     pub compressed_until_message_id: Option<String>,
+    /// Compression input text (for viewing and retry). Absent on legacy rows.
+    #[serde(default)]
+    pub source_text: Option<String>,
     pub token_count: Option<u32>,
     pub model_used: Option<String>,
     pub created_at: i64,
@@ -736,6 +742,9 @@ pub struct UpdateConversationInput {
     /// Set to `Some(None)` to clear the override (use global default).
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub context_message_limit: Option<Option<i64>>,
+    /// Set to `Some(None)` to clear and use the default keep-last-N (3).
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub compression_keep_last_n: Option<Option<i64>>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub category_id: Option<Option<String>>,
     #[serde(default, deserialize_with = "deserialize_double_option")]
@@ -1601,6 +1610,10 @@ pub struct AppSettings {
     pub compression_top_p: Option<f32>,
     pub compression_frequency_penalty: Option<f32>,
     pub compression_prompt: Option<String>,
+    /// Global default for how many trailing messages to keep clear when compressing.
+    /// Per-conversation `compression_keep_last_n` overrides this. `None` → 3.
+    #[serde(default)]
+    pub default_compression_keep_last_n: Option<u32>,
     /// Model metadata source. Built-in is offline and is the default.
     pub model_catalog_source: ModelCatalogSourcePreference,
     pub proxy_type: Option<String>,
@@ -1762,6 +1775,7 @@ impl Default for AppSettings {
             compression_top_p: None,
             compression_frequency_penalty: None,
             compression_prompt: None,
+            default_compression_keep_last_n: None,
             model_catalog_source: ModelCatalogSourcePreference::Builtin,
             proxy_type: None,
             proxy_address: None,

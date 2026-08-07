@@ -53,6 +53,11 @@ vi.mock('react-i18next', () => ({
         'settings.codeFontFamily': '代码字体',
         'settings.fontDefault': '系统默认',
         'settings.groupMessageStyle': '消息样式',
+        'settings.contextCompression': '上下文压缩',
+        'settings.contextCompressionGroupDesc': '控制对话过长时如何压缩历史上下文。',
+        'settings.compressionKeepLastN': '压缩时保留最近消息数',
+        'settings.compressionKeepLastNTooltip': '保留最近 N 条不压入摘要',
+        'settings.compressionKeepLastNHint': '此为全局默认',
         'settings.agentSettings': 'Agent',
         'settings.agentWorkspaceRoot': '默认工作目录',
         'settings.agentWorkspaceRootDesc': '新 Agent 对话会在该目录下自动创建独立工作目录。留空时使用 ~/.aqbot/workspace。',
@@ -186,6 +191,7 @@ vi.mock('antd', () => {
       </button>
     ),
     Dropdown: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+    Tooltip: ({ children }: { children?: React.ReactNode; title?: React.ReactNode }) => <>{children}</>,
     theme: {
       useToken: () => ({
         token: {
@@ -275,7 +281,21 @@ describe('ConversationSettings', () => {
       agent_workspace_root: null,
       agent_workspace_name_strategy: 'uuid',
       agent_workspace_datetime_format: 'YYYY-MM-DD-HH-mm-ss',
+      default_compression_keep_last_n: null,
     };
+  });
+
+  it('saves default compression keep-last-n from conversation settings', async () => {
+    render(<ConversationSettings />);
+
+    const input = screen.getByLabelText('压缩时保留最近消息数');
+    fireEvent.change(input, { target: { value: '5' } });
+
+    await waitFor(() => {
+      expect(mocks.saveSettings).toHaveBeenCalledWith({
+        default_compression_keep_last_n: 5,
+      });
+    });
   });
 
   it('renders the additional features group below chat navigation', () => {

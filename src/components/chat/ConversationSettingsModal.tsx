@@ -19,6 +19,9 @@ interface ConversationSettingsModalProps {
 const LEGACY_CONTEXT_LIMIT_KEY = (id: string) => `aqbot_context_limit_${id}`;
 /** Values ≥ this mean unlimited (matches backend CONTEXT_MESSAGE_LIMIT_UNLIMITED). */
 const CONTEXT_LIMIT_UNLIMITED = 50;
+/** Default keep-last-N when conversation field is null (matches backend DEFAULT_COMPRESSION_KEEP_LAST_N). */
+const DEFAULT_COMPRESSION_KEEP_LAST_N = 3;
+const COMPRESSION_KEEP_LAST_N_MAX = 20;
 
 function resolveInitialContextLimit(
   conversationId: string,
@@ -69,6 +72,7 @@ export function ConversationSettingsModal({ open, onClose }: ConversationSetting
   const [title, setTitle] = useState('');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [contextLimit, setContextLimit] = useState(CONTEXT_LIMIT_UNLIMITED);
+  const [compressionKeepLastN, setCompressionKeepLastN] = useState(DEFAULT_COMPRESSION_KEEP_LAST_N);
   const [temperature, setTemperature] = useState<number | null>(null);
   const [topP, setTopP] = useState<number | null>(null);
   const [maxTokens, setMaxTokens] = useState<number | null>(null);
@@ -96,6 +100,15 @@ export function ConversationSettingsModal({ open, onClose }: ConversationSetting
           settings.default_context_count,
         ),
       );
+      setCompressionKeepLastN(
+        conversation.compression_keep_last_n != null
+          && Number.isFinite(conversation.compression_keep_last_n)
+          ? Math.max(0, Math.min(COMPRESSION_KEEP_LAST_N_MAX, conversation.compression_keep_last_n))
+          : settings.default_compression_keep_last_n != null
+            && Number.isFinite(settings.default_compression_keep_last_n)
+            ? Math.max(0, Math.min(COMPRESSION_KEEP_LAST_N_MAX, settings.default_compression_keep_last_n))
+            : DEFAULT_COMPRESSION_KEEP_LAST_N,
+      );
 
       // Load icon
       const iconStored = localStorage.getItem(CONV_ICON_KEY(conversation.id));
@@ -113,7 +126,7 @@ export function ConversationSettingsModal({ open, onClose }: ConversationSetting
         setIconValue('');
       }
     }
-  }, [open, conversation, settings.default_context_count]);
+  }, [open, conversation, settings.default_context_count, settings.default_compression_keep_last_n]);
 
   if (!conversation) return null;
 
@@ -136,6 +149,7 @@ export function ConversationSettingsModal({ open, onClose }: ConversationSetting
         top_p: topP,
         frequency_penalty: frequencyPenalty,
         context_message_limit: contextLimit,
+        compression_keep_last_n: compressionKeepLastN,
       });
       // Drop legacy localStorage key after persisting to the database.
       try {
@@ -279,6 +293,35 @@ export function ConversationSettingsModal({ open, onClose }: ConversationSetting
                   10: '10',
                   25: '25',
                   50: t('common.unlimited'),
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Compression keep last N */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={labelStyle}>
+              {t('settings.compressionKeepLastN')}
+              <Tooltip title={t('settings.compressionKeepLastNTooltip')}>
+                <Info size={14} style={{ color: token.colorTextSecondary, cursor: 'help' }} />
+              </Tooltip>
+              <span style={{ marginLeft: 'auto', color: token.colorTextSecondary, fontSize: 12 }}>
+                {compressionKeepLastN}
+              </span>
+            </div>
+            <div style={sliderRowStyle}>
+              <Slider
+                style={{ flex: 1 }}
+                min={0}
+                max={COMPRESSION_KEEP_LAST_N_MAX}
+                value={compressionKeepLastN}
+                onChange={setCompressionKeepLastN}
+                marks={{
+                  0: '0',
+                  3: '3',
+                  5: '5',
+                  10: '10',
+                  20: '20',
                 }}
               />
             </div>

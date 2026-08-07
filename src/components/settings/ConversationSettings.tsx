@@ -1,5 +1,5 @@
-import { Button, ColorPicker, Divider, Input, InputNumber, Switch, theme } from 'antd';
-import { FolderOpen, RotateCcw } from 'lucide-react';
+import { Button, ColorPicker, Divider, Input, InputNumber, Switch, Tooltip, theme } from 'antd';
+import { FolderOpen, Info, RotateCcw } from 'lucide-react';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSettingsStore } from '@/stores';
@@ -18,6 +18,17 @@ import {
 import { useSystemFonts } from '@/hooks/useSystemFonts';
 import { SettingsGroup } from './SettingsGroup';
 import { SettingsSelect } from './SettingsSelect';
+
+/** Matches backend DEFAULT_COMPRESSION_KEEP_LAST_N. */
+const DEFAULT_COMPRESSION_KEEP_LAST_N = 3;
+const COMPRESSION_KEEP_LAST_N_MAX = 20;
+
+function normalizeCompressionKeepLastN(value: number | string | null | undefined) {
+  if (value == null || value === '') return DEFAULT_COMPRESSION_KEEP_LAST_N;
+  const numericValue = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(numericValue)) return DEFAULT_COMPRESSION_KEEP_LAST_N;
+  return Math.min(COMPRESSION_KEEP_LAST_N_MAX, Math.max(0, Math.floor(numericValue)));
+}
 
 const { TextArea } = Input;
 const CHAT_FONT_SIZE_MIN = 12;
@@ -177,6 +188,33 @@ export function ConversationSettings() {
           placeholder={t('settings.defaultSystemPromptPlaceholder')}
           autoSize={{ minRows: 3, maxRows: 10 }}
         />
+      </SettingsGroup>
+
+      <SettingsGroup title={t('settings.contextCompression')}>
+        <div style={{ fontSize: 12, color: token.colorTextDescription, marginBottom: 12 }}>
+          {t('settings.contextCompressionGroupDesc')}
+        </div>
+        <div className="flex items-center justify-between" style={rowStyle}>
+          <span className="inline-flex items-center gap-1">
+            {t('settings.compressionKeepLastN')}
+            <Tooltip title={t('settings.compressionKeepLastNTooltip')}>
+              <Info size={14} style={{ color: token.colorTextSecondary, cursor: 'help' }} />
+            </Tooltip>
+          </span>
+          <InputNumber
+            aria-label={t('settings.compressionKeepLastN')}
+            min={0}
+            max={COMPRESSION_KEEP_LAST_N_MAX}
+            value={normalizeCompressionKeepLastN(settings.default_compression_keep_last_n)}
+            onChange={(value) => saveSettings({
+              default_compression_keep_last_n: normalizeCompressionKeepLastN(value),
+            })}
+            style={{ width: 120 }}
+          />
+        </div>
+        <div style={{ fontSize: 12, color: token.colorTextDescription, marginTop: 8 }}>
+          {t('settings.compressionKeepLastNHint')}
+        </div>
       </SettingsGroup>
 
       <SettingsGroup title={t('settings.chatInput')}>

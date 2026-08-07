@@ -34,6 +34,7 @@ fn conversation_from_entity(m: conversations::Model) -> Conversation {
         is_archived: m.is_archived != 0,
         context_compression: m.context_compression != 0,
         context_message_limit: m.context_message_limit.map(|v| v as u32),
+        compression_keep_last_n: m.compression_keep_last_n.map(|v| v as u32),
         category_id: m.category_id,
         parent_conversation_id: m.parent_conversation_id,
         mode: m.mode,
@@ -210,6 +211,9 @@ pub async fn update_conversation(
     }
     if let Some(context_message_limit) = input.context_message_limit {
         am.context_message_limit = Set(context_message_limit.map(|v| v as i32));
+    }
+    if let Some(compression_keep_last_n) = input.compression_keep_last_n {
+        am.compression_keep_last_n = Set(compression_keep_last_n.map(|v| v as i32));
     }
     if let Some(category_id) = input.category_id {
         am.category_id = Set(category_id);
@@ -509,6 +513,7 @@ pub async fn branch_conversation(
         is_archived: Set(0),
         context_compression: Set(source.context_compression),
         context_message_limit: Set(source.context_message_limit),
+        compression_keep_last_n: Set(source.compression_keep_last_n),
         category_id: Set(source.category_id.clone()),
         parent_conversation_id: Set(parent_id),
         research_mode: Set(source.research_mode),
@@ -722,6 +727,7 @@ fn summary_from_entity(m: conversation_summaries::Model) -> ConversationSummary 
         conversation_id: m.conversation_id,
         summary_text: m.summary_text,
         compressed_until_message_id: m.compressed_until_message_id,
+        source_text: m.source_text,
         token_count: m.token_count.map(|v| v as u32),
         model_used: m.model_used,
         created_at: m.created_at,
@@ -749,6 +755,7 @@ pub async fn upsert_summary(
     compressed_until_message_id: Option<&str>,
     token_count: Option<u32>,
     model_used: Option<&str>,
+    source_text: Option<&str>,
 ) -> Result<ConversationSummary> {
     let now = now_ts();
 
@@ -765,6 +772,9 @@ pub async fn upsert_summary(
                 Set(compressed_until_message_id.map(|s| s.to_string()));
             am.token_count = Set(token_count.map(|v| v as i64));
             am.model_used = Set(model_used.map(|s| s.to_string()));
+            if let Some(source) = source_text {
+                am.source_text = Set(Some(source.to_string()));
+            }
             am.updated_at = Set(now);
             am.update(db).await?;
         }
@@ -777,6 +787,7 @@ pub async fn upsert_summary(
                 compressed_until_message_id: Set(
                     compressed_until_message_id.map(|s| s.to_string()),
                 ),
+                source_text: Set(source_text.map(|s| s.to_string())),
                 token_count: Set(token_count.map(|v| v as i64)),
                 model_used: Set(model_used.map(|s| s.to_string())),
                 created_at: Set(now),
@@ -790,6 +801,35 @@ pub async fn upsert_summary(
     get_summary(db, conversation_id).await?.ok_or_else(|| {
         AQBotError::Database(sea_orm::DbErr::Custom(
             "Failed to read back upserted summary".into(),
+        ))
+    })
+}
+
+/// Update only the summary text/metadata after a retry, preserving boundary and source.
+pub async fn update_summary_text(
+    db: &DatabaseConnection,
+    conversation_id: &str,
+    summary_text: &str,
+    token_count: Option<u32>,
+    model_used: Option<&str>,
+) -> Result<ConversationSummary> {
+    let now = now_ts();
+    let existing = conversation_summaries::Entity::find()
+        .filter(conversation_summaries::Column::ConversationId.eq(conversation_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| AQBotError::NotFound(format!("Summary for conversation {}", conversation_id)))?;
+
+    let mut am: conversation_summaries::ActiveModel = existing.into();
+    am.summary_text = Set(summary_text.to_string());
+    am.token_count = Set(token_count.map(|v| v as i64));
+    am.model_used = Set(model_used.map(|s| s.to_string()));
+    am.updated_at = Set(now);
+    am.update(db).await?;
+
+    get_summary(db, conversation_id).await?.ok_or_else(|| {
+        AQBotError::Database(sea_orm::DbErr::Custom(
+            "Failed to read back updated summary".into(),
         ))
     })
 }

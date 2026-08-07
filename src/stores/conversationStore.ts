@@ -1277,6 +1277,8 @@ interface ConversationState {
   newestLoadedMessageId: string | null;
   streaming: boolean;
   compressingConversationId: string | null;
+  /** Incremented to request ChatView open the compression summary modal. */
+  openCompressionSummaryToken: number;
   streamingMessageId: string | null;
   streamingConversationId: string | null;
   activeStreamId: string | null;
@@ -1319,10 +1321,14 @@ interface ConversationState {
   compressContext: () => Promise<void>;
   /** Get the compression summary for a conversation */
   getCompressionSummary: (conversationId: string) => Promise<ConversationSummary | null>;
+  /** Re-run compression on stored source text with current global prompt */
+  retryCompression: () => Promise<ConversationSummary | null>;
   /** Get server-side context usage for a conversation */
   getContextUsage: (conversationId: string) => Promise<ContextUsage | null>;
   /** Delete the compression summary and all marker messages */
   deleteCompression: () => Promise<void>;
+  /** Ask ChatView to open the compression summary modal for the active conversation */
+  requestOpenCompressionSummary: () => void;
   ensureConversationsLoaded: (options?: EnsureLoadedOptions) => Promise<void>;
   invalidateConversations: (reason: ResourceInvalidationReason) => void;
   fetchConversations: () => Promise<void>;
@@ -1641,6 +1647,7 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
   newestLoadedMessageId: null,
   streaming: false,
   compressingConversationId: null,
+  openCompressionSummaryToken: 0,
   streamingMessageId: null,
   streamingConversationId: null,
   activeStreamId: null,
@@ -1926,6 +1933,26 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
     }
   },
 
+  retryCompression: async () => {
+    const conversationId = get().activeConversationId;
+    if (!conversationId) return null;
+    if (get().loading) throw new Error('Conversation messages are still loading');
+    set({ compressingConversationId: conversationId });
+    try {
+      const summary = await invoke<ConversationSummary>('retry_compression', { conversationId });
+      set((state) => ({
+        compressingConversationId: state.compressingConversationId === conversationId
+          ? null
+          : state.compressingConversationId,
+      }));
+      return summary;
+    } catch (e) {
+      set({ compressingConversationId: null });
+      console.error('Failed to retry compression:', e);
+      throw e;
+    }
+  },
+
   getContextUsage: async (conversationId: string) => {
     try {
       return await invoke<ContextUsage>('get_context_usage', { conversationId });
@@ -1933,6 +1960,12 @@ export const useConversationStore = create<ConversationState>((set, get) => ({
       console.error('Failed to get context usage:', e);
       return null;
     }
+  },
+
+  requestOpenCompressionSummary: () => {
+    set((state) => ({
+      openCompressionSummaryToken: state.openCompressionSummaryToken + 1,
+    }));
   },
 
   deleteCompression: async () => {

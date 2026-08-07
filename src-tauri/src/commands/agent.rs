@@ -2295,6 +2295,7 @@ mod tests {
             is_archived: false,
             context_compression: false,
             context_message_limit: None,
+            compression_keep_last_n: None,
             category_id: None,
             parent_conversation_id: None,
             mode: "agent".to_string(),

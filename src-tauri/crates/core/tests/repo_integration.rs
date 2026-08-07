@@ -349,6 +349,7 @@ async fn test_conversation_update_input() {
         enabled_memory_namespace_ids: Some(vec!["mem-a".into()]),
         context_compression: None,
         context_message_limit: Some(Some(3)),
+        compression_keep_last_n: None,
         category_id: None,
         parent_conversation_id: None,
         mode: None,

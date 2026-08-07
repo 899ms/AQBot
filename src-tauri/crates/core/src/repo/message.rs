@@ -1449,7 +1449,7 @@ mod tests {
         )
         .await
         .unwrap();
-        conversation::upsert_summary(db, &conv.id, "old summary", Some(&active.id), Some(12), Some("model-1"))
+        conversation::upsert_summary(db, &conv.id, "old summary", Some(&active.id), Some(12), Some("model-1"), None)
             .await
             .unwrap();
         let later_user = create_message(db, &conv.id, MessageRole::User, "later", &[], None, 0)
@@ -1535,7 +1535,7 @@ mod tests {
         .await
         .unwrap();
         set_conversation_active_message_count(db, &conv.id, 2).await.unwrap();
-        conversation::upsert_summary(db, &conv.id, "summary", Some(&assistant.id), Some(5), Some("model-1"))
+        conversation::upsert_summary(db, &conv.id, "summary", Some(&assistant.id), Some(5), Some("model-1"), None)
             .await
             .unwrap();
 

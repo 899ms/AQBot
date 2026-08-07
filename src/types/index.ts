@@ -386,6 +386,11 @@ export interface Conversation {
   context_compression: boolean;
   /** Per-conversation history message cap. null = use global default. ≥50 = unlimited. */
   context_message_limit: number | null;
+  /**
+   * Keep the last N compressible messages out of compression.
+   * null = default (3). 0 = keep none.
+   */
+  compression_keep_last_n: number | null;
   category_id: string | null;
   parent_conversation_id: string | null;
   mode?: 'chat' | 'agent' | 'role';
@@ -490,6 +495,8 @@ export interface ConversationSummary {
   conversation_id: string;
   summary_text: string;
   compressed_until_message_id: string | null;
+  /** Compression input text for viewing / retry. Absent on legacy summaries. */
+  source_text?: string | null;
   token_count: number | null;
   model_used: string | null;
   created_at: number;
@@ -532,6 +539,8 @@ export interface UpdateConversationInput {
   context_compression?: boolean;
   /** Set null to clear override and use global default. ≥50 = unlimited. */
   context_message_limit?: number | null;
+  /** Set null to clear and use default keep-last-N (3). */
+  compression_keep_last_n?: number | null;
   category_id?: string | null;
   mode?: 'chat' | 'agent' | 'role';
 }
@@ -711,6 +720,8 @@ export interface AppSettings {
   compression_top_p: number | null;
   compression_frequency_penalty: number | null;
   compression_prompt: string | null;
+  /** Global default keep-last-N when compressing. null → 3. Per-conversation override wins. */
+  default_compression_keep_last_n: number | null;
   model_catalog_source: ModelCatalogSourcePreference;
   proxy_type: string | null;
   proxy_address: string | null;

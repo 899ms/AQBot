@@ -60,6 +60,7 @@ function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
     is_archived: false,
     context_compression: false,
     context_message_limit: null,
+    compression_keep_last_n: null,
     category_id: null,
     parent_conversation_id: null,
     mode: 'chat',

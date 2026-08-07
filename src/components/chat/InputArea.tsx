@@ -846,10 +846,13 @@ export function InputArea() {
 
   // Context token usage calculation
   const getContextUsage = useConversationStore((s) => s.getContextUsage);
+  const requestOpenCompressionSummary = useConversationStore((s) => s.requestOpenCompressionSummary);
   const [serverContextUsage, setServerContextUsage] = useState<{
     usedTokens: number;
     maxTokens: number;
     percent: number;
+    hasSummary: boolean;
+    messagesAfterBoundary: number;
   } | null>(null);
   const contextUsageRevision = `${messages.length}:${messages[messages.length - 1]?.id ?? ''}:${messages[messages.length - 1]?.status ?? ''}`;
 
@@ -884,6 +887,8 @@ export function InputArea() {
             usedTokens: usage.used_tokens,
             maxTokens: usage.context_window,
             percent: Math.min(Math.round((usage.used_tokens / usage.context_window) * 100), 100),
+            hasSummary: usage.has_summary,
+            messagesAfterBoundary: usage.messages_after_boundary,
           });
         });
       };
@@ -929,7 +934,13 @@ export function InputArea() {
     }
 
     const percent = Math.min(Math.round((usedTokens / maxTokens) * 100), 100);
-    return { usedTokens, maxTokens, percent };
+    return {
+      usedTokens,
+      maxTokens,
+      percent,
+      hasSummary: lastMarkerIdx !== -1 && activeMessages[lastMarkerIdx]?.content === '<!-- context-compressed -->',
+      messagesAfterBoundary: effectiveMessages.length,
+    };
   }, [messages, currentModel?.context_window, activeConversation?.system_prompt, serverContextUsage]);
 
   const { hasRealtimeVoice, hasReasoning, hasVision, hasFunctionCalling } = React.useMemo(() => ({
@@ -2048,12 +2059,49 @@ export function InputArea() {
               : contextTokenUsage.percent > 60
                 ? token.colorWarning
                 : token.colorPrimary;
+            const canCompress = !!activeConversationId && !loading && !streaming && !compressing && messages.length > 0;
             return (
               <Popover
+                trigger="click"
                 content={
-                  <span style={{ fontSize: 12 }}>
-                    {contextTokenUsage.usedTokens.toLocaleString()} / {contextTokenUsage.maxTokens.toLocaleString()} tokens ({contextTokenUsage.percent}%)
-                  </span>
+                  <div style={{ minWidth: 200, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
+                      {contextTokenUsage.usedTokens.toLocaleString()} / {contextTokenUsage.maxTokens.toLocaleString()} tokens ({contextTokenUsage.percent}%)
+                    </div>
+                    {contextTokenUsage.hasSummary && (
+                      <div style={{ fontSize: 11, color: token.colorTextTertiary }}>
+                        {t('chat.hasSummary')}
+                        {' · '}
+                        {t('chat.messagesAfterBoundary', { count: contextTokenUsage.messagesAfterBoundary })}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <Button
+                        size="small"
+                        type="primary"
+                        loading={compressing}
+                        disabled={!canCompress}
+                        onClick={async () => {
+                          if (!activeConversationId) return;
+                          try {
+                            await compressContext();
+                            messageApi.success(t('chat.compressSuccess'));
+                          } catch {
+                            messageApi.error(t('chat.compressFailed'));
+                          }
+                        }}
+                      >
+                        {t('chat.compressNow')}
+                      </Button>
+                      <Button
+                        size="small"
+                        disabled={!contextTokenUsage.hasSummary}
+                        onClick={() => requestOpenCompressionSummary()}
+                      >
+                        {t('chat.viewCompressionSummary')}
+                      </Button>
+                    </div>
+                  </div>
                 }
               >
                 <svg

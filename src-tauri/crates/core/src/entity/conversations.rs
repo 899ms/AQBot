@@ -34,6 +34,9 @@ pub struct Model {
     /// Max provider history messages for this conversation. `None` falls back
     /// to the global `default_context_count` setting. Values ≥ 50 mean unlimited.
     pub context_message_limit: Option<i32>,
+    /// When compressing context, keep the last N compressible messages in clear
+    /// text (not included in the summary). `None` means default (3). `0` keeps none.
+    pub compression_keep_last_n: Option<i32>,
     pub category_id: Option<String>,
     pub parent_conversation_id: Option<String>,
     pub mode: String,
