@@ -95,7 +95,15 @@ export function Sidebar() {
       );
     }
     if ((profile.avatarType === 'url' || profile.avatarType === 'file') && profile.avatarValue) {
-      const src = profile.avatarType === 'file' ? resolvedAvatarSrc : profile.avatarValue;
+      // Relative paths (images/...) cannot be used as img src; wait for resolved data URI.
+      const value = profile.avatarValue;
+      const isDirect = value.slice(0, 64).toLowerCase().startsWith('data:image/')
+        || value.startsWith('http://')
+        || value.startsWith('https://')
+        || value.startsWith('aqbot-media://');
+      const src = profile.avatarType === 'file'
+        ? (resolvedAvatarSrc ?? (isDirect ? value : undefined))
+        : value;
       return <Avatar size={size} src={src} style={{ cursor: 'pointer' }} />;
     }
     return (

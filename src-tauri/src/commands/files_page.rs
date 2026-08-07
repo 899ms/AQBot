@@ -218,6 +218,34 @@ fn mime_from_extension(path: &str) -> &'static str {
     }
 }
 
+/// Map image MIME types to a storage file extension for avatar saves.
+/// Returns None for unsupported avatar MIME types.
+fn ext_for_image_mime(mime: &str) -> Option<&'static str> {
+    match mime {
+        "image/png" => Some("png"),
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/webp" => Some("webp"),
+        "image/gif" => Some("gif"),
+        _ => None,
+    }
+}
+
+/// Sniff common image MIME types from magic bytes.
+/// Used when legacy avatar files were saved without an extension.
+fn mime_from_image_magic(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
 const LEGACY_PREVIEW_MAX_BYTES: usize = 1024 * 1024;
 static LEGACY_PREVIEW_WARNING: std::sync::Once = std::sync::Once::new();
 
@@ -255,13 +283,6 @@ fn read_attachment_preview_from_root(
         return Err("Preview image resolves outside the documents images directory".to_string());
     }
 
-    let mime = mime_from_extension(&canonical_path.to_string_lossy());
-    if !matches!(
-        mime,
-        "image/png" | "image/jpeg" | "image/webp" | "image/gif"
-    ) {
-        return Err("Legacy preview supports PNG, JPEG, WebP, and GIF only".to_string());
-    }
     let size_bytes = canonical_path
         .metadata()
         .map_err(|error| format!("Failed to inspect preview image: {error}"))?
@@ -274,6 +295,20 @@ fn read_attachment_preview_from_root(
 
     let bytes = std::fs::read(&canonical_path)
         .map_err(|error| format!("Failed to read preview image: {error}"))?;
+
+    let ext_mime = mime_from_extension(&canonical_path.to_string_lossy());
+    let mime = if matches!(
+        ext_mime,
+        "image/png" | "image/jpeg" | "image/webp" | "image/gif"
+    ) {
+        ext_mime
+    } else {
+        // Extensionless legacy avatars (pre-fix) still need to preview.
+        mime_from_image_magic(&bytes).ok_or_else(|| {
+            "Legacy preview supports PNG, JPEG, WebP, and GIF only".to_string()
+        })?
+    };
+
     aqbot_core::inline_media::validate_image_bytes(mime, &bytes)
         .map_err(|error| format!("Invalid preview image: {error}"))?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -308,15 +343,27 @@ pub async fn read_attachment_preview(file_path: String) -> Result<String, String
 #[tauri::command]
 pub async fn save_avatar_file(data: String, mime_type: String) -> Result<String, String> {
     use aqbot_core::file_store::FileStore;
+    // Normalize aliases so extension + byte validation stay in sync.
+    let mime_type = match mime_type.as_str() {
+        "image/jpg" => "image/jpeg".to_string(),
+        other => other.to_string(),
+    };
+    let ext = ext_for_image_mime(&mime_type).ok_or_else(|| {
+        format!("Unsupported avatar MIME type: {mime_type} (PNG, JPEG, WebP, GIF only)")
+    })?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(&data)
         .map_err(|e| format!("Invalid base64: {e}"))?;
+    aqbot_core::inline_media::validate_image_bytes(&mime_type, &bytes)
+        .map_err(|e| format!("Invalid avatar image: {e}"))?;
     let store = FileStore::new();
     let _file_reference_guard = aqbot_core::repo::stored_file::lock_file_references().await;
     // Avatar paths are not stored_files rows. Give them a unique physical
     // name so managed attachment GC can never delete an avatar that happens
     // to have identical bytes and an identical user-supplied file name.
-    let avatar_name = format!("avatar-{}", aqbot_core::utils::gen_id());
+    // Always include an image extension so legacy preview (mime-from-extension)
+    // and OS tools can identify the file.
+    let avatar_name = format!("avatar-{}.{}", aqbot_core::utils::gen_id(), ext);
     let saved = store
         .save_file(&bytes, &avatar_name, &mime_type)
         .map_err(|e| format!("Failed to save avatar: {e}"))?;
@@ -1088,32 +1135,49 @@ mod tests {
 
     // ── save_avatar_file tests ──────────────────────────────────────────
 
-    #[tokio::test]
-    async fn test_save_avatar_file_returns_relative_path() {
+    fn sample_png_bytes() -> Vec<u8> {
         // 1x1 red PNG pixel
-        let png_bytes: &[u8] = &[
+        vec![
             0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
             0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
             0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
             0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC,
             0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
-        ];
-        let b64 = base64::engine::general_purpose::STANDARD.encode(png_bytes);
+        ]
+    }
 
-        // Use a temp dir so we don't pollute the real ~/Documents/aqbot
+    #[test]
+    fn ext_for_image_mime_maps_supported_types() {
+        assert_eq!(ext_for_image_mime("image/png"), Some("png"));
+        assert_eq!(ext_for_image_mime("image/jpeg"), Some("jpg"));
+        assert_eq!(ext_for_image_mime("image/webp"), Some("webp"));
+        assert_eq!(ext_for_image_mime("image/gif"), Some("gif"));
+        assert_eq!(ext_for_image_mime("image/svg+xml"), None);
+        assert_eq!(ext_for_image_mime("application/octet-stream"), None);
+    }
+
+    #[test]
+    fn test_save_avatar_file_returns_relative_path_with_extension() {
+        let png_bytes = sample_png_bytes();
         let tmp = make_temp_app_data_dir();
-        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::create_dir_all(tmp.join("images")).unwrap();
 
-        // Save via FileStore directly (mirrors command logic without the Tauri runtime)
+        // Mirror command logic (extension from mime + unique avatar name)
+        let ext = ext_for_image_mime("image/png").expect("png is supported");
+        let avatar_name = format!("avatar-test.{}", ext);
         let store = aqbot_core::file_store::FileStore::with_root(tmp.clone());
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(&b64)
+        let saved = store
+            .save_file(&png_bytes, &avatar_name, "image/png")
             .unwrap();
-        let saved = store.save_file(&decoded, "avatar", "image/png").unwrap();
 
         assert!(
             saved.storage_path.starts_with("images/"),
             "avatar should be stored under images/, got: {}",
+            saved.storage_path
+        );
+        assert!(
+            saved.storage_path.ends_with(".png"),
+            "avatar path must include image extension for preview, got: {}",
             saved.storage_path
         );
         assert!(
@@ -1123,13 +1187,41 @@ mod tests {
         );
         assert!(tmp.join(&saved.storage_path).exists());
 
-        // Cleanup
+        // Preview must succeed for the saved path (the #140 regression).
+        let preview = read_attachment_preview_from_root(&tmp, &saved.storage_path).unwrap();
+        assert!(
+            preview.starts_with("data:image/png;base64,"),
+            "preview should be a PNG data URI, got: {}",
+            &preview[..preview.len().min(40)]
+        );
+
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    #[tokio::test]
-    async fn test_save_avatar_file_rejects_invalid_base64() {
+    #[test]
+    fn legacy_preview_sniffs_extensionless_avatar_bytes() {
+        let root = make_temp_app_data_dir();
+        let images = root.join("images");
+        std::fs::create_dir_all(&images).unwrap();
+        // Historical bug: avatars were saved without an extension.
+        std::fs::write(images.join("abcdef_avatar-legacy"), sample_png_bytes()).unwrap();
+
+        let preview =
+            read_attachment_preview_from_root(&root, "images/abcdef_avatar-legacy").unwrap();
+        assert!(preview.starts_with("data:image/png;base64,"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn test_save_avatar_file_rejects_invalid_base64() {
         let result = base64::engine::general_purpose::STANDARD.decode("not-valid-base64!!!");
         assert!(result.is_err(), "decoding garbage base64 should fail");
+    }
+
+    #[test]
+    fn test_save_avatar_file_rejects_unsupported_mime() {
+        assert!(ext_for_image_mime("image/bmp").is_none());
+        assert!(ext_for_image_mime("text/plain").is_none());
     }
 }

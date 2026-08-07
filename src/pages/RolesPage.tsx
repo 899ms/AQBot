@@ -190,7 +190,13 @@ function RoleAvatar({ role }: { role: Pick<Role | MarketplaceRole, 'name' | 'ava
     );
   }
   if ((avatar.type === 'url' || avatar.type === 'file') && avatar.value) {
-    const src = avatar.type === 'file' ? resolvedSrc ?? avatar.value : avatar.value;
+    const direct = avatar.value.slice(0, 64).toLowerCase().startsWith('data:image/')
+      || avatar.value.startsWith('http://')
+      || avatar.value.startsWith('https://')
+      || avatar.value.startsWith('aqbot-media://');
+    const src = avatar.type === 'file'
+      ? (resolvedSrc ?? (direct ? avatar.value : undefined))
+      : avatar.value;
     return <Avatar size={36} shape="square" src={src} style={{ flexShrink: 0, borderRadius: 8 }} />;
   }
   return (

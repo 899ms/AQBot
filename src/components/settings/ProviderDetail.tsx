@@ -31,6 +31,7 @@ import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
 import { useProviderStore, useUIStore } from '@/stores';
 import { SmartModelIcon, SmartProviderIcon } from '@/lib/providerIcons';
+import { encodeProviderIcon, parseProviderIcon } from '@/lib/providerIconCodec';
 import { getEditableCapabilities, getVisibleModelCapabilities, sanitizeModelCapabilities } from '@/lib/modelCapabilities';
 import { IconEditor } from '@/components/shared/IconEditor';
 import { DynamicLobeIcon } from '@/components/shared/DynamicLobeIcon';
@@ -1396,20 +1397,14 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <IconEditor
-            iconType={provider.icon ? 'model_icon' : null}
-            iconValue={provider.icon ?? null}
+            iconType={parseProviderIcon(provider.icon)?.type ?? null}
+            iconValue={parseProviderIcon(provider.icon)?.value ?? null}
             onChange={(type, value) => {
-              if (type === 'model_icon' && value) {
-                updateProvider(providerId, { icon: value });
-              } else if (type === 'emoji' || type === 'url' || type === 'file') {
-                updateProvider(providerId, { icon: `${type}:${value}` });
-              } else {
-                updateProvider(providerId, { icon: '' });
-              }
+              updateProvider(providerId, { icon: encodeProviderIcon(type, value) });
             }}
             size={40}
             shape="square"
-            defaultIcon={<SmartProviderIcon provider={provider} size={40} type="avatar" shape="square" />}
+            defaultIcon={<SmartProviderIcon provider={{ ...provider, icon: '' }} size={40} type="avatar" shape="square" />}
             showModelIcons
             modelIconsDefaultTab="provider"
           />

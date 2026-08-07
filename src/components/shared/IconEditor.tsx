@@ -1,5 +1,5 @@
 import { useState, useRef, lazy, Suspense, type ReactNode } from 'react';
-import { Avatar, Dropdown, Input, Button, theme } from 'antd';
+import { Avatar, Dropdown, Input, Button, App, theme } from 'antd';
 import type { MenuProps } from 'antd';
 import { Smile, Link, FileImage, Trash2, Grid2x2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -9,6 +9,19 @@ import { EmojiPicker } from './EmojiPicker';
 import { DynamicLobeIcon } from './DynamicLobeIcon';
 import { useResolvedAvatarSrc } from '@/hooks/useResolvedAvatarSrc';
 import type { AvatarType } from '@/stores/userProfileStore';
+
+/** Values safe to use as <img src> without legacy path resolution. */
+function isDirectImageSource(value: string): boolean {
+  const prefix = value.slice(0, 64).toLowerCase();
+  return (
+    prefix.startsWith('data:image/')
+    || prefix.startsWith('aqbot-media://stored/')
+    || prefix.startsWith('http://aqbot-media.localhost/stored/')
+    || prefix.startsWith('https://aqbot-media.localhost/stored/')
+    || prefix.startsWith('http://')
+    || prefix.startsWith('https://')
+  );
+}
 
 const IconPickerModal = lazy(() => import('@/components/settings/IconPickerModal'));
 
@@ -55,6 +68,7 @@ export function IconEditor({
   modelIconsDefaultTab = 'model',
 }: IconEditorProps) {
   const { t } = useTranslation();
+  const { message } = App.useApp();
   const { token } = theme.useToken();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
@@ -70,15 +84,21 @@ export function IconEditor({
     reader.onload = async () => {
       const dataUri = reader.result as string;
       const match = dataUri.match(/^data:([^;]+);base64,(.+)$/s);
+      // Optimistic preview: show the data URI immediately so selection feels instant
+      // and remains visible even if persistence/resolve fails.
+      onChange('file', dataUri);
       if (match && isTauri()) {
         try {
-          const relativePath = await invoke<string>('save_avatar_file', { data: match[2], mimeType: match[1] });
+          const relativePath = await invoke<string>('save_avatar_file', {
+            data: match[2],
+            mimeType: match[1],
+          });
           onChange('file', relativePath);
-        } catch {
-          onChange('file', dataUri);
+        } catch (err) {
+          console.error('save_avatar_file failed:', err);
+          message.warning(t('userProfile.avatarSaveFailed', '图片已预览，但保存到本地失败，重启后可能丢失'));
+          // Keep data URI already applied above.
         }
-      } else {
-        onChange('file', dataUri);
       }
     };
     reader.readAsDataURL(file);
@@ -147,7 +167,10 @@ export function IconEditor({
       );
     }
     if ((iconType === 'url' || iconType === 'file') && iconValue) {
-      const src = iconType === 'file' ? (resolvedSrc ?? iconValue) : iconValue;
+      // Never use a bare relative path (images/...) as <img src> — WebView cannot load it.
+      const src = iconType === 'file'
+        ? (resolvedSrc ?? (isDirectImageSource(iconValue) ? iconValue : undefined))
+        : iconValue;
       return <Avatar size={size} src={src} shape={shape} style={{ cursor: 'pointer' }} />;
     }
     if (iconType === 'model_icon' && iconValue) {

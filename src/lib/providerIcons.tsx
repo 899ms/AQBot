@@ -1,7 +1,10 @@
 import { memo } from 'react';
+import { Avatar } from 'antd';
 import type { ProviderConfig } from '@/types';
 import { ProviderIcon, ModelIcon, providerMappings, modelMappings } from '@lobehub/icons';
 import { DynamicLobeIcon } from '@/components/shared/DynamicLobeIcon';
+import { useResolvedAvatarSrc } from '@/hooks/useResolvedAvatarSrc';
+import { parseProviderIcon } from '@/lib/providerIconCodec';
 
 const SHUAI_API_LOGO_URL = 'https://api.shuaiapi.com/images/logo.svg';
 const GPTNB_LOGO_URL = 'https://pic.scdn.app/images/2023/06/26/favicon.png';
@@ -118,8 +121,34 @@ export function getProviderIconKey(provider: ProviderConfig): string {
   return result.key;
 }
 
+function ProviderFileIcon({
+  value,
+  size,
+  shape,
+}: {
+  value: string;
+  size: number;
+  shape?: 'circle' | 'square';
+}) {
+  const resolvedSrc = useResolvedAvatarSrc('file', value);
+  const direct =
+    value.slice(0, 64).toLowerCase().startsWith('data:image/')
+    || value.startsWith('aqbot-media://')
+    || value.includes('aqbot-media.localhost');
+  const src = resolvedSrc ?? (direct ? value : undefined);
+  return (
+    <Avatar
+      size={size}
+      src={src}
+      shape={shape === 'square' ? 'square' : 'circle'}
+      style={{ flexShrink: 0 }}
+    />
+  );
+}
+
 /**
- * Two-tier icon component: tries ProviderIcon first, then ModelIcon, then fallback.
+ * Two-tier icon component: tries custom icon, then ProviderIcon/ModelIcon fallback.
+ * Custom provider.icon may be emoji/url/file (prefixed) or a lobe model/provider key.
  */
 export const SmartProviderIcon = memo(function SmartProviderIcon({
   provider,
@@ -132,12 +161,46 @@ export const SmartProviderIcon = memo(function SmartProviderIcon({
   type?: 'avatar' | 'color' | 'mono';
   shape?: 'circle' | 'square';
 }) {
-  if (provider.icon) {
-    const [, key] = provider.icon.includes(':')
-      ? (provider.icon.split(':', 2) as [string, string])
-      : ['model' as const, provider.icon];
-    // key is a toc `id` (e.g., "Ai302", "OpenAI") — use DynamicLobeIcon for reliable rendering
-    return <DynamicLobeIcon iconId={key} size={size} type={type} />;
+  const parsed = parseProviderIcon(provider.icon);
+  if (parsed) {
+    if (parsed.type === 'emoji') {
+      const borderRadius = shape === 'square' ? Math.floor(size * 0.1) : '50%';
+      return (
+        <div
+          style={{
+            width: size,
+            height: size,
+            borderRadius,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: size * 0.55,
+            lineHeight: 1,
+            flexShrink: 0,
+          }}
+        >
+          {parsed.value}
+        </div>
+      );
+    }
+    if (parsed.type === 'url') {
+      return (
+        <Avatar
+          size={size}
+          src={parsed.value}
+          shape={shape === 'square' ? 'square' : 'circle'}
+          style={{ flexShrink: 0 }}
+        />
+      );
+    }
+    if (parsed.type === 'file') {
+      return <ProviderFileIcon value={parsed.value} size={size} shape={shape} />;
+    }
+    // model_icon: value is `group:id` or bare id
+    const iconId = parsed.value.includes(':')
+      ? parsed.value.slice(parsed.value.indexOf(':') + 1)
+      : parsed.value;
+    return <DynamicLobeIcon iconId={iconId} size={size} type={type} />;
   }
   const builtinLogoUrl = provider.builtin_id
     ? BUILTIN_LOGO_URLS[provider.builtin_id]
