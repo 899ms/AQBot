@@ -24,16 +24,17 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@lobehub/icons', () => {
-  const avatar = {
+  const brand = {
+    Color: ({ size }: { size: number }) => <span data-size={size}>color</span>,
     Avatar: ({ size }: { size: number }) => <span data-size={size}>avatar</span>,
   };
 
   return {
-    ClaudeCode: avatar,
-    Codex: avatar,
-    OpenCode: avatar,
-    Gemini: avatar,
-    Cursor: avatar,
+    ClaudeCode: brand,
+    Codex: brand,
+    OpenCode: brand,
+    Gemini: brand,
+    Cursor: brand,
   };
 });
 

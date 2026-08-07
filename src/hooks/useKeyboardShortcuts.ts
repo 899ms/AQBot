@@ -11,7 +11,6 @@ import { executeShortcutAction } from '@/lib/shortcutActions';
 
 export function useKeyboardShortcuts() {
   const { t: _t } = useTranslation();
-  const setActivePage = useUIStore((s) => s.setActivePage);
   const settings = useSettingsStore((s) => s.settings);
 
   const handleKeyDown = useCallback(
@@ -38,24 +37,37 @@ export function useKeyboardShortcuts() {
       const isMod = e.metaKey || e.ctrlKey;
       if (!isMod) return;
 
+      const page = useUIStore.getState().activePage;
+
       switch (e.key.toLowerCase()) {
         case 'f':
-          e.preventDefault();
-          setActivePage('chat');
-          setTimeout(() => {
-            const searchInput = document.querySelector<HTMLInputElement>('.chat-sidebar-search input');
-            searchInput?.focus();
-          }, 50);
+          // Search is page-local — do not jump modules
+          if (page === 'chat') {
+            e.preventDefault();
+            setTimeout(() => {
+              const searchInput = document.querySelector<HTMLInputElement>('.chat-sidebar-search input');
+              searchInput?.focus();
+            }, 50);
+          } else if (page === 'agent') {
+            e.preventDefault();
+            window.dispatchEvent(new CustomEvent('aqbot:open-agent-search'));
+          }
           return;
         case 'w':
-          e.preventDefault();
-          useConversationStore.getState().setActiveConversation(null);
+          // Close active item only on the current workspace
+          if (page === 'chat') {
+            e.preventDefault();
+            useConversationStore.getState().setActiveConversation(null);
+          } else if (page === 'agent') {
+            e.preventDefault();
+            window.dispatchEvent(new CustomEvent('aqbot:close-agent-thread'));
+          }
           return;
         default:
           return;
         }
     },
-    [setActivePage, settings],
+    [settings],
   );
 
   const exitSettings = useUIStore((s) => s.exitSettings);

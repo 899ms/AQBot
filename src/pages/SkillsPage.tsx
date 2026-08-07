@@ -16,7 +16,8 @@ import { CopyButton } from '@/components/common/CopyButton';
 
 const INSTALL_TARGETS = [
   { key: 'aqbot', label: '~/.aqbot/skills/', desc: 'AQBot', icon: <Sparkles size={14} /> },
-  { key: 'codex', label: '~/.codex/skills/', desc: 'Codex', icon: <Codex.Avatar size={14} /> },
+  // Codex.Avatar is white-on-white; Color is the brand tile with gradient mark.
+  { key: 'codex', label: '~/.codex/skills/', desc: 'Codex', icon: <Codex.Color size={14} /> },
   { key: 'claude', label: '~/.claude/skills/', desc: 'Claude', icon: <FolderOpen size={14} /> },
   { key: 'agents', label: '~/.agents/skills/', desc: 'Agents', icon: <FolderOpen size={14} /> },
 ] as const;
@@ -36,7 +37,7 @@ const { Text, Paragraph } = Typography;
 
 const SOURCE_ICONS: Record<string, React.ReactNode> = {
   aqbot: <img src={appLogo} alt="" style={{ width: 14, height: 14, verticalAlign: 'middle' }} />,
-  codex: <Codex.Avatar size={14} />,
+  codex: <Codex.Color size={14} />,
   claude: <Claude.Color size={14} />,
   agents: <Radio size={14} />,
 };

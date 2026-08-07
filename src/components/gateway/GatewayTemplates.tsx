@@ -20,17 +20,22 @@ interface QuickConnectItem {
   description: string;
 }
 
+/**
+ * Prefer Color over Avatar for brand marks when Color exists.
+ * Codex/Gemini Avatar is white-on-white (AVATAR_BACKGROUND = AVATAR_COLOR = #fff)
+ * and appears as a blank disc. OpenCode/Cursor have no Color pack — use Avatar.
+ */
 const CONNECT_ITEMS: QuickConnectItem[] = [
   {
     key: 'claude_code',
     name: 'Claude Code',
-    avatar: (size) => <ClaudeCode.Avatar size={size} />,
+    avatar: (size) => <ClaudeCode.Color size={size} />,
     description: 'gateway.templateDescClaude',
   },
   {
     key: 'codex',
     name: 'Codex',
-    avatar: (size) => <Codex.Avatar size={size} />,
+    avatar: (size) => <Codex.Color size={size} />,
     description: 'gateway.templateDescCodex',
   },
   {
@@ -42,7 +47,7 @@ const CONNECT_ITEMS: QuickConnectItem[] = [
   {
     key: 'gemini',
     name: 'Gemini CLI',
-    avatar: (size) => <Gemini.Avatar size={size} />,
+    avatar: (size) => <Gemini.Color size={size} />,
     description: 'gateway.templateDescGemini',
   },
   {

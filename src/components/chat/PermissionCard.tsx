@@ -6,12 +6,30 @@ import { useTranslation } from 'react-i18next';
 
 const { Text } = Typography;
 
+export interface PermissionOptionButton {
+  /** Decision / option id sent to onApprove */
+  id: string;
+  label: string;
+  /** primary | default | danger */
+  variant?: 'primary' | 'default' | 'danger';
+}
+
 interface PermissionCardProps {
   conversationId: string;
   toolUseId: string;
   toolName: string;
   input: Record<string, unknown>;
   status: 'pending' | 'approved' | 'denied' | 'expired';
+  /**
+   * Optional override for approve action (e.g. ACP workbench).
+   * When omitted, uses the chat agentStore `agent_approve` path.
+   */
+  onApprove?: (decision: string) => Promise<void>;
+  /**
+   * Optional custom option buttons. Defaults to Allow Once / Always Allow / Deny
+   * (chat agent mode).
+   */
+  options?: PermissionOptionButton[];
 }
 
 const PermissionCard: React.FC<PermissionCardProps> = ({
@@ -20,6 +38,8 @@ const PermissionCard: React.FC<PermissionCardProps> = ({
   toolName,
   input,
   status,
+  onApprove,
+  options,
 }) => {
   const { t } = useTranslation();
   const { token } = theme.useToken();
@@ -30,13 +50,23 @@ const PermissionCard: React.FC<PermissionCardProps> = ({
   const handleApprove = async (decision: string) => {
     setLoading(decision);
     try {
-      await approveToolUse(conversationId, toolUseId, decision);
+      if (onApprove) {
+        await onApprove(decision);
+      } else {
+        await approveToolUse(conversationId, toolUseId, decision);
+      }
     } catch (e) {
       console.error('[PermissionCard] handleApprove failed:', e);
     } finally {
       setLoading(null);
     }
   };
+
+  const actionOptions: PermissionOptionButton[] = options ?? [
+    { id: 'allow_once', label: t('common.allowOnce', 'Allow Once'), variant: 'primary' },
+    { id: 'allow_always', label: t('common.allowAlways', 'Always Allow'), variant: 'default' },
+    { id: 'deny', label: t('common.deny', 'Deny'), variant: 'danger' },
+  ];
 
   const inputStr = JSON.stringify(input, null, 2);
 
@@ -97,33 +127,24 @@ const PermissionCard: React.FC<PermissionCardProps> = ({
 
         {/* Action buttons or result */}
         {status === 'pending' ? (
-          <Space>
-            <Button
-              size="small"
-              type="primary"
-              icon={<ShieldCheck size={14} />}
-              loading={loading === 'allow_once'}
-              onClick={() => handleApprove('allow_once')}
-            >
-              {t('common.allowOnce', 'Allow Once')}
-            </Button>
-            <Button
-              size="small"
-              icon={<ShieldCheck size={14} />}
-              loading={loading === 'allow_always'}
-              onClick={() => handleApprove('allow_always')}
-            >
-              {t('common.allowAlways', 'Always Allow')}
-            </Button>
-            <Button
-              size="small"
-              danger
-              icon={<ShieldX size={14} />}
-              loading={loading === 'deny'}
-              onClick={() => handleApprove('deny')}
-            >
-              {t('common.deny', 'Deny')}
-            </Button>
+          <Space wrap>
+            {actionOptions.map((opt) => (
+              <Button
+                key={opt.id}
+                size="small"
+                type={opt.variant === 'primary' ? 'primary' : 'default'}
+                danger={opt.variant === 'danger'}
+                icon={
+                  opt.variant === 'danger'
+                    ? <ShieldX size={14} />
+                    : <ShieldCheck size={14} />
+                }
+                loading={loading === opt.id}
+                onClick={() => handleApprove(opt.id)}
+              >
+                {opt.label}
+              </Button>
+            ))}
           </Space>
         ) : status === 'approved' ? (
           <Space>

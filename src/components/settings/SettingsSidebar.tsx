@@ -1,5 +1,5 @@
 import { Menu, theme } from 'antd';
-import { Cloud, Settings, Palette, Globe, Zap, Database, Info, Search, Plug, CloudUpload, Bot, HardDrive, MessageSquare, ArrowLeft, TextCursorInput } from 'lucide-react';
+import { Cloud, Settings, Palette, Globe, Zap, Database, Info, Search, Plug, CloudUpload, Bot, HardDrive, MessageSquare, ArrowLeft, TextCursorInput, Terminal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useSettingsStore, useUIStore } from '@/stores';
 import type { SettingsSection, SettingsSidebarDensity } from '@/types';
@@ -19,6 +19,7 @@ const MENU_ICONS: Record<SettingsSection, React.ReactNode> = {
   mcpServers: <Plug size={16} />,
   backup: <CloudUpload size={16} />,
   selectionToolbar: <TextCursorInput size={16} />,
+  acpAgents: <Terminal size={16} />,
 };
 
 const SECTION_KEYS: SettingsSection[] = [
@@ -29,6 +30,7 @@ const SECTION_KEYS: SettingsSection[] = [
   'defaultModel',
   'searchProviders',
   'mcpServers',
+  'acpAgents',
   'proxy',
   'shortcuts',
   'selectionToolbar',

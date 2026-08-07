@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/core", "crates/providers", "crates/gateway", "crates/migration", "crates/agent"]
+members = [".", "crates/core", "crates/providers", "crates/gateway", "crates/migration", "crates/agent", "crates/acp-client"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -50,6 +50,7 @@ serde_json = { workspace = true }
 aqbot-core = { path = "crates/core" }
 aqbot-providers = { path = "crates/providers" }
 aqbot-agent = { path = "crates/agent" }
+aqbot-acp-client = { path = "crates/acp-client" }
 open-agent-sdk = { path = "crates/open-agent-sdk" }
 aqbot-gateway = { path = "crates/gateway" }
 tokio = { workspace = true }

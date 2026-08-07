@@ -20,13 +20,28 @@ function dispatchWindowEvent(name: string) {
   window.dispatchEvent(new CustomEvent(name));
 }
 
-function dispatchChatScopedEvent(name: string) {
-  const uiState = useUIStore.getState();
-  const shouldDelayDispatch = uiState.activePage !== 'chat';
-  uiState.setActivePage('chat');
-  window.setTimeout(() => {
-    dispatchWindowEvent(name);
-  }, shouldDelayDispatch ? 80 : 0);
+/**
+ * Chat-only shortcuts: fire only while Chat is active.
+ * Never force-navigate to Chat from Agent / Settings / other pages.
+ */
+function dispatchChatOnlyEvent(name: string) {
+  if (useUIStore.getState().activePage !== 'chat') return;
+  dispatchWindowEvent(name);
+}
+
+/**
+ * Shared "new conversation / new thread" across Chat + Agent workspaces.
+ * No-ops on other pages (does not jump modules).
+ */
+function dispatchNewConversationForActivePage() {
+  const page = useUIStore.getState().activePage;
+  if (page === 'chat') {
+    dispatchWindowEvent('aqbot:new-conversation');
+    return;
+  }
+  if (page === 'agent') {
+    dispatchWindowEvent('aqbot:new-agent-thread');
+  }
 }
 
 async function toggleCurrentWindow() {
@@ -85,7 +100,7 @@ export async function executeShortcutAction(action: ShortcutAction): Promise<voi
       return;
     case 'newConversation':
       notifyShortcutTriggered(action);
-      dispatchChatScopedEvent('aqbot:new-conversation');
+      dispatchNewConversationForActivePage();
       return;
     case 'openSettings':
       notifyShortcutTriggered(action);
@@ -97,23 +112,24 @@ export async function executeShortcutAction(action: ShortcutAction): Promise<voi
       return;
     case 'toggleModelSelector':
       notifyShortcutTriggered(action);
-      dispatchChatScopedEvent('aqbot:toggle-model-selector');
+      dispatchChatOnlyEvent('aqbot:toggle-model-selector');
       return;
     case 'toggleChatSidebar':
       notifyShortcutTriggered(action);
-      dispatchChatScopedEvent('aqbot:toggle-chat-sidebar');
+      // Chat sidebar collapse only applies on Chat page
+      dispatchChatOnlyEvent('aqbot:toggle-chat-sidebar');
       return;
     case 'fillLastMessage':
       notifyShortcutTriggered(action);
-      dispatchChatScopedEvent('aqbot:fill-last-message');
+      dispatchChatOnlyEvent('aqbot:fill-last-message');
       return;
     case 'clearContext':
       notifyShortcutTriggered(action);
-      dispatchChatScopedEvent('aqbot:clear-context');
+      dispatchChatOnlyEvent('aqbot:clear-context');
       return;
     case 'clearConversationMessages':
       notifyShortcutTriggered(action);
-      dispatchChatScopedEvent('aqbot:clear-conversation-messages');
+      dispatchChatOnlyEvent('aqbot:clear-conversation-messages');
       return;
     case 'toggleGateway':
       notifyShortcutTriggered(action);
@@ -121,7 +137,7 @@ export async function executeShortcutAction(action: ShortcutAction): Promise<voi
       return;
     case 'toggleMode':
       notifyShortcutTriggered(action);
-      dispatchChatScopedEvent('aqbot:toggle-mode');
+      dispatchChatOnlyEvent('aqbot:toggle-mode');
       return;
   }
 }

@@ -42,5 +42,8 @@ pub mod retrieval_hits;
 pub mod stored_files;
 
 pub mod agent_sessions;
+pub mod acp_messages;
+pub mod acp_projects;
+pub mod acp_threads;
 
 pub use sea_orm;

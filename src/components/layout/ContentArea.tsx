@@ -10,6 +10,7 @@ import { FilesPage } from '@/pages/FilesPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { SkillsPage } from '@/pages/SkillsPage';
 import { RolesPage } from '@/pages/RolesPage';
+import { AgentPage } from '@/pages/AgentPage';
 import {
   PageLifecycleProvider,
   type PageCachePolicy,
@@ -29,6 +30,7 @@ const PAGE_CACHE_POLICIES: Record<PageKey, PageCachePolicy> = {
   settings: 'unmount',
   skills: 'unmount',
   roles: 'unmount',
+  agent: 'unmount',
 };
 
 type CachedPageKey = 'chat' | 'drawing';
@@ -68,6 +70,8 @@ function renderUnmountedPage(activePage: PageKey): ReactNode {
       return <SkillsPage />;
     case 'roles':
       return <RolesPage />;
+    case 'agent':
+      return <AgentPage />;
     case 'chat':
     case 'drawing':
       return null;

@@ -10,6 +10,7 @@ import { GlobalCopyMenu } from '@/components/layout/GlobalCopyMenu';
 import { CrashRecoveryModal } from '@/components/layout/CrashRecoveryModal';
 import { useCommandPalette } from '@/hooks/useCommandPalette';
 import { useUIStore, useSettingsStore, useConversationStore } from '@/stores';
+import { useAcpStore } from '@/stores/acpStore';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useGlobalShortcutManager } from '@/hooks/useGlobalShortcutManager';
 import { useResolvedDarkMode } from '@/hooks/useResolvedDarkMode';
@@ -191,6 +192,13 @@ function AppRoot() {
         await useSettingsStore.getState().fetchSettings();
       } catch (e) {
         console.warn('Failed to fetch settings:', e);
+      }
+
+      // Warm ACP cache early so Agent page does not flash "未配置" on first open
+      try {
+        useAcpStore.getState().warmBootstrap();
+      } catch (e) {
+        console.warn('Failed to warm ACP store:', e);
       }
 
       if (!isTauri()) return;

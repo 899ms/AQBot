@@ -44,6 +44,8 @@ mod m20260806_000001_add_role_capability_bindings;
 mod m20260807_000001_add_conversation_context_message_limit;
 mod m20260808_000001_compression_keep_and_source;
 mod m20260809_000001_add_model_aliases_and_auto_route;
+mod m20260810_000001_add_acp_tables;
+mod m20260811_000001_acp_project_sort_order;
 
 pub struct Migrator;
 
@@ -95,6 +97,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260807_000001_add_conversation_context_message_limit::Migration),
             Box::new(m20260808_000001_compression_keep_and_source::Migration),
             Box::new(m20260809_000001_add_model_aliases_and_auto_route::Migration),
+            Box::new(m20260810_000001_add_acp_tables::Migration),
+            Box::new(m20260811_000001_acp_project_sort_order::Migration),
         ]
     }
 }

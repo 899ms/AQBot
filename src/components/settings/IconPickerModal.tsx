@@ -1,6 +1,6 @@
 import { Input, Modal, Tabs, theme } from 'antd';
 import { Search } from 'lucide-react';
-import toc from '@lobehub/icons/es/toc';
+import { toc } from '@lobehub/icons/es/toc';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DynamicLobeIcon } from '@/components/shared/DynamicLobeIcon';

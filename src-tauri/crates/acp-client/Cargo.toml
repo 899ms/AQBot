@@ -1,0 +1,20 @@
+[package]
+name = "aqbot-acp-client"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+agent-client-protocol = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+toml = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+dirs = "5"
+futures = "0.3"
+async-trait = "0.1"
