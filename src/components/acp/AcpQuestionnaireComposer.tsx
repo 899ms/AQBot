@@ -445,6 +445,7 @@ export function AcpQuestionnaireComposer({
         {/* Single question body */}
         <fieldset
           disabled={submitting}
+          translate="no"
           style={{
             display: 'flex',
             minWidth: 0,
@@ -508,7 +509,6 @@ export function AcpQuestionnaireComposer({
                           : undefined}
                         className="aqbot-acp-question-option"
                         value={String(optionIndex)}
-                        translate="no"
                         style={{ width: '100%' }}
                       >
                         <OptionLabel
@@ -532,7 +532,6 @@ export function AcpQuestionnaireComposer({
                     className="aqbot-acp-question-option"
                     checked={draft.otherSelected}
                     disabled={submitting}
-                    translate="no"
                     onChange={(event) => {
                       const checked = event.target.checked;
                       updateDraft(safeIndex, (entry) => ({
@@ -583,7 +582,6 @@ export function AcpQuestionnaireComposer({
                         : undefined}
                       className="aqbot-acp-question-option"
                       value={optionIndex}
-                      translate="no"
                       style={{ width: '100%' }}
                     >
                       <OptionLabel
@@ -605,7 +603,6 @@ export function AcpQuestionnaireComposer({
                       : undefined}
                     className="aqbot-acp-question-option"
                     value={OTHER_VALUE}
-                    translate="no"
                   >
                     {t('agentPage.interactionOther', '其他')}
                   </Radio>
