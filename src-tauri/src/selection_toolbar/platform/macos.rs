@@ -92,8 +92,18 @@ const AX_FRAME_ATTRIBUTE: &str = "AXFrame";
 /// Standard AppKit selector identifier for Edit → Copy.
 const COPY_MENU_IDENTIFIER: &str = "copy:";
 const COPY_MENU_TITLES: &[&str] = &[
-    "Copy", "拷贝", "复制", "拷貝", "複製", "コピー", "복사", "Copier", "Copiar", "Copia",
-    "Kopieren", "Копировать",
+    "Copy",
+    "拷贝",
+    "复制",
+    "拷貝",
+    "複製",
+    "コピー",
+    "복사",
+    "Copier",
+    "Copiar",
+    "Copia",
+    "Kopieren",
+    "Копировать",
 ];
 
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -236,12 +246,12 @@ pub fn start_monitor(
     let (global_stop, global_thread) =
         match start_global_dismiss_listener(sender, mac_sender, overlay_active) {
             Ok(listener) => listener,
-        Err(error) => {
-            let _ = stop_tx.send(());
-            let _ = ax_thread.join();
-            return Err(error);
-        }
-    };
+            Err(error) => {
+                let _ = stop_tx.send(());
+                let _ = ax_thread.join();
+                return Err(error);
+            }
+        };
 
     Ok(PlatformMonitorHandle::new(move || {
         let _ = stop_tx.send(());
@@ -676,12 +686,18 @@ fn handle_mac_signal(
             schedule_selection_probe(mac_sender, point, 0);
         }
         MacSignal::SelectionProbeReady { point, attempt } => {
-            probe_selection(system, active, lifecycle, own_pid, point, attempt, sender, mac_sender);
+            probe_selection(
+                system, active, lifecycle, own_pid, point, attempt, sender, mac_sender,
+            );
         }
     }
 }
 
-fn schedule_selection_probe(sender: &UnboundedSender<MacSignal>, point: LogicalPoint, attempt: usize) {
+fn schedule_selection_probe(
+    sender: &UnboundedSender<MacSignal>,
+    point: LogicalPoint,
+    attempt: usize,
+) {
     let Some(delay_ms) = SELECTION_PROBE_DELAYS_MS.get(attempt).copied() else {
         return;
     };
@@ -1418,10 +1434,7 @@ fn snapshot_pasteboard() -> Option<PasteboardSnapshot> {
     let text = pasteboard
         .stringForType(unsafe { NSPasteboardTypeString })
         .map(|value| value.to_string());
-    Some(PasteboardSnapshot {
-        change_count,
-        text,
-    })
+    Some(PasteboardSnapshot { change_count, text })
 }
 
 fn restore_pasteboard(snapshot: &PasteboardSnapshot) {
@@ -1459,9 +1472,9 @@ fn wait_for_pasteboard_text(snapshot: &PasteboardSnapshot) -> Option<String> {
 /// Full ⌘C sequence (Command down → C down/up with Command flag → Command up).
 /// Flag-only C events are ignored by some custom-rendered apps including WeChat.
 fn post_command_copy() -> bool {
-    let Ok(source) = CGEventSource::new(CGEventSourceStateID::CombinedSessionState).or_else(|_| {
-        CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-    }) else {
+    let Ok(source) = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+        .or_else(|_| CGEventSource::new(CGEventSourceStateID::HIDSystemState))
+    else {
         return false;
     };
     let Ok(cmd_down) = CGEvent::new_keyboard_event(source.clone(), KeyCode::COMMAND, true) else {
@@ -1972,7 +1985,10 @@ mod macos_tests {
         .expect("selection probe should settle")
         .expect("selection probe channel should stay open");
         match signal {
-            super::MacSignal::SelectionProbeReady { point: actual, attempt } => {
+            super::MacSignal::SelectionProbeReady {
+                point: actual,
+                attempt,
+            } => {
                 assert_eq!(actual.x, point.x);
                 assert_eq!(actual.y, point.y);
                 assert_eq!(attempt, 0);

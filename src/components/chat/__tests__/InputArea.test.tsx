@@ -451,7 +451,7 @@ describe('InputArea', () => {
     );
 
     await waitFor(() => expect(getContextUsage).toHaveBeenCalledWith('conv-1'));
-    await userEvent.hover(screen.getByLabelText('上下文 tokens'));
+    await userEvent.click(screen.getByLabelText('上下文 tokens'));
 
     expect(await screen.findByText('720,000 / 1,000,000 tokens (72%)')).toBeInTheDocument();
   });

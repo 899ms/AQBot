@@ -2409,7 +2409,10 @@ mod tests {
         let target = build_drawing_target(&provider, &provider.models[0])
             .expect("custom gemini-named model should be available via OpenAI Images");
         assert_eq!(target.adapter_id, "openai_images");
-        assert!(target.descriptor.operations.contains(&ImageOperation::Generate));
+        assert!(target
+            .descriptor
+            .operations
+            .contains(&ImageOperation::Generate));
         assert!(target.descriptor.operations.contains(&ImageOperation::Edit));
         assert!(target
             .descriptor
@@ -2463,10 +2466,7 @@ mod tests {
         assert_eq!(target.adapter_id, "xai_images");
         assert_eq!(target.model_id, "grok-imagine-image");
         assert!(target.descriptor.warnings.is_empty());
-        assert!(target
-            .descriptor
-            .operations
-            .contains(&ImageOperation::Edit));
+        assert!(target.descriptor.operations.contains(&ImageOperation::Edit));
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatChatTime, normalizeChatTimestamp } from '../chatTime';
+import { formatChatDateTime, formatChatTime, normalizeChatTimestamp } from '../chatTime';
 
 describe('chatTime', () => {
   it('formats backend unix-second timestamps the same as millisecond timestamps', () => {
@@ -28,5 +28,11 @@ describe('chatTime', () => {
     const now = new Date(2026, 3, 30, 21, 30, 0).getTime();
 
     expect(formatChatTime(messageTime, now)).toBe('2026-04-29 21:00:05');
+  });
+
+  it('always includes calendar date in formatChatDateTime', () => {
+    const messageTime = new Date(2026, 3, 30, 21, 0, 5).getTime();
+
+    expect(formatChatDateTime(messageTime)).toBe('2026-04-30 21:00:05');
   });
 });

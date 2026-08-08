@@ -105,8 +105,9 @@ const AGENT_ICON_RULES: Array<{ test: RegExp; Icon: IconPack }> = [
   { test: /\bxai\b/i, Icon: lobePack(XAI as never) },
   { test: /opencode|open.?code/i, Icon: OpenCode as unknown as IconPack },
   { test: /cursor/i, Icon: Cursor as unknown as IconPack },
-  { test: /github.?copilot|copilot-cli/i, Icon: GithubCopilot as unknown as IconPack },
-  { test: /copilot/i, Icon: Copilot as unknown as IconPack },
+  // GithubCopilot has no Color tile — Avatar is black + white copilot mark (same as lobehub.com/icons/github-copilot).
+  { test: /github.?copilot|copilot-cli/i, Icon: lobePack(GithubCopilot as never, { preferAvatarAsColor: true }) },
+  { test: /copilot/i, Icon: lobePack(Copilot as never) },
   { test: /goose/i, Icon: Goose as unknown as IconPack },
   { test: /cline/i, Icon: Cline as unknown as IconPack },
   { test: /roo.?code|roocode/i, Icon: RooCode as unknown as IconPack },
@@ -117,7 +118,8 @@ const AGENT_ICON_RULES: Array<{ test: RegExp; Icon: IconPack }> = [
   { test: /qoder/i, Icon: Qoder as unknown as IconPack },
   { test: /kwaipilot|kwai.?pilot/i, Icon: Kwaipilot as unknown as IconPack },
   { test: /\bpi\b|pi-acp|pi.?agent/i, Icon: Pi as unknown as IconPack },
-  { test: /kimi|moonshot/i, Icon: Kimi as unknown as IconPack },
+  // Kimi Color has white paths that vanish on light UI; Avatar (lobehub.com/icons/kimi) is the brand tile.
+  { test: /kimi|moonshot/i, Icon: lobePack(Kimi as never, { preferAvatarAsColor: true }) },
   { test: /qwen/i, Icon: Qwen as unknown as IconPack },
   { test: /mistral|vibe/i, Icon: Mistral as unknown as IconPack },
   { test: /\bamp\b|amp-acp/i, Icon: Amp as unknown as IconPack },

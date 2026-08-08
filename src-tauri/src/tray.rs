@@ -147,12 +147,19 @@ fn tray_labels(language: &str) -> TrayLabels {
 
 fn format_conversation_title(title: &str, fallback: &str) -> String {
     let trimmed = title.trim();
-    let base = if trimmed.is_empty() { fallback } else { trimmed };
+    let base = if trimmed.is_empty() {
+        fallback
+    } else {
+        trimmed
+    };
     let count = base.chars().count();
     if count <= TITLE_MAX_CHARS {
         base.to_string()
     } else {
-        let truncated: String = base.chars().take(TITLE_MAX_CHARS.saturating_sub(1)).collect();
+        let truncated: String = base
+            .chars()
+            .take(TITLE_MAX_CHARS.saturating_sub(1))
+            .collect();
         format!("{truncated}…")
     }
 }
@@ -222,14 +229,7 @@ fn build_menu(
     let app_icon = load_app_menu_icon();
 
     // Show main window — app logo
-    append_image_icon_item(
-        app,
-        &menu,
-        "show",
-        labels.show,
-        true,
-        app_icon.clone(),
-    )?;
+    append_image_icon_item(app, &menu, "show", labels.show, true, app_icon.clone())?;
 
     if !recent.is_empty() {
         let sep_recent = PredefinedMenuItem::separator(app)?;
@@ -464,21 +464,13 @@ pub async fn sync_tray_menu(app: &AppHandle) -> Result<(), String> {
         tracing::warn!("Failed to load recent conversations for tray: {}", err);
         Vec::new()
     });
-    let recent: Vec<(String, String)> = recent_rows
-        .into_iter()
-        .map(|c| (c.id, c.title))
-        .collect();
+    let recent: Vec<(String, String)> = recent_rows.into_iter().map(|c| (c.id, c.title)).collect();
     let language = settings.language.clone();
     let selection_toolbar_enabled = settings.selection_toolbar.enabled;
 
     let app_handle = app.clone();
     app.run_on_main_thread(move || {
-        match build_menu(
-            &app_handle,
-            &language,
-            &recent,
-            selection_toolbar_enabled,
-        ) {
+        match build_menu(&app_handle, &language, &recent, selection_toolbar_enabled) {
             Ok(menu) => {
                 if let Some(tray) = app_handle.tray_by_id(TRAY_ID) {
                     if let Err(err) = tray.set_menu(Some(menu)) {

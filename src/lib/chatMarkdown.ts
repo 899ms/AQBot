@@ -4,7 +4,17 @@ import { normalizeThinkTagsForMarkdown } from './thinkTags';
 
 export type ChatMarkdownNode = BaseNode;
 
-export const CHAT_CUSTOM_HTML_TAGS = ['think', 'web-search-query', 'web-search', 'knowledge-retrieval', 'memory-retrieval', 'tool-call', 'html-render', 'img'] as const;
+export const CHAT_CUSTOM_HTML_TAGS = [
+  'think',
+  'web-search-query',
+  'web-search',
+  'knowledge-retrieval',
+  'memory-retrieval',
+  'tool-call',
+  'acp-plan',
+  'html-render',
+  'img',
+] as const;
 
 const AQBOT_DISPLAY_TAGS = new Set([
   'web-search-query',
@@ -12,6 +22,7 @@ const AQBOT_DISPLAY_TAGS = new Set([
   'knowledge-retrieval',
   'memory-retrieval',
   'tool-call',
+  'acp-plan',
 ]);
 const LONG_CONTENT_PLAIN_TEXT_THRESHOLD = 100_000;
 const UNBALANCED_HTML_TAG_THRESHOLD = 20;

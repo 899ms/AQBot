@@ -35,6 +35,10 @@ body {
   outline: none !important;
 }
 
+.aqbot-acp-tool-button:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-primary) 35%, transparent);
+}
+
 /* Re-enable text selection for content areas */
 .ant-bubble-content,
 .markstream-react,
@@ -169,11 +173,14 @@ code,
   font-weight: var(--font-weight, 400) !important;
 }
 
-/* Fix icon alignment in dropdown menus (lucide SVGs) */
+/* Fix icon alignment + spacing from label in dropdown menus */
 .ant-dropdown-menu .ant-dropdown-menu-item-icon,
 .ant-dropdown-menu .ant-dropdown-menu-submenu-title > .ant-dropdown-menu-item-icon {
   display: inline-flex !important;
   align-items: center !important;
+  justify-content: center !important;
+  margin-inline-end: 8px !important;
+  flex-shrink: 0;
 }
 
 b, strong, th,
@@ -226,6 +233,11 @@ html[data-theme="dark"] .aqbot-input-textarea::-webkit-scrollbar-thumb {
 
 html[data-theme="dark"] .aqbot-input-textarea::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.34);
+}
+
+/* ACP nested model config choice rows */
+.aqbot-acp-model-choice[data-selected='false']:hover {
+  background: var(--ant-color-fill-tertiary, rgba(0, 0, 0, 0.04)) !important;
 }
 
 /* ── OverlayScrollbars custom theme ──────────────────────────────── */

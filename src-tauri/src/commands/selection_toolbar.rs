@@ -325,19 +325,16 @@ mod tests {
     #[test]
     fn copy_strips_closed_and_unterminated_think_blocks() {
         assert_eq!(
-            strip_think_content_for_copy(
-                "<think totalMs=\"12\">\nreasoning\n</think>\n\nanswer"
-            ),
+            strip_think_content_for_copy("<think totalMs=\"12\">\nreasoning\n</think>\n\nanswer"),
             "answer"
         );
         assert_eq!(
-            strip_think_content_for_copy("partial answer\n\n<think data-aqbot=\"1\">\nstill thinking"),
+            strip_think_content_for_copy(
+                "partial answer\n\n<think data-aqbot=\"1\">\nstill thinking"
+            ),
             "partial answer"
         );
-        assert_eq!(
-            strip_think_content_for_copy("1 < thinky 2"),
-            "1 < thinky 2"
-        );
+        assert_eq!(strip_think_content_for_copy("1 < thinky 2"), "1 < thinky 2");
     }
 }
 

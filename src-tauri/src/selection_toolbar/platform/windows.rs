@@ -17,6 +17,7 @@ use uiautomation::{
     variants::SafeArray,
     UIAutomation, UIElement,
 };
+use windows::core::PWSTR;
 use windows::Win32::{
     Foundation::{CloseHandle, HANDLE, HGLOBAL, LPARAM, LRESULT, WPARAM},
     System::{
@@ -32,18 +33,17 @@ use windows::Win32::{
         Input::KeyboardAndMouse::{
             MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
             KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MAPVK_VK_TO_VSC, VIRTUAL_KEY,
-            VK_CONTROL, VK_C, VK_ESCAPE,
+            VK_C, VK_CONTROL, VK_ESCAPE,
         },
         WindowsAndMessaging::{
             CallNextHookEx, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId,
-            PeekMessageW, PostThreadMessageW, SendMessageW, SetForegroundWindow,
-            SetWindowsHookExW, UnhookWindowsHookEx, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT,
-            PM_NOREMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_COPY, WM_KEYDOWN, WM_LBUTTONDOWN,
-            WM_LBUTTONUP, WM_MBUTTONDOWN, WM_QUIT, WM_RBUTTONDOWN,
+            PeekMessageW, PostThreadMessageW, SendMessageW, SetForegroundWindow, SetWindowsHookExW,
+            UnhookWindowsHookEx, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL,
+            WH_MOUSE_LL, WM_COPY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+            WM_QUIT, WM_RBUTTONDOWN,
         },
     },
 };
-use windows::core::PWSTR;
 
 use super::{DismissReason, PlatformEvent, PlatformMonitorHandle, PlatformStartError};
 use crate::selection_toolbar::{
@@ -56,9 +56,7 @@ const CLIPBOARD_FALLBACK_INTERVAL_MS: u64 = 5;
 const CLIPBOARD_FALLBACK_TIMEOUT_MS: u64 = 350;
 const CF_UNICODETEXT: u32 = 13;
 /// Process basenames for apps that often lack a usable UIA TextPattern (WeChat 4.x).
-const WEAK_UIA_PROCESS_MARKERS: &[&str] = &[
-    "wechat", "weixin", "wxwork", "wework", "wechatappex",
-];
+const WEAK_UIA_PROCESS_MARKERS: &[&str] = &["wechat", "weixin", "wxwork", "wework", "wechatappex"];
 
 thread_local! {
     static GLOBAL_EVENT_SENDER: RefCell<Option<UnboundedSender<PlatformEvent>>> =
@@ -439,8 +437,8 @@ fn try_clipboard_selection_fallback(pointer: ScreenPoint) -> Option<SelectionObs
         return None;
     }
     let process_id = foreground_process_id().unwrap_or(0);
-    let source_app = process_image_basename(process_id)
-        .unwrap_or_else(|| format!("process:{process_id}"));
+    let source_app =
+        process_image_basename(process_id).unwrap_or_else(|| format!("process:{process_id}"));
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     Some(SelectionObservation {
@@ -520,11 +518,7 @@ fn keyboard_input(vk: VIRTUAL_KEY, key_up: bool, use_scancode: bool) -> INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
-                wVk: if use_scancode {
-                    VIRTUAL_KEY(0)
-                } else {
-                    vk
-                },
+                wVk: if use_scancode { VIRTUAL_KEY(0) } else { vk },
                 wScan: scan,
                 dwFlags: flags,
                 time: 0,
@@ -632,8 +626,13 @@ fn process_image_path(handle: HANDLE) -> Option<String> {
     unsafe {
         let mut buffer = vec![0u16; 1024];
         let mut size = buffer.len() as u32;
-        QueryFullProcessImageNameW(handle, Default::default(), PWSTR(buffer.as_mut_ptr()), &mut size)
-            .ok()?;
+        QueryFullProcessImageNameW(
+            handle,
+            Default::default(),
+            PWSTR(buffer.as_mut_ptr()),
+            &mut size,
+        )
+        .ok()?;
         if size == 0 {
             return None;
         }

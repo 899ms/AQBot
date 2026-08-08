@@ -35,15 +35,21 @@ function makeMessage(overrides: Partial<Message>): Message {
 
 describe('ChatView assistant display policy', () => {
   it('loads stored attachment images through the read-only media source', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/components/chat/ChatView.tsx'), 'utf8');
-    const attachmentPreview = source.match(/function AttachmentPreview[\s\S]*?const handleOpen/)?.[0] ?? '';
+    const attachmentPreview = readFileSync(
+      resolve(process.cwd(), 'src/components/chat/MessageAttachmentPreview.tsx'),
+      'utf8',
+    );
 
-    expect(attachmentPreview).toContain('loadStoredMediaSource(att.id, att.file_path)');
+    expect(attachmentPreview).toContain(
+      'loadStoredMediaSource(attachment.id, attachment.file_path)',
+    );
     expect(attachmentPreview).not.toContain("invoke<string>('read_attachment_preview'");
     expect(attachmentPreview).toMatch(
       /React\.useEffect\(\(\) => \{\s*if \(isImage \|\| fileExists !== null\) return;[\s\S]*?invoke<boolean>\('check_attachment_exists'/,
     );
     expect(attachmentPreview).toContain('onError={() => {');
+    expect(attachmentPreview).toContain('mask: { blur: true }');
+    expect(attachmentPreview).toContain('scaleStep: 0.5');
   });
 
   it('loads the complete transcript before copy and structured exports when the message window is trimmed', () => {
@@ -60,10 +66,11 @@ describe('ChatView assistant display policy', () => {
 
   it('does not mount AssistantFooter while an assistant message is streaming', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/components/chat/ChatView.tsx'), 'utf8');
-    const footerBranch = source.match(/footer:\s*msg && activeConversationId \? \([\s\S]*?\) : footerLoading \?/);
+    const footerIndex = source.indexOf('<AssistantFooter');
+    const footerBranch = footerIndex >= 0 ? source.slice(footerIndex - 200, footerIndex + 500) : '';
 
-    expect(footerBranch?.[0]).toContain('{!isStreaming && (');
-    expect(footerBranch?.[0]).not.toContain('isStreaming={isStreaming}');
+    expect(footerBranch).toContain('{!isStreaming && (');
+    expect(footerBranch).not.toContain('isStreaming={isStreaming}');
   });
 
   it('temporarily closes live streaming think content before rendering', () => {

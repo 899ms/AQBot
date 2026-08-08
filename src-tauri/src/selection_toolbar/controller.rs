@@ -173,8 +173,8 @@ impl SelectionToolbarRuntime {
     }
 
     async fn remember_selection_candidate(&self, observation: &SelectionObservation) {
-        let candidate = super::is_actionable_selection_text(&observation.text)
-            .then(|| observation.clone());
+        let candidate =
+            super::is_actionable_selection_text(&observation.text).then(|| observation.clone());
         *self.pending_selection.lock().await = candidate;
     }
 

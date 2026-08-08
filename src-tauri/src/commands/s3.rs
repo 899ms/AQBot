@@ -22,7 +22,6 @@ impl TempPathCleanup {
     fn track_file<P: Into<PathBuf>>(&mut self, path: P) {
         self.files.push(path.into());
     }
-
 }
 
 impl Drop for TempPathCleanup {

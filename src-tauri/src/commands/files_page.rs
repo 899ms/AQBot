@@ -304,9 +304,8 @@ fn read_attachment_preview_from_root(
         ext_mime
     } else {
         // Extensionless legacy avatars (pre-fix) still need to preview.
-        mime_from_image_magic(&bytes).ok_or_else(|| {
-            "Legacy preview supports PNG, JPEG, WebP, and GIF only".to_string()
-        })?
+        mime_from_image_magic(&bytes)
+            .ok_or_else(|| "Legacy preview supports PNG, JPEG, WebP, and GIF only".to_string())?
     };
 
     aqbot_core::inline_media::validate_image_bytes(mime, &bytes)

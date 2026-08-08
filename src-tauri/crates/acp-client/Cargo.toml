@@ -14,7 +14,17 @@ tracing = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 toml = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "socks"] }
 dirs = "5"
 futures = "0.3"
 async-trait = "0.1"
+indexmap = { version = "2", features = ["serde"] }
+semver = "1"
+sha2 = "0.10"
+url = "2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+system-configuration = "0.7"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Networking_WinHttp"] }

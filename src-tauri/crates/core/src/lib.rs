@@ -1,3 +1,4 @@
+pub mod attachment_persistence;
 pub mod bedrock_credentials;
 pub mod builtin_tools;
 pub mod crypto;

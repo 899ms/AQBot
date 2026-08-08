@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   App,
-  Avatar,
   Button,
   Dropdown,
   Empty,
@@ -13,11 +12,15 @@ import {
 import Conversations from '@ant-design/x/es/conversations';
 import type { ConversationItemType } from '@ant-design/x/es/conversations/interface';
 import {
+  Copy,
   FolderOpen,
   FolderPlus,
   GripVertical,
   Loader,
   MessageSquarePlus,
+  Pencil,
+  Pin,
+  PinOff,
   Search,
   Settings,
   Trash2,
@@ -41,10 +44,39 @@ import { useAcpStore } from '@/stores/acpStore';
 import { useUIStore } from '@/stores';
 import { AcpAgentIcon } from '@/lib/acpAgentIcon';
 import { getAcpProjectIcon } from '@/lib/acpProjectIcon';
+import { DynamicLobeIcon } from '@/components/shared/DynamicLobeIcon';
 import { useResolvedAvatarSrc } from '@/hooks/useResolvedAvatarSrc';
 import type { AcpProject, AcpThread } from '@/types/acp';
 import type { AvatarType } from '@/stores/userProfileStore';
 import { AcpProjectSettingsModal } from './AcpProjectSettingsModal';
+
+/** Platform-aware "Reveal in Finder / Explorer / file manager" label. */
+function useRevealInFolderLabel(): string {
+  const { t } = useTranslation();
+  return useMemo(() => {
+    if (typeof navigator === 'undefined') {
+      return t('agentPage.showInFolder', '在文件夹中显示');
+    }
+    const platform = navigator.platform || '';
+    const ua = navigator.userAgent || '';
+    if (/Mac|iPhone|iPad|iPod/i.test(platform) || (/Mac OS/i.test(ua) && !/Windows|Linux|Android/i.test(ua))) {
+      return t('agentPage.showInFinder', '在 Finder 中显示');
+    }
+    if (/Win/i.test(platform) || /Windows/i.test(ua)) {
+      return t('agentPage.showInExplorer', '在资源管理器中显示');
+    }
+    return t('agentPage.showInFileManager', '在文件管理器中显示');
+  }, [t]);
+}
+
+async function revealPathInFolder(path: string): Promise<void> {
+  const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
+  await revealItemInDir(path);
+}
+
+function isThreadPinned(thread: AcpThread): boolean {
+  return !!thread.is_pinned;
+}
 
 /** Same title ellipsis shell as ChatSidebar ConversationTitleText */
 function ThreadTitleText({ title, className = '' }: { title: string; className?: string }) {
@@ -66,8 +98,11 @@ function ThreadTitleText({ title, className = '' }: { title: string; className?:
   );
 }
 
-function ProjectIcon({ projectId, size = 13 }: { projectId: string; size?: number }) {
-  const { token } = theme.useToken();
+/**
+ * Project list icon. Sized to match conversation row avatars (~20px) so custom
+ * emoji / file / url icons stay readable (the old 13px Avatar looked tiny).
+ */
+function ProjectIcon({ projectId, size = 20 }: { projectId: string; size?: number }) {
   const icon = getAcpProjectIcon(projectId);
   const resolvedSrc = useResolvedAvatarSrc(
     (icon?.type as AvatarType) ?? 'icon',
@@ -76,36 +111,68 @@ function ProjectIcon({ projectId, size = 13 }: { projectId: string; size?: numbe
 
   if (icon?.type === 'emoji' && icon.value) {
     return (
-      <Avatar
-        size={size + 4}
+      <span
         style={{
-          fontSize: Math.max(10, size * 0.9),
-          backgroundColor: token.colorPrimaryBg,
+          width: size,
+          height: size,
+          fontSize: Math.round(size * 0.72),
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
           flexShrink: 0,
           lineHeight: 1,
         }}
+        aria-hidden
       >
         {icon.value}
-      </Avatar>
+      </span>
     );
   }
 
-  if (icon && (icon.type === 'url' || icon.type === 'file' || icon.type === 'model_icon') && icon.value) {
+  if (icon?.type === 'model_icon' && icon.value) {
+    const iconId = icon.value.includes(':') ? icon.value.slice(icon.value.indexOf(':') + 1) : icon.value;
+    return (
+      <span
+        style={{
+          width: size,
+          height: size,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          lineHeight: 0,
+        }}
+        aria-hidden
+      >
+        <DynamicLobeIcon iconId={iconId} size={size} type="color" />
+      </span>
+    );
+  }
+
+  if (icon && (icon.type === 'url' || icon.type === 'file') && icon.value) {
     const src =
       icon.type === 'file'
         ? (resolvedSrc ?? (icon.value.startsWith('data:') ? icon.value : undefined))
-        : icon.type === 'model_icon'
-          ? undefined
-          : icon.value;
+        : icon.value;
     if (src) {
-      return <Avatar size={size + 4} src={src} style={{ flexShrink: 0 }} />;
-    }
-    if (icon.type === 'model_icon') {
-      // model icon value is usually a lobe icon id rendered elsewhere; fall back to folder
+      return (
+        <img
+          src={src}
+          alt=""
+          style={{
+            width: size,
+            height: size,
+            borderRadius: 4,
+            objectFit: 'cover',
+            flexShrink: 0,
+            display: 'block',
+          }}
+        />
+      );
     }
   }
 
-  return <FolderOpen size={size} style={{ flexShrink: 0 }} />;
+  return <FolderOpen size={Math.max(14, size - 2)} style={{ flexShrink: 0 }} />;
 }
 
 /**
@@ -115,26 +182,37 @@ function ProjectIcon({ projectId, size = 13 }: { projectId: string; size?: numbe
 function SortableProjectLabel({
   project,
   menuActionRef,
+  onSelect,
   onNewThread,
   onSettings,
+  onReveal,
   onDelete,
   newThreadLabel,
   settingsLabel,
+  revealLabel,
   deleteLabel,
 }: {
   project: AcpProject;
   menuActionRef: React.MutableRefObject<boolean>;
+  /** Clicking the label (not the chevron) selects the project → new conversation pane. */
+  onSelect: () => void;
   onNewThread: () => void;
   onSettings: () => void;
+  onReveal: () => void;
   onDelete: () => void;
   newThreadLabel: string;
   settingsLabel: string;
+  revealLabel: string;
   deleteLabel: string;
 }) {
   const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
-    id: project.id,
+    id: `proj:${project.id}`,
+    data: { type: 'project', projectId: project.id },
   });
-  const { setNodeRef: setDropRef } = useDroppable({ id: project.id });
+  const { setNodeRef: setDropRef } = useDroppable({
+    id: `proj:${project.id}`,
+    data: { type: 'project', projectId: project.id },
+  });
   const mergedRef = useCallback(
     (node: HTMLDivElement | null) => {
       setDragRef(node);
@@ -150,6 +228,7 @@ function SortableProjectLabel({
         items: [
           { key: 'new', label: newThreadLabel, icon: <MessageSquarePlus size={14} /> },
           { key: 'settings', label: settingsLabel, icon: <Settings size={14} /> },
+          { key: 'reveal', label: revealLabel, icon: <FolderOpen size={14} /> },
           { key: 'delete', label: deleteLabel, icon: <Trash2 size={14} />, danger: true },
         ],
         onClick: ({ key, domEvent }) => {
@@ -160,23 +239,70 @@ function SortableProjectLabel({
           }, 100);
           if (key === 'new') onNewThread();
           else if (key === 'settings') onSettings();
+          else if (key === 'reveal') onReveal();
           else if (key === 'delete') onDelete();
         },
       }}
     >
       <div
         ref={mergedRef}
-        className="flex items-center gap-1"
+        className="flex items-center gap-1.5"
         style={{ opacity: isDragging ? 0.3 : 1, cursor: 'pointer', userSelect: 'none', flex: 1 }}
         {...attributes}
         {...listeners}
         title={project.root_path}
+        onClick={(event) => {
+          // Own toggle+select (stop parent so we don't double-toggle).
+          event.stopPropagation();
+          onSelect();
+        }}
       >
         <GripVertical size={12} style={{ opacity: 0.4, cursor: 'grab', flexShrink: 0 }} />
-        <ProjectIcon projectId={project.id} size={13} />
+        <ProjectIcon projectId={project.id} size={20} />
         <span className="truncate">{project.name}</span>
       </div>
     </Dropdown>
+  );
+}
+
+/** Thread row title with drag handle for in-project reordering. Right-click is handled by the list shell. */
+function SortableThreadLabel({
+  thread,
+  title,
+}: {
+  thread: AcpThread;
+  title: string;
+}) {
+  const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
+    id: `thread:${thread.id}`,
+    data: { type: 'thread', threadId: thread.id, projectId: thread.project_id },
+  });
+  const { setNodeRef: setDropRef } = useDroppable({
+    id: `thread:${thread.id}`,
+    data: { type: 'thread', threadId: thread.id, projectId: thread.project_id },
+  });
+  const mergedRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      setDragRef(node);
+      setDropRef(node);
+    },
+    [setDragRef, setDropRef],
+  );
+
+  return (
+    <span
+      ref={mergedRef}
+      className="aqbot-chat-conversation-label"
+      data-conv-id={thread.id}
+      style={{ opacity: isDragging ? 0.35 : 1, cursor: 'grab', width: '100%' }}
+      {...attributes}
+      {...listeners}
+    >
+      {isThreadPinned(thread) ? (
+        <Pin size={12} style={{ opacity: 0.55, flexShrink: 0 }} aria-hidden />
+      ) : null}
+      <ThreadTitleText title={title} className="flex-1" />
+    </span>
   );
 }
 
@@ -230,9 +356,10 @@ function ThreadListIcon({
 export function AcpSidebar() {
   const { t } = useTranslation();
   const { token } = theme.useToken();
-  const { modal } = App.useApp();
+  const { modal, message: messageApi } = App.useApp();
   const setActivePage = useUIStore((s) => s.setActivePage);
   const setSettingsSection = useUIStore((s) => s.setSettingsSection);
+  const revealLabel = useRevealInFolderLabel();
 
   const projects = useAcpStore((s) => s.projects);
   const allThreads = useAcpStore((s) => s.allThreads);
@@ -244,11 +371,16 @@ export function AcpSidebar() {
   const loadAllThreads = useAcpStore((s) => s.loadAllThreads);
   const setProjectsOrder = useAcpStore((s) => s.setProjectsOrder);
   const reorderProjects = useAcpStore((s) => s.reorderProjects);
+  const setThreadsOrder = useAcpStore((s) => s.setThreadsOrder);
+  const reorderThreads = useAcpStore((s) => s.reorderThreads);
   const createProject = useAcpStore((s) => s.createProject);
   const deleteProject = useAcpStore((s) => s.deleteProject);
   const selectProject = useAcpStore((s) => s.selectProject);
   const selectThread = useAcpStore((s) => s.selectThread);
   const deleteThread = useAcpStore((s) => s.deleteThread);
+  const renameThread = useAcpStore((s) => s.renameThread);
+  const toggleThreadPin = useAcpStore((s) => s.toggleThreadPin);
+  const duplicateThread = useAcpStore((s) => s.duplicateThread);
   const enabledAgents = useAcpStore((s) => s.enabledAgents);
   const configReady = useAcpStore((s) => s.configReady);
   const projectsReady = useAcpStore((s) => s.projectsReady);
@@ -262,23 +394,40 @@ export function AcpSidebar() {
   /** expandedKeys use `proj:{id}` like chat uses `cat:{id}` */
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
   const [settingsProject, setSettingsProject] = useState<AcpProject | null>(null);
+  const [rightClickedThreadId, setRightClickedThreadId] = useState<string | null>(null);
   const menuActionRef = useRef(false);
+  /**
+   * When the user collapses a project via label click, selectProject may change
+   * activeProjectId and the auto-expand effect would immediately re-open it.
+   * This ref blocks that one-shot re-expand.
+   */
+  const skipAutoExpandProjectIdRef = useRef<string | null>(null);
   const listScrollRef = useRef<HTMLDivElement>(null);
 
   const dndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
   const [activeDragProjectId, setActiveDragProjectId] = useState<string | null>(null);
-  const dragInitialOrderRef = useRef<string[]>([]);
+  const [activeDragThread, setActiveDragThread] = useState<AcpThread | null>(null);
+  const dragInitialProjectOrderRef = useRef<string[]>([]);
+  const dragInitialThreadOrderRef = useRef<{ projectId: string; ids: string[] } | null>(null);
 
   useEffect(() => {
     void loadProjects();
     void loadAllThreads();
   }, [loadProjects, loadAllThreads]);
 
-  // Auto-expand active project (same as chat auto-expand category)
+  // Auto-expand active project when selection changes (thread switch / import / etc.)
+  // Skip once if the user intentionally collapsed that project on the same click that
+  // also selected it — otherwise auto-expand would immediately undo the collapse.
   useEffect(() => {
     if (!activeProjectId) return;
+    if (skipAutoExpandProjectIdRef.current === activeProjectId) {
+      skipAutoExpandProjectIdRef.current = null;
+      return;
+    }
+    // Drop stale skip when active project moved elsewhere
+    skipAutoExpandProjectIdRef.current = null;
     const key = `proj:${activeProjectId}`;
     setExpandedKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
   }, [activeProjectId]);
@@ -320,72 +469,279 @@ export function AcpSidebar() {
     [projects],
   );
 
-  const handleProjectDragStart = useCallback(
+  const parseDragId = useCallback((raw: string | number) => {
+    const id = String(raw);
+    if (id.startsWith('proj:')) return { type: 'project' as const, id: id.slice(5) };
+    if (id.startsWith('thread:')) return { type: 'thread' as const, id: id.slice(7) };
+    // Legacy bare project id (shouldn't happen after prefix migration)
+    return { type: 'project' as const, id };
+  }, []);
+
+  const handleSidebarDragStart = useCallback(
     (event: DragStartEvent) => {
-      setActiveDragProjectId(String(event.active.id));
-      dragInitialOrderRef.current = projects.map((p) => p.id);
+      const parsed = parseDragId(event.active.id);
+      if (parsed.type === 'project') {
+        setActiveDragProjectId(parsed.id);
+        setActiveDragThread(null);
+        dragInitialProjectOrderRef.current = projects.map((p) => p.id);
+        dragInitialThreadOrderRef.current = null;
+        return;
+      }
+      const thread =
+        allThreads.find((th) => th.id === parsed.id)
+        ?? threads.find((th) => th.id === parsed.id)
+        ?? null;
+      setActiveDragThread(thread);
+      setActiveDragProjectId(null);
+      if (thread) {
+        const ids = threadsForProject(thread.project_id).map((th) => th.id);
+        dragInitialThreadOrderRef.current = { projectId: thread.project_id, ids };
+      }
+      dragInitialProjectOrderRef.current = [];
     },
-    [projects],
+    [projects, allThreads, threads, threadsForProject, parseDragId],
   );
 
-  const handleProjectDragOver = useCallback(
+  const handleSidebarDragOver = useCallback(
     (event: DragOverEvent) => {
       const { active, over } = event;
       if (!over || active.id === over.id) return;
-      const ids = projects.map((p) => p.id);
-      const oldIndex = ids.indexOf(String(active.id));
-      const newIndex = ids.indexOf(String(over.id));
+      const activeParsed = parseDragId(active.id);
+      const overParsed = parseDragId(over.id);
+      if (activeParsed.type !== overParsed.type) return;
+
+      if (activeParsed.type === 'project') {
+        const ids = projects.map((p) => p.id);
+        const oldIndex = ids.indexOf(activeParsed.id);
+        const newIndex = ids.indexOf(overParsed.id);
+        if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return;
+        const newIds = [...ids];
+        newIds.splice(oldIndex, 1);
+        newIds.splice(newIndex, 0, activeParsed.id);
+        setProjectsOrder(
+          newIds
+            .map((id, i) => {
+              const p = projects.find((x) => x.id === id);
+              return p ? { ...p, sort_order: i } : null;
+            })
+            .filter(Boolean) as AcpProject[],
+        );
+        return;
+      }
+
+      // Thread reorder — only within the same project
+      const activeThread =
+        allThreads.find((th) => th.id === activeParsed.id)
+        ?? threads.find((th) => th.id === activeParsed.id);
+      const overThread =
+        allThreads.find((th) => th.id === overParsed.id)
+        ?? threads.find((th) => th.id === overParsed.id);
+      if (!activeThread || !overThread || activeThread.project_id !== overThread.project_id) return;
+      // Keep pin group intact — only reorder within pinned or within unpinned
+      if (isThreadPinned(activeThread) !== isThreadPinned(overThread)) return;
+
+      const list = threadsForProject(activeThread.project_id);
+      const ids = list.map((th) => th.id);
+      const oldIndex = ids.indexOf(activeParsed.id);
+      const newIndex = ids.indexOf(overParsed.id);
       if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return;
       const newIds = [...ids];
       newIds.splice(oldIndex, 1);
-      newIds.splice(newIndex, 0, String(active.id));
+      newIds.splice(newIndex, 0, activeParsed.id);
+      const ordered = newIds
+        .map((id, i) => {
+          const th = list.find((x) => x.id === id);
+          return th ? { ...th, sort_order: i } : null;
+        })
+        .filter(Boolean) as AcpThread[];
+      setThreadsOrder(activeThread.project_id, ordered);
+    },
+    [
+      projects,
+      setProjectsOrder,
+      allThreads,
+      threads,
+      threadsForProject,
+      setThreadsOrder,
+      parseDragId,
+    ],
+  );
+
+  const handleSidebarDragEnd = useCallback(
+    (_event: DragEndEvent) => {
+      if (activeDragProjectId) {
+        setActiveDragProjectId(null);
+        const ids = useAcpStore.getState().projects.map((p) => p.id);
+        void reorderProjects(ids);
+      }
+      if (activeDragThread) {
+        const projectId = activeDragThread.project_id;
+        setActiveDragThread(null);
+        const ids = useAcpStore
+          .getState()
+          .allThreads
+          .filter((th) => th.project_id === projectId)
+          .map((th) => th.id);
+        // Prefer in-order from threads list if active project
+        const state = useAcpStore.getState();
+        const orderedIds =
+          state.activeProjectId === projectId && state.threads.length > 0
+            ? state.threads.map((th) => th.id)
+            : ids;
+        void reorderThreads(projectId, orderedIds);
+      }
+      dragInitialProjectOrderRef.current = [];
+      dragInitialThreadOrderRef.current = null;
+    },
+    [activeDragProjectId, activeDragThread, reorderProjects, reorderThreads],
+  );
+
+  const handleSidebarDragCancel = useCallback(() => {
+    setActiveDragProjectId(null);
+    setActiveDragThread(null);
+    const initialProjects = dragInitialProjectOrderRef.current;
+    if (initialProjects.length > 0) {
+      const current = useAcpStore.getState().projects;
       setProjectsOrder(
-        newIds
+        initialProjects
           .map((id, i) => {
-            const p = projects.find((x) => x.id === id);
+            const p = current.find((x) => x.id === id);
             return p ? { ...p, sort_order: i } : null;
           })
           .filter(Boolean) as AcpProject[],
       );
-    },
-    [projects, setProjectsOrder],
-  );
-
-  const handleProjectDragEnd = useCallback(
-    (_event: DragEndEvent) => {
-      setActiveDragProjectId(null);
-      const ids = useAcpStore.getState().projects.map((p) => p.id);
-      void reorderProjects(ids);
-    },
-    [reorderProjects],
-  );
-
-  const handleProjectDragCancel = useCallback(() => {
-    setActiveDragProjectId(null);
-    const initial = dragInitialOrderRef.current;
-    if (initial.length === 0) return;
-    const current = useAcpStore.getState().projects;
-    setProjectsOrder(
-      initial
+    }
+    const initialThreads = dragInitialThreadOrderRef.current;
+    if (initialThreads) {
+      const current = useAcpStore.getState().allThreads;
+      const ordered = initialThreads.ids
         .map((id, i) => {
-          const p = current.find((x) => x.id === id);
-          return p ? { ...p, sort_order: i } : null;
+          const th = current.find((x) => x.id === id);
+          return th ? { ...th, sort_order: i } : null;
         })
-        .filter(Boolean) as AcpProject[],
-    );
-  }, [setProjectsOrder]);
+        .filter(Boolean) as AcpThread[];
+      setThreadsOrder(initialThreads.projectId, ordered);
+    }
+    dragInitialProjectOrderRef.current = [];
+    dragInitialThreadOrderRef.current = null;
+  }, [setProjectsOrder, setThreadsOrder]);
+
+  const handleRevealProject = useCallback(
+    async (project: AcpProject) => {
+      try {
+        await revealPathInFolder(project.root_path);
+      } catch (e) {
+        messageApi.error(String(e));
+      }
+    },
+    [messageApi],
+  );
+
+  const handleRenameThread = useCallback(
+    (thread: AcpThread) => {
+      let newTitle = thread.title;
+      modal.confirm({
+        title: t('chat.rename', '重命名'),
+        mask: { enabled: true, blur: true },
+        content: (
+          <Input
+            defaultValue={newTitle}
+            onChange={(e) => {
+              newTitle = e.target.value;
+            }}
+            onPressEnter={() => {
+              // confirm dialog enter handled by OK button in most cases
+            }}
+            autoFocus
+          />
+        ),
+        okText: t('common.confirm'),
+        cancelText: t('common.cancel'),
+        onOk: async () => {
+          const trimmed = newTitle.trim();
+          if (!trimmed || trimmed === thread.title) return;
+          await renameThread(thread.id, trimmed);
+        },
+      });
+    },
+    [modal, renameThread, t],
+  );
+
+  const handleDuplicateThread = useCallback(
+    (thread: AcpThread) => {
+      void (async () => {
+        try {
+          const copy = await duplicateThread(
+            thread.id,
+            t('agentPage.copyThreadSuffix', ' (副本)'),
+          );
+          messageApi.success(t('agentPage.copyThreadSuccess', '已复制对话'));
+          void selectThread(copy.id);
+        } catch (e) {
+          messageApi.error(String(e));
+        }
+      })();
+    },
+    [duplicateThread, messageApi, selectThread, t],
+  );
+
+  const handleDeleteThread = useCallback(
+    (thread: AcpThread) => {
+      modal.confirm({
+        title: t('agentPage.deleteThread'),
+        content: thread.title,
+        okButtonProps: { danger: true },
+        okText: t('common.confirm'),
+        cancelText: t('common.cancel'),
+        onOk: async () => {
+          await deleteThread(thread.id);
+        },
+      });
+    },
+    [deleteThread, modal, t],
+  );
 
   const handleGroupExpand = useCallback(
     (keys: string[]) => {
       if (menuActionRef.current) return;
-      // Newly expanded project → select it (right pane shows input)
-      const newly = keys.find((k) => !expandedKeys.includes(k) && k.startsWith('proj:'));
       setExpandedKeys(keys);
+      // Chevron-only expand/collapse: still select when newly expanded so the
+      // right pane shows the project's new-conversation empty state.
+      const newly = keys.find((k) => !expandedKeys.includes(k) && k.startsWith('proj:'));
       if (newly) {
         void selectProject(newly.slice(5));
       }
     },
     [expandedKeys, selectProject],
+  );
+
+  /**
+   * Label click: toggle expand/collapse and select the project so the right
+   * pane shows the new-conversation empty state.
+   *
+   * Collapsing while switching active project must not be undone by the
+   * auto-expand effect (see skipAutoExpandProjectIdRef).
+   */
+  const handleSelectProject = useCallback(
+    (projectId: string) => {
+      const key = `proj:${projectId}`;
+      setExpandedKeys((prev) => {
+        const isOpen = prev.includes(key);
+        if (isOpen) {
+          // selectProject will set activeProjectId → auto-expand would re-open.
+          // Block that only when the active id is about to change (or equal —
+          // harmless if the effect doesn't re-run).
+          skipAutoExpandProjectIdRef.current = projectId;
+          return prev.filter((k) => k !== key);
+        }
+        if (skipAutoExpandProjectIdRef.current === projectId) {
+          skipAutoExpandProjectIdRef.current = null;
+        }
+        return [...prev, key];
+      });
+      void selectProject(projectId);
+    },
+    [selectProject],
   );
 
   const handleAddProject = async () => {
@@ -519,11 +875,7 @@ export function AcpSidebar() {
               size={20}
             />
           ),
-          label: (
-            <span className="aqbot-chat-conversation-label">
-              <ThreadTitleText title={th.title} className="flex-1" />
-            </span>
-          ),
+          label: <SortableThreadLabel thread={th} title={th.title} />,
           'data-conv-id': th.id,
         } as ConversationItemType);
       }
@@ -553,15 +905,26 @@ export function AcpSidebar() {
           menuActionRef={menuActionRef}
           newThreadLabel={t('agentPage.newThread')}
           settingsLabel={t('agentPage.projectSettings', '项目设置')}
+          revealLabel={revealLabel}
           deleteLabel={t('agentPage.deleteProject')}
+          onSelect={() => handleSelectProject(projectId)}
           onNewThread={() => void handleNewThreadInProject(projectId)}
           onSettings={() => setSettingsProject(project)}
+          onReveal={() => void handleRevealProject(project)}
           onDelete={() => handleDeleteProject(project)}
         />
       );
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projectById, t, handleDeleteProject, handleNewThreadInProject],
+    [
+      projectById,
+      t,
+      handleDeleteProject,
+      handleNewThreadInProject,
+      handleSelectProject,
+      handleRevealProject,
+      revealLabel,
+    ],
   );
 
   const groupableConfig = useMemo(
@@ -587,26 +950,84 @@ export function AcpSidebar() {
     [allThreads, threads, selectThread],
   );
 
+  const buildThreadMenuItems = useCallback(
+    (thread: AcpThread) => {
+      const pinned = isThreadPinned(thread);
+      const project = projectById.get(thread.project_id);
+      return [
+        {
+          key: 'rename',
+          icon: <Pencil size={14} />,
+          label: t('chat.rename', '重命名'),
+          onClick: () => handleRenameThread(thread),
+        },
+        {
+          key: 'pin',
+          icon: pinned ? <PinOff size={14} /> : <Pin size={14} />,
+          label: pinned ? t('chat.unpin', '取消置顶') : t('chat.pin', '置顶'),
+          onClick: () => {
+            void toggleThreadPin(thread.id);
+          },
+        },
+        {
+          key: 'duplicate',
+          icon: <Copy size={14} />,
+          label: t('agentPage.copyThread', '复制对话'),
+          onClick: () => handleDuplicateThread(thread),
+        },
+        {
+          key: 'reveal',
+          icon: <FolderOpen size={14} />,
+          label: revealLabel,
+          disabled: !project?.root_path,
+          onClick: () => {
+            if (project) void handleRevealProject(project);
+          },
+        },
+        {
+          key: 'delete',
+          danger: true,
+          icon: <Trash2 size={14} />,
+          label: t('agentPage.deleteThread'),
+          onClick: () => handleDeleteThread(thread),
+        },
+      ];
+    },
+    [
+      projectById,
+      t,
+      handleRenameThread,
+      toggleThreadPin,
+      handleDuplicateThread,
+      revealLabel,
+      handleRevealProject,
+      handleDeleteThread,
+    ],
+  );
+
+  /** Hover ⋯ menu on each thread row (same actions as right-click). */
   const menuFactory = useCallback(
     (item: ConversationItemType) => {
       const id = String(item.key);
       if (id.startsWith('__')) return undefined;
-      return {
-        items: [
-          {
-            key: 'delete',
-            danger: true,
-            icon: <Trash2 size={14} />,
-            label: t('agentPage.deleteThread'),
-            onClick: () => {
-              void deleteThread(id);
-            },
-          },
-        ],
-      };
+      const thread =
+        allThreads.find((th) => th.id === id)
+        ?? threads.find((th) => th.id === id);
+      if (!thread) return undefined;
+      return { items: buildThreadMenuItems(thread) };
     },
-    [deleteThread, t],
+    [allThreads, threads, buildThreadMenuItems],
   );
+
+  /** List-level context menu (covers icon + padding, parity with chat). */
+  const rightClickMenuConfig = useMemo(() => {
+    if (!rightClickedThreadId) return { items: [] as ReturnType<typeof buildThreadMenuItems> };
+    const thread =
+      allThreads.find((th) => th.id === rightClickedThreadId)
+      ?? threads.find((th) => th.id === rightClickedThreadId);
+    if (!thread) return { items: [] as ReturnType<typeof buildThreadMenuItems> };
+    return { items: buildThreadMenuItems(thread) };
+  }, [rightClickedThreadId, allThreads, threads, buildThreadMenuItems]);
 
   // ── Layout: identical to ChatSidebar outer structure ────────────────
   return (
@@ -784,13 +1205,37 @@ export function AcpSidebar() {
                 to { transform: rotate(360deg); }
               }
             `}</style>
+            <Dropdown
+              menu={rightClickMenuConfig}
+              trigger={['contextMenu']}
+              onOpenChange={(open) => {
+                if (!open) setRightClickedThreadId(null);
+              }}
+            >
+              <div
+                onContextMenu={(e) => {
+                  // Only claim context menu on thread rows. Project group labels
+                  // keep their own Dropdown — do not preventDefault on those.
+                  const listItem = (e.target as HTMLElement).closest('[data-conv-id]') as HTMLElement | null;
+                  if (!listItem) {
+                    setRightClickedThreadId(null);
+                    return;
+                  }
+                  const threadId = listItem.getAttribute('data-conv-id');
+                  if (!threadId || threadId.startsWith('__')) {
+                    setRightClickedThreadId(null);
+                    return;
+                  }
+                  setRightClickedThreadId(threadId);
+                }}
+              >
             <DndContext
               sensors={dndSensors}
               collisionDetection={closestCenter}
-              onDragStart={handleProjectDragStart}
-              onDragOver={handleProjectDragOver}
-              onDragEnd={handleProjectDragEnd}
-              onDragCancel={handleProjectDragCancel}
+              onDragStart={handleSidebarDragStart}
+              onDragOver={handleSidebarDragOver}
+              onDragEnd={handleSidebarDragEnd}
+              onDragCancel={handleSidebarDragCancel}
             >
               <Conversations
                 items={conversationItems}
@@ -806,18 +1251,46 @@ export function AcpSidebar() {
                       if (!project) return null;
                       return (
                         <div
-                          className="flex items-center gap-1"
+                          className="flex items-center gap-1.5"
                           style={{ opacity: 0.8, cursor: 'grabbing', fontSize: 13 }}
                         >
                           <GripVertical size={12} style={{ opacity: 0.4 }} />
-                          <ProjectIcon projectId={project.id} size={13} />
+                          <ProjectIcon projectId={project.id} size={20} />
                           <span>{project.name}</span>
                         </div>
                       );
                     })()
-                  : null}
+                  : activeDragThread
+                    ? (
+                        <div
+                          className="flex items-center gap-1.5"
+                          style={{
+                            opacity: 0.85,
+                            cursor: 'grabbing',
+                            fontSize: 13,
+                            padding: '4px 8px',
+                            borderRadius: 6,
+                            background: token.colorBgElevated,
+                            boxShadow: token.boxShadowSecondary,
+                          }}
+                        >
+                          <ThreadListIcon
+                            agentId={activeDragThread.agent_id}
+                            agentName={agentName(activeDragThread.agent_id)}
+                            agentIcon={agentIcon(activeDragThread.agent_id)}
+                            isStreaming={false}
+                            size={18}
+                          />
+                          <span className="truncate" style={{ maxWidth: 180 }}>
+                            {activeDragThread.title}
+                          </span>
+                        </div>
+                      )
+                    : null}
               </DragOverlay>
             </DndContext>
+              </div>
+            </Dropdown>
           </div>
         )}
       </div>

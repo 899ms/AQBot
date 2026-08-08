@@ -14,7 +14,6 @@ export function AgentPage() {
   const loadProjects = useAcpStore((s) => s.loadProjects);
   const loadAllThreads = useAcpStore((s) => s.loadAllThreads);
   const restoreLastSession = useAcpStore((s) => s.restoreLastSession);
-  const bindEvents = useAcpStore((s) => s.bindEvents);
 
   useEffect(() => {
     // Revalidate lists, then re-open the last project conversation.
@@ -44,24 +43,6 @@ export function AgentPage() {
       cancelled = true;
     };
   }, [loadConfig, loadProjects, loadAllThreads, restoreLastSession]);
-
-  // Separate effect for stream listeners so StrictMode remount does not leak
-  // handlers (leaked handlers double every acp-stream-text chunk → 重复字符).
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    void bindEvents().then((fn) => {
-      if (cancelled) {
-        fn();
-        return;
-      }
-      unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [bindEvents]);
 
   return (
     <div

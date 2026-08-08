@@ -1303,8 +1303,7 @@ pub async fn agent_query(
                         }
 
                         for (sdk_id, name, input) in &pending_tool_uses {
-                            let (safe_sdk_id, safe_name) =
-                                filter_agent_tool_identity(sdk_id, name);
+                            let (safe_sdk_id, safe_name) = filter_agent_tool_identity(sdk_id, name);
                             tracing::info!(
                                 "[agent] ToolUse in assistant message: {} ({}), assistantMsgId={:?}",
                                 safe_name, safe_sdk_id, current_assistant_msg_id
@@ -2130,9 +2129,10 @@ pub async fn agent_get_session(
     state: State<'_, AppState>,
     conversation_id: String,
 ) -> Result<Option<AgentSession>, String> {
-    let session = agent_session::get_agent_session_by_conversation_id(&state.sea_db, &conversation_id)
-        .await
-        .map_err(|e| e.to_string())?;
+    let session =
+        agent_session::get_agent_session_by_conversation_id(&state.sea_db, &conversation_id)
+            .await
+            .map_err(|e| e.to_string())?;
     Ok(session.map(agent_session_for_ipc))
 }
 

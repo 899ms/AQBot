@@ -273,16 +273,15 @@ export function AcpAgentSettings() {
   const permissionOptions = useMemo(
     () => [
       { value: 'default', label: t('common.permissionDefault') },
-      { value: 'accept_edits', label: t('common.permissionAcceptEdits') },
       { value: 'auto_approve', label: t('common.permissionAutoApprove') },
-      { value: 'full_access', label: t('common.permissionFullAccess') },
     ],
     [t],
   );
 
   const permissionValue = useMemo(() => {
     const raw = config?.general.permissionDefault ?? 'default';
-    if (raw === 'prompt') return 'default';
+    if (raw === 'prompt' || raw === 'accept_edits') return 'default';
+    if (raw === 'full_access') return 'auto_approve';
     return raw;
   }, [config?.general.permissionDefault]);
 
@@ -436,7 +435,15 @@ export function AcpAgentSettings() {
         </div>
         <Divider style={{ margin: '4px 0' }} />
         <div style={rowStyle} className="flex items-center justify-between gap-4">
-          <span>{t('settings.acpAgents.permissionDefault')}</span>
+          <div>
+            <div>{t('settings.acpAgents.permissionDefault')}</div>
+            <div style={{ color: token.colorTextDescription, fontSize: 12 }}>
+              {t(
+                'settings.acpAgents.permissionFallbackHint',
+                'Only used when an agent does not advertise permission modes; agent options take priority',
+              )}
+            </div>
+          </div>
           <SettingsSelect
             value={permissionValue}
             options={permissionOptions}
@@ -679,13 +686,20 @@ export function AcpAgentSettings() {
                           {row.description}
                         </div>
                       )}
+                      {row.quarantineReason ? (
+                        <Tooltip title={row.quarantineReason}>
+                          <Tag color="warning" style={{ marginTop: 4 }}>
+                            {t('settings.acpAgents.quarantined', '官方隔离')}
+                          </Tag>
+                        </Tooltip>
+                      ) : null}
                     </div>
                     <Button
                       size="small"
                       type={exists ? 'default' : 'primary'}
                       icon={<Plus size={14} />}
                       loading={addingId === row.id}
-                      disabled={exists}
+                      disabled={exists || !!row.quarantineReason}
                       onClick={() => void handleAddFromRegistry(row)}
                     >
                       {exists

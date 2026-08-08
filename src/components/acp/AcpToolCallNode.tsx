@@ -3,16 +3,18 @@ import { SyncOutlined } from '@ant-design/icons';
 import { Typography, theme } from 'antd';
 import {
   ChevronDown,
+  CheckCircle2,
   Code,
   FileCode,
   FileText,
   FileType,
+  XCircle,
   Zap,
 } from 'lucide-react';
 import type { NodeComponentProps } from 'markstream-react';
 import { useTranslation } from 'react-i18next';
 import { getCustomAttr, type CustomNodeAttrs } from '@/components/chat/chatMarkdownShared';
-import { useAcpStore } from '@/stores/acpStore';
+import { acpToolStateKey, useAcpStore } from '@/stores/acpStore';
 
 const toolCallIcons: Record<string, React.ReactNode> = {
   bash: <Code size={14} />,
@@ -57,83 +59,172 @@ export function AcpToolCallNode(props: NodeComponentProps<{
   const { token } = theme.useToken();
   const { t } = useTranslation();
   const execId = getCustomAttr(node.attrs, 'id') ?? '';
-  const tc = useAcpStore((s) => s.toolCalls[execId]);
+  const messageId = getCustomAttr(node.attrs, 'message') ?? '';
+  const tc = useAcpStore((state) => {
+    const threadId = state.activeThreadId ?? '';
+    const scoped = messageId
+      ? state.toolCalls[acpToolStateKey(threadId, execId, messageId)]
+      : undefined;
+    if (scoped) return scoped;
+    const legacy = state.toolCalls[acpToolStateKey(threadId, execId)] ?? state.toolCalls[execId];
+    if (legacy && (!messageId || !legacy.messageId || legacy.messageId === messageId)) return legacy;
+    return Object.values(state.toolCalls)
+      .reverse()
+      .find((tool) => tool.threadId === threadId
+        && tool.toolCallId === execId
+        && (!messageId || tool.messageId === messageId));
+  });
   const [expanded, setExpanded] = useState(false);
 
   const toolName = getCustomAttr(node.attrs, 'name') ?? tc?.toolName ?? 'tool';
   const summary = String(node.content ?? '');
 
-  // History reload has markers but no live state → treat as success
-  const status = tc?.status ?? 'success';
+  // Legacy history can contain a marker without persisted tool metadata. Do
+  // not claim success when the actual terminal state is unknown.
+  const status = tc?.status ?? 'unknown';
+  const statusLabel = status === 'queued'
+    ? t('agentPage.interactionToolQueued', '等待执行')
+    : status === 'running'
+      ? t('agentPage.interactionToolRunning', '执行中')
+      : status === 'success'
+        ? t('agentPage.interactionToolSuccess', '执行成功')
+        : status === 'error'
+          ? t('agentPage.interactionToolError', '执行失败')
+          : status === 'cancelled'
+            ? t('agentPage.interactionToolCancelled', '执行已取消')
+            : t('agentPage.interactionToolUnknown', '执行状态未知');
   const statusColor = toolCallStatusColors[status] || token.colorTextSecondary;
   const isLoading = status === 'queued' || status === 'running';
-  const hasDetails = !!(tc && (tc.input || tc.output));
+  const output = tc?.output === 'aqbot:questionnaire:accepted'
+    ? t('agentPage.interactionAnswersSubmitted', '答案已提交')
+    : tc?.output === 'aqbot:questionnaire:chat_about_this'
+      ? t('agentPage.interactionChatAboutThis', '先聊聊这些答案')
+      : tc?.output === 'aqbot:questionnaire:skip_interview'
+        ? t('agentPage.interactionSkipInterview', '跳过问卷并立即规划')
+        : tc?.output;
+  const hasDetails = !!(tc && (tc.input || output));
+  const approvalLabel = tc?.approvalStatus === 'approved'
+    ? t('agentPage.interactionApproved', '已批准')
+    : tc?.approvalStatus === 'denied'
+      ? t('agentPage.interactionDenied', '已拒绝')
+      : tc?.approvalStatus === 'cancelled'
+        ? t('agentPage.interactionCancelled', '已取消')
+        : tc?.approvalStatus === 'expired'
+          ? t('agentPage.interactionExpired', '已过期')
+          : null;
+  const approvalColor = tc?.approvalStatus === 'approved'
+    ? token.colorSuccess
+    : tc?.approvalStatus === 'denied'
+      ? token.colorError
+      : token.colorTextSecondary;
+  const detailsId = `acp-tool-details-${`${messageId}-${execId}`.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+
+  const row = (
+    <>
+      <span style={{ color: statusColor, display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+        {getInlineToolIcon(toolName)}
+      </span>
+      <span style={{ fontWeight: 500, flexShrink: 0 }} translate="no">{toolName}</span>
+      {approvalLabel ? (
+        <span
+          style={{
+            color: approvalColor,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 3,
+            flexShrink: 0,
+            fontSize: 12,
+          }}
+        >
+          {tc?.approvalStatus === 'approved'
+            ? <CheckCircle2 size={12} aria-hidden="true" />
+            : <XCircle size={12} aria-hidden="true" />}
+          {approvalLabel}
+        </span>
+      ) : null}
+      {summary && (
+        <>
+          <span style={{ color: token.colorTextQuaternary }}>›</span>
+          <Typography.Text
+            type="secondary"
+            ellipsis
+            style={{ fontSize: 12, flex: 1, minWidth: 0 }}
+          >
+            {summary}
+          </Typography.Text>
+        </>
+      )}
+      {isLoading ? (
+        <SyncOutlined style={{ fontSize: 12, color: statusColor }} spin />
+      ) : (
+        <span
+          aria-hidden="true"
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            backgroundColor: statusColor,
+            flexShrink: 0,
+          }}
+        />
+      )}
+      {hasDetails ? (
+        <span
+          aria-hidden="true"
+          style={{
+            color: token.colorTextSecondary,
+            display: 'flex',
+            alignItems: 'center',
+            flexShrink: 0,
+            transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
+          }}
+        >
+          <ChevronDown size={14} />
+        </span>
+      ) : null}
+    </>
+  );
+
+  const rowStyle = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    width: '100%',
+    padding: '4px 10px',
+    borderRadius: token.borderRadius,
+    backgroundColor: token.colorFillQuaternary,
+    border: `1px solid ${token.colorBorderSecondary}`,
+    color: token.colorText,
+    fontSize: 13,
+    lineHeight: '20px',
+    fontFamily: 'monospace',
+    cursor: hasDetails ? 'pointer' : 'default',
+    userSelect: 'none' as const,
+    textAlign: 'start' as const,
+  };
 
   return (
     <div style={{ margin: '4px 0' }}>
-      <div
-        onClick={() => hasDetails && setExpanded(!expanded)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '4px 10px',
-          borderRadius: token.borderRadius,
-          backgroundColor: token.colorFillQuaternary,
-          border: `1px solid ${token.colorBorderSecondary}`,
-          fontSize: 13,
-          lineHeight: '20px',
-          fontFamily: 'monospace',
-          cursor: hasDetails ? 'pointer' : 'default',
-          userSelect: 'none',
-        }}
-      >
-        <span style={{ color: statusColor, display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-          {getInlineToolIcon(toolName)}
-        </span>
-        <span style={{ fontWeight: 500, flexShrink: 0 }}>{toolName}</span>
-        {summary && (
-          <>
-            <span style={{ color: token.colorTextQuaternary }}>›</span>
-            <Typography.Text
-              type="secondary"
-              ellipsis
-              style={{ fontSize: 12, flex: 1, minWidth: 0 }}
-            >
-              {summary}
-            </Typography.Text>
-          </>
-        )}
-        {isLoading ? (
-          <SyncOutlined style={{ fontSize: 12, color: statusColor }} spin />
-        ) : (
-          <span
-            style={{
-              width: 6,
-              height: 6,
-              borderRadius: '50%',
-              backgroundColor: statusColor,
-              flexShrink: 0,
-            }}
-          />
-        )}
-        {hasDetails && (
-          <span
-            style={{
-              color: token.colorTextSecondary,
-              display: 'flex',
-              alignItems: 'center',
-              flexShrink: 0,
-              transition: 'transform 0.2s',
-              transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)',
-            }}
-          >
-            <ChevronDown size={14} />
-          </span>
-        )}
-      </div>
+      {hasDetails ? (
+        <button
+          type="button"
+          className="aqbot-acp-tool-button"
+          aria-expanded={expanded}
+          aria-controls={detailsId}
+          aria-label={`${toolName} ${statusLabel}${approvalLabel ? ` ${approvalLabel}` : ''}`}
+          onClick={() => setExpanded((current) => !current)}
+          style={rowStyle}
+        >
+          {row}
+        </button>
+      ) : (
+        <div role="status" aria-label={`${toolName} ${statusLabel}`} style={rowStyle}>
+          {row}
+        </div>
+      )}
       {expanded && hasDetails && tc && (
         <div
+          id={detailsId}
           style={{
             margin: '2px 0 0',
             padding: '6px 10px',
@@ -177,7 +268,7 @@ export function AcpToolCallNode(props: NodeComponentProps<{
               </pre>
             </details>
           )}
-          {tc.output && (
+          {output && (
             <details style={{ margin: 0 }}>
               <summary
                 style={{
@@ -204,7 +295,7 @@ export function AcpToolCallNode(props: NodeComponentProps<{
                   color: tc.status === 'error' ? token.colorError : undefined,
                 }}
               >
-                {tc.output}
+                {output}
               </pre>
             </details>
           )}

@@ -1,18 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from 'react';
 import {
   App,
   Avatar,
   Button,
   Dropdown,
   Empty,
-  Tag,
+  Popover,
+  Progress,
   Tooltip,
   Typography,
   theme,
   type MenuProps,
 } from 'antd';
 import Bubble from '@ant-design/x/es/bubble';
-import type { BubbleItemType } from '@ant-design/x/es/bubble/interface';
+import type { BubbleItemType, BubbleListRef } from '@ant-design/x/es/bubble/interface';
 import Actions from '@ant-design/x/es/actions';
 import Prompts from '@ant-design/x/es/prompts';
 import type { PromptsItemType } from '@ant-design/x/es/prompts';
@@ -20,11 +29,18 @@ import { setCustomComponents } from 'markstream-react';
 import {
   ArrowUp,
   Bot,
+  BrainCircuit,
   Bug,
   Check,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   GitBranch,
+  GripHorizontal,
   Hammer,
+  ListTodo,
+  Paperclip,
   RefreshCw,
   Shield,
   ShieldAlert,
@@ -32,10 +48,18 @@ import {
   Square,
   Telescope,
   Timer,
+  Upload,
+  X,
+  Zap,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@/lib/invoke';
-import { useAcpStore } from '@/stores/acpStore';
+import {
+  ACP_HOST_STATUS,
+  ACP_STATUS_CANCELLING,
+  ACP_STATUS_FIRST_OUTPUT_SILENCE,
+  useAcpStore,
+} from '@/stores/acpStore';
 import { useSettingsStore } from '@/stores';
 import { useUserProfileStore } from '@/stores/userProfileStore';
 import { useResolvedDarkMode } from '@/hooks/useResolvedDarkMode';
@@ -48,22 +72,150 @@ import {
 } from '@/components/chat/chatMarkdownShared';
 import { ChatImageNode } from '@/components/chat/ChatImageNode';
 import { ChatMessageRenderBoundary } from '@/components/chat/ChatMessageRenderBoundary';
-import { formatChatTime } from '@/components/chat/chatTime';
-import PermissionCard from '@/components/chat/PermissionCard';
+import {
+  AttachmentChips,
+  isImageFile,
+  revokeComposerAttachments,
+} from '@/components/chat/AttachmentChips';
+import { MessageAttachmentPreview } from '@/components/chat/MessageAttachmentPreview';
+import {
+  fileToAttachmentInput,
+  isAllowedAcpAttachmentFile,
+  useComposerAttachments,
+} from '@/components/chat/composerAttachments';
+import { formatChatDateTime } from '@/components/chat/chatTime';
+import { closeStreamingThinkBlock } from '@/components/chat/chatStreaming';
+import {
+  CHAT_AUTO_SCROLL_BOTTOM_THRESHOLD,
+  CHAT_SCROLL_IS_REVERSED,
+  shouldKeepAutoScroll,
+  shouldShowScrollToBottom,
+} from '@/components/chat/chatScroll';
 import { AcpAgentIcon } from '@/lib/acpAgentIcon';
+import { hasKnownModelIcon, SmartModelIcon } from '@/lib/providerIcons';
+import type {
+  AcpSessionConfigOption,
+  AcpSessionConfigSelectGroup,
+  AcpSessionConfigSelectOption,
+} from '@/types/acp';
 import { formatDurationI18n, parseAcpDurationMs } from '@/lib/formatDurationI18n';
 import { normalizeThinkTagsForMarkdown } from '@/lib/thinkTags';
+import {
+  createPastedSnippet,
+  insertPasteTokenAtSelection,
+  isLongPastedText,
+  mergePastedSnippetsIntoContent,
+  removePasteTokens,
+  type PastedSnippet,
+} from '@/lib/pastedText';
+import { AcpInteractionComposer } from './AcpInteractionComposer';
+import { AcpPlanDocumentCard, setAcpPlanContextHandler } from './AcpPlanDocumentCard';
+import { AcpPlanNode } from './AcpPlanNode';
 import { AcpToolCallNode } from './AcpToolCallNode';
 
 const { Text, Title } = Typography;
+
+/** Composer drag-resize (parity with chat InputArea). */
+const COMPOSER_INITIAL_MIN_HEIGHT = 44;
+const COMPOSER_ABSOLUTE_MAX_HEIGHT = 600;
+
+type AcpStatusTranslator = (
+  key: string,
+  fallback: string,
+  values?: Record<string, string | number>,
+) => string;
+
+interface GrokRetryStatusPayload {
+  attempt?: number;
+  maximum?: number;
+  detail?: string;
+}
+
+const ACP_STATUS_TRANSLATIONS: Readonly<Record<string, readonly [string, string]>> = {
+  [ACP_STATUS_FIRST_OUTPUT_SILENCE]: [
+    'agentPage.interactionSilenceHint',
+    'Agent 暂未输出，可继续等待或停止',
+  ],
+  [ACP_STATUS_CANCELLING]: ['agentPage.interactionCancelling', '正在停止…'],
+  [ACP_HOST_STATUS.cancelRestarting]: [
+    'agentPage.interactionCancelRestarting',
+    '取消请求发送失败，正在重启 Agent…',
+  ],
+  [ACP_HOST_STATUS.usingSharedAgent]: [
+    'agentPage.interactionUsingSharedAgent',
+    '正在复用共享 Agent…',
+  ],
+  [ACP_HOST_STATUS.launchingAgent]: ['agentPage.interactionLaunchingAgent', '正在启动 Agent…'],
+  [ACP_HOST_STATUS.agentReady]: ['agentPage.interactionAgentReady', 'Agent 已就绪'],
+  [ACP_HOST_STATUS.restoringSession]: [
+    'agentPage.interactionRestoringSession',
+    '正在恢复会话…',
+  ],
+  [ACP_HOST_STATUS.savedSessionExpired]: [
+    'agentPage.interactionSavedSessionExpired',
+    '已保存的会话已过期，正在新建会话…',
+  ],
+  [ACP_HOST_STATUS.creatingSession]: [
+    'agentPage.interactionCreatingSession',
+    '正在新建会话…',
+  ],
+  [ACP_HOST_STATUS.sendingPrompt]: ['agentPage.interactionSendingPrompt', '正在发送消息…'],
+  [ACP_HOST_STATUS.sessionExpired]: [
+    'agentPage.interactionSessionExpired',
+    '会话已过期，正在新建会话…',
+  ],
+};
+
+export function localizeAcpStatus(
+  status: string | undefined,
+  translate: AcpStatusTranslator,
+): string {
+  if (!status) return '';
+  const localized = Object.prototype.hasOwnProperty.call(ACP_STATUS_TRANSLATIONS, status)
+    ? ACP_STATUS_TRANSLATIONS[status]
+    : undefined;
+  if (localized) return translate(localized[0], localized[1]);
+  if (status.startsWith(ACP_HOST_STATUS.grokRetry)) {
+    try {
+      const payload = JSON.parse(
+        status.slice(ACP_HOST_STATUS.grokRetry.length),
+      ) as GrokRetryStatusPayload;
+      const values = { attempt: payload.attempt ?? 0, maximum: payload.maximum ?? 0 };
+      const progress = typeof payload.attempt === 'number'
+        ? typeof payload.maximum === 'number'
+          ? translate(
+            'agentPage.interactionNetworkRetryProgress',
+            '网络重试 {{attempt}}/{{maximum}}',
+            values,
+          )
+          : translate(
+            'agentPage.interactionNetworkRetryAttempt',
+            '网络重试 {{attempt}}',
+            values,
+          )
+        : translate('agentPage.interactionNetworkRetry', '网络重试');
+      return payload.detail ? `${progress}: ${payload.detail}` : progress;
+    } catch {
+      return status;
+    }
+  }
+  return status;
+}
 
 // Same markstream custom tags as chat (code/links use shared CSS via aqbot-chat-markdown)
 setCustomComponents('acp', {
   think: ThinkNode,
   'tool-call': AcpToolCallNode,
+  'acp-plan': AcpPlanNode,
   image: ChatImageNode,
   img: ChatImageNode,
 });
+
+function messageHasAcpPlanMarker(content: string | null | undefined, planId: string): boolean {
+  if (!content || !planId) return false;
+  const escaped = planId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`<acp-plan\\b[^>]*\\bid="${escaped}"`, 'i').test(content);
+}
 
 /** Three-dot streaming indicator (matches ant Bubble loading dots style). */
 function StreamingDots({ color }: { color?: string }) {
@@ -99,6 +251,9 @@ function StreamingDots({ color }: { color?: string }) {
           0%, 80%, 100% { transform: translateY(0); opacity: 0.3; }
           40% { transform: translateY(-3px); opacity: 0.85; }
         }
+        @media (prefers-reduced-motion: reduce) {
+          .aqbot-acp-streaming-dots i { animation: none !important; }
+        }
       `}</style>
     </span>
   );
@@ -110,10 +265,261 @@ interface AcpGitInfo {
   isRepo: boolean;
 }
 
+/** True when the option is a boolean toggle (ACP type, boolean currentValue, or empty fast/toggle). */
+function isBooleanConfigOption(option?: AcpSessionConfigOption | null): boolean {
+  if (!option) return false;
+  if (option.type === 'boolean') return true;
+  if (typeof option.currentValue === 'boolean') return true;
+  const hasChoices = Array.isArray(option.options) && option.options.length > 0;
+  if (hasChoices) return false;
+  // Agents sometimes advertise Fast as select with no options; still treat as on/off.
+  return /(fast|toggle|enable|enabled|bool)/i.test(`${option.id} ${option.name}`);
+}
+
+function configChoices(option?: AcpSessionConfigOption): AcpSessionConfigSelectOption[] {
+  if (!option) return [];
+  if (isBooleanConfigOption(option)) {
+    return [
+      { value: 'true', name: 'On' },
+      { value: 'false', name: 'Off' },
+    ];
+  }
+  if (!option.options?.length) return [];
+  const first = option.options[0];
+  if ('group' in first) {
+    return (option.options as AcpSessionConfigSelectGroup[]).flatMap((group) => group.options);
+  }
+  return option.options as AcpSessionConfigSelectOption[];
+}
+
+function configChoicePayload(
+  option: AcpSessionConfigOption,
+  value: string,
+): string | boolean {
+  if (isBooleanConfigOption(option)) return value === 'true';
+  return value;
+}
+
+function selectedConfigLabel(option?: AcpSessionConfigOption): string {
+  const current = option?.currentValue;
+  if (typeof current === 'boolean' || isBooleanConfigOption(option)) {
+    const on = current === true || current === 'true';
+    return on ? 'On' : 'Off';
+  }
+  return configChoices(option).find((choice) => String(choice.value) === String(current))?.name
+    ?? String(current ?? option?.name ?? '');
+}
+
+function modeToken(value: unknown): string {
+  const parts = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .split(/[#/:]/)
+    .filter(Boolean);
+  return parts[parts.length - 1]?.replace(/_/g, '-') ?? '';
+}
+
+function isPlanModeValue(value: unknown): boolean {
+  return modeToken(value) === 'plan';
+}
+
+function isDefaultAgentModeValue(value: unknown): boolean {
+  return ['agent', 'default', 'code', 'normal', 'build'].includes(modeToken(value));
+}
+
+function optionContainsPlan(option: AcpSessionConfigOption): boolean {
+  return configChoices(option).some((choice) => isPlanModeValue(choice.value));
+}
+
+function isPermissionModeChoice(value: unknown, name?: string): boolean {
+  const token = modeToken(value).replace(/[\s_-]/g, '');
+  if ([
+    'acceptedits',
+    'autoedit',
+    'auto',
+    'dontask',
+    'bypasspermissions',
+    'yolo',
+    'unrestricted',
+    'fullaccess',
+    'readonly',
+  ].includes(token)) return true;
+  const label = String(name ?? '').toLowerCase().replace(/[\s_-]/g, '');
+  return [
+    'acceptedits',
+    'autoedit',
+    'dontask',
+    'bypasspermissions',
+    'alwaysapprove',
+    'fullaccess',
+    'readonly',
+    'unrestricted',
+  ].some((marker) => label.includes(marker));
+}
+
+function isPermissionOption(option: AcpSessionConfigOption): boolean {
+  const identity = `${option.id} ${option.name} ${option.description ?? ''} ${option.category ?? ''}`
+    .toLowerCase();
+  if (/(permission|approval|allow[_ -]?all|access)/.test(identity)) return true;
+  return option.category === 'mode'
+    && !optionContainsPlan(option)
+    && configChoices(option).some((choice) => isPermissionModeChoice(choice.value, choice.name));
+}
+
+function isRestrictivePermissionChoice(value: unknown, name?: string): boolean {
+  const identity = `${String(value ?? '')} ${name ?? ''}`.toLowerCase();
+  return /(false|off|default|manual|prompt|request|ask|read[_ -]?only|deny)/.test(identity);
+}
+
+function isFullAccessPermissionChoice(value: unknown, name?: string): boolean {
+  const identity = `${String(value ?? '')} ${name ?? ''}`.toLowerCase();
+  const compact = identity.replace(/[\s_-]/g, '');
+  return compact.includes('bypasspermissions')
+    || compact.includes('dangerouslyskippermissions')
+    || compact.includes('unrestricted')
+    || /(^|\s|[_-])(true|on|full|yolo|allow[_ -]?all)(\s|$|[_-])/.test(identity);
+}
+
 function formatAcpTime(createdAt: string): string {
-  const ms = Date.parse(createdAt.includes('T') ? createdAt : createdAt.replace(' ', 'T') + 'Z');
-  if (Number.isFinite(ms)) return formatChatTime(ms);
-  return createdAt.slice(11, 19) || createdAt;
+  const raw = createdAt.trim();
+  // Prefer ISO / "YYYY-MM-DD HH:mm:ss" parsing; avoid always-Z so local DB times stay local.
+  const ms = Date.parse(
+    raw.includes('T')
+      ? raw
+      : /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(raw)
+        ? raw.replace(' ', 'T')
+        : raw,
+  );
+  if (Number.isFinite(ms)) return formatChatDateTime(ms);
+  return raw;
+}
+
+/** Prefer model id / value for SmartModelIcon keyword matching. */
+function modelIconKey(choice: { value: string; name: string }): string {
+  return String(choice.value || choice.name || '').trim() || 'model';
+}
+
+function isThoughtOption(option: AcpSessionConfigOption): boolean {
+  if (option.category === 'thought_level') return true;
+  return /(reasoning|thought|effort)/i.test(`${option.id} ${option.name}`);
+}
+
+function isModelOption(option: AcpSessionConfigOption): boolean {
+  if (option.category === 'model') return true;
+  if (option.category === 'model_config') return false;
+  return /(^|[_ -])model($|[_ -])/i.test(`${option.id} ${option.name}`);
+}
+
+/** Extra model-side knobs (speed / fast) shown next to model & reasoning. */
+function isModelConfigExtra(option: AcpSessionConfigOption): boolean {
+  if (isModelOption(option) || isThoughtOption(option)) return false;
+  if (option.category === 'model_config') return true;
+  const identity = `${option.id} ${option.name}`.toLowerCase();
+  return /(speed|latency|throughput|fast|性能|速度)/.test(identity);
+}
+
+/** Rank reasoning levels; higher = stronger. Returns null when unknown. */
+function reasoningRank(value: string, name?: string): number | null {
+  const hay = `${value} ${name ?? ''}`.toLowerCase().replace(/[_\s-]+/g, '');
+  // Order from weakest → strongest (index is rank).
+  const order = [
+    'none', 'off', 'disable', 'disabled',
+    'minimal', 'min',
+    'low', 'light',
+    'medium', 'med', 'default', 'standard', 'normal',
+    'high',
+    'xhigh', 'extrahigh', 'veryhigh',
+    'max', 'maximum', 'ultra', 'extreme', '最高', '极高',
+  ];
+  let best: number | null = null;
+  for (let i = 0; i < order.length; i += 1) {
+    if (hay.includes(order[i])) best = i;
+  }
+  return best;
+}
+
+/** True when the current thought/reasoning choice is the strongest available. */
+function isMaxThoughtLevel(option?: AcpSessionConfigOption | null): boolean {
+  if (!option) return false;
+  const choices = configChoices(option);
+  if (choices.length === 0) return false;
+  const ranks = choices.map((choice, index) => {
+    const rank = reasoningRank(String(choice.value), choice.name);
+    return { value: String(choice.value), rank: rank ?? -1, index };
+  });
+  const known = ranks.filter((item) => item.rank >= 0);
+  if (known.length === 0) {
+    // Agents usually list ascending strength — treat last entry as max.
+    return String(option.currentValue) === String(choices[choices.length - 1].value);
+  }
+  const maxRank = Math.max(...known.map((item) => item.rank));
+  return known.some(
+    (item) => item.rank === maxRank && item.value === String(option.currentValue),
+  );
+}
+
+function isSpeedEnabled(option: AcpSessionConfigOption): boolean {
+  if (isBooleanConfigOption(option)) {
+    return option.currentValue === true || String(option.currentValue) === 'true';
+  }
+  const current = configChoices(option).find(
+    (choice) => String(choice.value) === String(option.currentValue),
+  );
+  const identity = `${option.currentValue} ${current?.name ?? ''}`.toLowerCase();
+  if (/(off|false|standard|normal|default|slow)/.test(identity)) return false;
+  return /(fast|priority|turbo|on|true|极速|快速)/.test(identity);
+}
+
+function nextSpeedValue(option: AcpSessionConfigOption): string | boolean {
+  const enabled = isSpeedEnabled(option);
+  if (isBooleanConfigOption(option)) return !enabled;
+  const choices = configChoices(option);
+  if (choices.length === 0) return !enabled;
+  const isOnChoice = (choice: AcpSessionConfigSelectOption) => {
+    const identity = `${choice.value} ${choice.name}`.toLowerCase();
+    if (/(off|false|standard|normal|default|slow)/.test(identity)) return false;
+    return /(fast|priority|turbo|on|true|极速|快速)/.test(identity);
+  };
+  if (enabled) {
+    return (
+      choices.find((choice) => !isOnChoice(choice))
+      ?? choices[0]
+    ).value;
+  }
+  return (
+    choices.find((choice) => isOnChoice(choice))
+    ?? choices[choices.length - 1]
+  ).value;
+}
+
+/** Model brand icon, falling back to the active ACP agent icon when unknown. */
+function AcpModelChoiceIcon({
+  modelId,
+  agentId,
+  agentName,
+  agentIcon,
+  size = 16,
+}: {
+  modelId: string;
+  agentId?: string | null;
+  agentName?: string;
+  agentIcon?: string | null;
+  size?: number;
+}) {
+  if (modelId && hasKnownModelIcon(modelId)) {
+    return <SmartModelIcon modelId={modelId} size={size} type="color" />;
+  }
+  if (agentId) {
+    return (
+      <AcpAgentIcon
+        agentId={agentId}
+        agentName={agentName}
+        icon={agentIcon}
+        size={size}
+      />
+    );
+  }
+  return <SmartModelIcon modelId={modelId || 'model'} size={size} type="color" />;
 }
 
 /**
@@ -137,31 +543,130 @@ export function AcpConversationPane() {
   const activeThreadId = useAcpStore((s) => s.activeThreadId);
   const statusByThread = useAcpStore((s) => s.statusByThread);
   const runningByThread = useAcpStore((s) => s.runningByThread);
-  const permissionMode = useAcpStore((s) => s.permissionMode);
+  const agentReadinessById = useAcpStore((s) => s.agentReadinessById);
+  const sessionByThread = useAcpStore((s) => s.sessionByThread);
+  const preparingByThread = useAcpStore((s) => s.preparingByThread);
+  const cancellingByThread = useAcpStore((s) => s.cancellingByThread);
+  const planByThread = useAcpStore((s) => s.planByThread);
+  const planDocumentsByThread = useAcpStore((s) => s.planDocumentsByThread);
   const pendingPermissions = useAcpStore((s) => s.pendingPermissions);
   const sendPrompt = useAcpStore((s) => s.sendPrompt);
   const createThread = useAcpStore((s) => s.createThread);
-  const setPermissionMode = useAcpStore((s) => s.setPermissionMode);
+  const selectProject = useAcpStore((s) => s.selectProject);
+  const prepareDraft = useAcpStore((s) => s.prepareDraft);
+  const prepareSession = useAcpStore((s) => s.prepareSession);
+  const setConfigOption = useAcpStore((s) => s.setConfigOption);
+  const setSessionMode = useAcpStore((s) => s.setSessionMode);
+  const cancelPrompt = useAcpStore((s) => s.cancelPrompt);
   const respondPermission = useAcpStore((s) => s.respondPermission);
+  const respondQuestionnaire = useAcpStore((s) => s.respondQuestionnaire);
   const enabledAgents = useAcpStore((s) => s.enabledAgents);
 
   const settings = useSettingsStore((s) => s.settings);
+  /** Follow conversation settings (modern / compact / minimal), same as ChatView. */
+  const bubbleStyle = settings.bubble_style || 'modern';
   const profile = useUserProfileStore((s) => s.profile);
   const resolvedAvatarSrc = useResolvedAvatarSrc(profile.avatarType, profile.avatarValue);
   const { copy: copyText, isCopiedFor } = useCopyToClipboard();
+  const localizedStatus = useCallback(
+    (status: string | undefined) => localizeAcpStatus(
+      status,
+      (key, fallback, values) => t(key, { defaultValue: fallback, ...values }),
+    ),
+    [t],
+  );
+
+  const getBubbleVariant = useCallback(
+    (isUser: boolean): {
+      variant: 'filled' | 'outlined' | 'shadow' | 'borderless';
+      style?: CSSProperties;
+    } => {
+      switch (bubbleStyle) {
+        case 'compact':
+          return { variant: 'borderless' };
+        case 'minimal':
+          return { variant: 'borderless', style: { padding: '4px 8px' } };
+        case 'modern':
+        default:
+          return { variant: isUser ? 'shadow' : 'outlined' };
+      }
+    },
+    [bubbleStyle],
+  );
 
   const [value, setValue] = useState('');
+  const [pastedSnippets, setPastedSnippets] = useState<PastedSnippet[]>([]);
+  const pastedSnippetSeqRef = useRef(0);
   const [sending, setSending] = useState(false);
   const [composerAgentId, setComposerAgentId] = useState<string | null>(null);
   const [gitInfo, setGitInfo] = useState<AcpGitInfo | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [configUpdatingId, setConfigUpdatingId] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lastNonPlanModeBySessionRef = useRef<Record<string, string>>({});
+  const bubbleListRef = useRef<BubbleListRef | null>(null);
+  const stickToBottomRef = useRef(true);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+
+  // Drag-to-resize composer (parity with chat InputArea)
+  const [userMinHeight, setUserMinHeight] = useState(COMPOSER_INITIAL_MIN_HEIGHT);
+  const userMinHeightRef = useRef(userMinHeight);
+  userMinHeightRef.current = userMinHeight;
+  const dragStateRef = useRef<{ startY: number; startH: number } | null>(null);
+  const resizeCleanupRef = useRef<() => void>(() => {});
+  const hasUserResizedRef = useRef(false);
 
   const agents = enabledAgents();
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const activeThread = threads.find((th) => th.id === activeThreadId) ?? null;
-  const streaming = !!(activeThreadId && runningByThread[activeThreadId]);
+  const streaming = !!(
+    activeThreadId
+    && (
+      runningByThread[activeThreadId]
+      || messages.some(
+        (message) => message.thread_id === activeThreadId
+          && message.role === 'assistant'
+          && message.status === 'streaming',
+      )
+    )
+  );
+  const pendingInteractions = useMemo(() => (
+    Object.values(pendingPermissions)
+      .filter((request) => (
+        request.threadId === activeThreadId && request.status === 'pending'
+      ))
+      .sort((left, right) => (
+        (left.sequence ?? Number.MAX_SAFE_INTEGER)
+        - (right.sequence ?? Number.MAX_SAFE_INTEGER)
+      ))
+  ), [activeThreadId, pendingPermissions]);
+  const [interactionCursor, setInteractionCursor] = useState(0);
+  const clampedInteractionIndex = pendingInteractions.length === 0
+    ? 0
+    : Math.min(interactionCursor, pendingInteractions.length - 1);
+  const activeInteraction = pendingInteractions[clampedInteractionIndex] ?? null;
+  const previousInteractionIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setInteractionCursor(0);
+  }, [activeThreadId]);
+
+  useEffect(() => {
+    setInteractionCursor((current) => {
+      if (pendingInteractions.length === 0) return 0;
+      return Math.min(current, pendingInteractions.length - 1);
+    });
+  }, [pendingInteractions]);
+
+  useEffect(() => {
+    const previousId = previousInteractionIdRef.current;
+    const currentId = activeInteraction?.requestId ?? null;
+    previousInteractionIdRef.current = currentId;
+    if (!previousId || currentId) return undefined;
+    const frame = window.requestAnimationFrame(() => textareaRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeInteraction?.requestId]);
 
   // Prefer thread agent; otherwise composer selection / first enabled agent
   const effectiveAgentId =
@@ -170,6 +675,53 @@ export function AcpConversationPane() {
     ?? agents[0]?.id
     ?? null;
   const agentMeta = agents.find((a) => a.id === effectiveAgentId);
+  const draftKey = activeProjectId && effectiveAgentId
+    ? `draft:${activeProjectId}:${effectiveAgentId}`
+    : null;
+  const sessionKey = activeThreadId ?? draftKey;
+  const sessionSnapshot = sessionKey ? sessionByThread[sessionKey] : undefined;
+  const agentProcessReady = !!(
+    effectiveAgentId && agentReadinessById[effectiveAgentId]?.status === 'ready'
+  );
+  const preparing = !!(sessionKey && preparingByThread[sessionKey]);
+  const cancelling = !!(activeThreadId && cancellingByThread[activeThreadId]);
+  const activePlan = activeThreadId ? planByThread[activeThreadId] : undefined;
+  const supportsImageAttachments =
+    sessionSnapshot?.agentCapabilities.promptCapabilities?.image === true;
+  const acceptAcpAttachment = useCallback(
+    (file: File) => isAllowedAcpAttachmentFile(file, supportsImageAttachments),
+    [supportsImageAttachments],
+  );
+  const handleRejectedAttachments = useCallback(() => {
+    messageApi.warning(t('agentPage.imageAttachmentUnsupported'));
+  }, [messageApi, t]);
+  const handleAttachmentReadError = useCallback((filePath: string, error: unknown) => {
+    console.error('[acp attachment] Failed to read file:', filePath, error);
+    const name = filePath.split(/[\\/]/).pop() || filePath || t('common.unknown', '未知文件');
+    messageApi.error(t('agentPage.attachmentReadFailed', { name }));
+  }, [messageApi, t]);
+  const {
+    attachments: attachedFiles,
+    fileInputRef,
+    isDragging,
+    removeAttachment,
+    resetAttachments,
+    detachAttachments,
+    restoreAttachments,
+    openFilePicker,
+    handleFileChange,
+    handleClipboardFiles,
+    dragHandlers,
+  } = useComposerAttachments({
+    enabled: !!activeProjectId && !!effectiveAgentId,
+    acceptFile: acceptAcpAttachment,
+    onRejected: handleRejectedAttachments,
+    onReadError: handleAttachmentReadError,
+  });
+  const composerScopeKey = `${activeProjectId ?? ''}:${activeThreadId ?? 'draft'}:${effectiveAgentId ?? ''}`;
+  const composerScopeRef = useRef(composerScopeKey);
+  composerScopeRef.current = composerScopeKey;
+  const previousComposerScopeRef = useRef(composerScopeKey);
 
   useEffect(() => {
     if (!composerAgentId && agents[0]?.id) {
@@ -183,6 +735,63 @@ export function AcpConversationPane() {
       setComposerAgentId(activeThread.agent_id);
     }
   }, [activeThread?.agent_id]);
+
+  useEffect(() => {
+    const scopeChanged = previousComposerScopeRef.current !== composerScopeKey;
+    if (scopeChanged) {
+      const removedImage = attachedFiles.some(({ file }) => isImageFile(file));
+      resetAttachments();
+      setValue((current) => pastedSnippets.reduce(
+        (next, snippet) => removePasteTokens(next, snippet.index),
+        current,
+      ));
+      setPastedSnippets([]);
+      pastedSnippetSeqRef.current = 0;
+      previousComposerScopeRef.current = composerScopeKey;
+      if (removedImage && !supportsImageAttachments) {
+        messageApi.warning(t('agentPage.imageAttachmentUnsupported'));
+      }
+      return;
+    }
+    if (supportsImageAttachments) return;
+    const incompatible = attachedFiles.filter(({ file }) => isImageFile(file));
+    if (incompatible.length === 0) return;
+    for (const attachment of incompatible) removeAttachment(attachment.id);
+    messageApi.warning(t('agentPage.imageAttachmentUnsupported'));
+  }, [
+    attachedFiles,
+    composerScopeKey,
+    messageApi,
+    pastedSnippets,
+    removeAttachment,
+    resetAttachments,
+    supportsImageAttachments,
+    t,
+  ]);
+
+  // Warm initialize + session setup while the user is reading/typing. The
+  // store deduplicates StrictMode and rapid-selection calls.
+  useEffect(() => {
+    if (activeThreadId) {
+      if (!sessionByThread[activeThreadId]) {
+        void prepareSession(activeThreadId).catch(() => undefined);
+      }
+      return;
+    }
+    if (activeProjectId && effectiveAgentId) {
+      const key = `draft:${activeProjectId}:${effectiveAgentId}`;
+      if (!sessionByThread[key]) {
+        void prepareDraft(activeProjectId, effectiveAgentId).catch(() => undefined);
+      }
+    }
+  }, [
+    activeThreadId,
+    activeProjectId,
+    effectiveAgentId,
+    prepareDraft,
+    prepareSession,
+    sessionByThread,
+  ]);
 
   // Load git branch info for active project
   useEffect(() => {
@@ -246,24 +855,114 @@ export function AcpConversationPane() {
     );
   }, [effectiveAgentId, agentMeta?.name, agentMeta?.icon]);
 
-  const bubbleItems: BubbleItemType[] = useMemo(() => {
-    return messages.map((m) => {
-      const isLast = m === messages[messages.length - 1];
-      const hasContent = !!(m.content && m.content.trim().length > 0);
-      // Never keep the Bubble loading spinner once content has arrived — even if
-      // status is still "streaming" due to a race with loadMessages.
-      const loading =
-        m.role === 'assistant'
-        && !hasContent
-        && (m.status === 'streaming' || (streaming && isLast));
-      return {
-        key: m.id,
-        role: m.role === 'user' ? 'user' : 'ai',
-        content: m.content ?? '',
-        loading,
-      };
+  const planDocuments = useMemo(() => {
+    if (!activeThreadId) return [];
+    return [...(planDocumentsByThread[activeThreadId] ?? [])]
+      .sort((left, right) => left.sequence - right.sequence);
+  }, [activeThreadId, planDocumentsByThread]);
+
+  /** Attach a resolved plan body to the composer as a paste snippet (context). */
+  const addPlanToContext = useCallback((content: string) => {
+    const text = content.trim();
+    if (!text) return;
+    pastedSnippetSeqRef.current += 1;
+    const index = pastedSnippetSeqRef.current;
+    setPastedSnippets((previous) => [...previous, createPastedSnippet(text, index)]);
+    setValue((current) => {
+      const start = current.length;
+      const inserted = insertPasteTokenAtSelection(current, start, start, index);
+      return inserted.value;
     });
-  }, [messages, streaming]);
+    messageApi.success(t('agentPage.interactionPlanAddedToContext', '已带入上下文'));
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.style.height = 'auto';
+      const desired = hasUserResizedRef.current
+        ? userMinHeightRef.current
+        : Math.max(textarea.scrollHeight, userMinHeightRef.current);
+      textarea.style.height = `${Math.min(desired, COMPOSER_ABSOLUTE_MAX_HEIGHT)}px`;
+    });
+  }, [messageApi, t]);
+
+  // Inline <acp-plan> nodes call this via the shared handler registry.
+  useEffect(() => {
+    setAcpPlanContextHandler(addPlanToContext);
+    return () => setAcpPlanContextHandler(null);
+  }, [addPlanToContext]);
+
+  const bubbleItems: BubbleItemType[] = useMemo(() => {
+    // Plans with inline <acp-plan> markers render inside the message body
+    // (chronological). Legacy plans without markers still get a fallback bubble
+    // after their host message.
+    const items: BubbleItemType[] = [];
+    const attachedPlanIds = new Set<string>();
+
+    for (const message of messages) {
+      items.push({
+        key: message.id,
+        role: message.role === 'user' ? 'user' : 'ai',
+        content: message.content ?? '',
+        // ACP owns its empty-stream renderer below. Ant Bubble's built-in
+        // loading branch bypasses contentRender and hides status/permissions.
+        loading: false,
+      });
+
+      for (const plan of planDocuments) {
+        if (plan.messageId !== message.id) continue;
+        // Pending reviews already occupy the composer — avoid duplicate body.
+        if (plan.status === 'pending') continue;
+        // Already placed chronologically inside the assistant message.
+        if (messageHasAcpPlanMarker(message.content, plan.id)) {
+          attachedPlanIds.add(plan.id);
+          continue;
+        }
+        attachedPlanIds.add(plan.id);
+        items.push({
+          key: `plan:${plan.id}`,
+          role: 'plan',
+          content: plan.content,
+          loading: false,
+        });
+      }
+    }
+
+    // Plans without a message id (or whose message is not loaded yet) still
+    // appear at the end so the body remains readable after leaving plan mode.
+    for (const plan of planDocuments) {
+      if (attachedPlanIds.has(plan.id) || plan.status === 'pending') continue;
+      items.push({
+        key: `plan:${plan.id}`,
+        role: 'plan',
+        content: plan.content,
+        loading: false,
+      });
+    }
+
+    return items;
+  }, [messages, planDocuments]);
+
+  const renderMessageHeader = useCallback(
+    (msgId: string, role: 'user' | 'assistant') => {
+      const msg = messages.find((m) => m.id === msgId);
+      const name = role === 'user'
+        ? (profile.name || t('chat.you'))
+        : (agentMeta?.name || activeThread?.agent_id || 'Agent');
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Text style={{ fontSize: 13 }}>{name}</Text>
+          {/* Match ChatView: timestamp sits next to the name, not under content */}
+          {msg ? (
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              {formatAcpTime(msg.created_at)}
+            </Text>
+          ) : null}
+        </div>
+      );
+    },
+    [messages, profile.name, t, agentMeta?.name, activeThread?.agent_id],
+  );
 
   const renderMessageFooter = useCallback(
     (msgId: string, content: string, role: 'user' | 'assistant') => {
@@ -274,7 +973,12 @@ export function AcpConversationPane() {
         || (streaming && msg.id === messages[messages.length - 1]?.id && msg.role === 'assistant');
       if (isStreamingMsg) return null;
 
-      const plainCopy = content.replace(/<tool-call\b[^>]*\/?>/gi, '').trim() || content;
+      const plainCopy = content
+        .replace(/<tool-call\b[^>]*>[\s\S]*?<\/tool-call>/gi, '')
+        .replace(/<acp-plan\b[^>]*>[\s\S]*?<\/acp-plan>/gi, '')
+        .replace(/<tool-call\b[^>]*\/?>/gi, '')
+        .replace(/<acp-plan\b[^>]*\/?>/gi, '')
+        .trim() || content;
       const copied = isCopiedFor(plainCopy);
       const durationMs = role === 'assistant' ? parseAcpDurationMs(msg.meta_json) : null;
       const durationLabel =
@@ -290,9 +994,6 @@ export function AcpConversationPane() {
             marginTop: 2,
           }}
         >
-          <Text type="secondary" style={{ fontSize: 11 }}>
-            {formatAcpTime(msg.created_at)}
-          </Text>
           {durationLabel ? (
             <Text
               type="secondary"
@@ -327,61 +1028,73 @@ export function AcpConversationPane() {
   const roles = useMemo(() => ({
     user: {
       placement: 'end' as const,
-      variant: 'filled' as const,
       shape: 'corner' as const,
+      ...getBubbleVariant(true),
       avatar: userAvatar,
-      header: () => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Text style={{ fontSize: 13 }}>{profile.name || t('chat.you')}</Text>
-        </div>
-      ),
-      contentRender: (content: string) => (
-        <div className="aqbot-chat-text" style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-          {content}
-        </div>
-      ),
+      header: (_content: string, info: { key?: string | number }) =>
+        renderMessageHeader(String(info.key ?? ''), 'user'),
+      contentRender: (content: string, info: { key?: string | number }) => {
+        const message = messages.find((item) => item.id === String(info.key));
+        const attachments = message?.attachments ?? [];
+        return (
+          <div style={{ textAlign: 'right' }}>
+            {content ? (
+              <div
+                className="aqbot-chat-text"
+                style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+              >
+                {content}
+              </div>
+            ) : null}
+            {attachments.length > 0 ? (
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  justifyContent: 'flex-end',
+                  gap: 8,
+                  marginTop: content ? 8 : 0,
+                }}
+              >
+                {attachments.map((attachment) => (
+                  <MessageAttachmentPreview
+                    key={attachment.id}
+                    attachment={attachment}
+                    themeColor={token.colorPrimary}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </div>
+        );
+      },
       footer: (content: string, info: { key?: string | number }) =>
         renderMessageFooter(String(info.key ?? ''), String(content ?? ''), 'user'),
     },
     ai: {
       placement: 'start' as const,
-      variant: 'borderless' as const,
       shape: 'corner' as const,
+      ...getBubbleVariant(false),
       avatar: agentAvatar,
-      header: () => {
-        const name = agentMeta?.name || activeThread?.agent_id || 'Agent';
-        return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Text style={{ fontSize: 13 }}>{name}</Text>
-            <Tag color="blue" style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', margin: 0 }}>
-              ACP
-            </Tag>
-          </div>
-        );
-      },
+      header: (_content: string, info: { key?: string | number }) =>
+        renderMessageHeader(String(info.key ?? ''), 'assistant'),
       contentRender: (content: string, { key }: { key?: string | number }) => {
         const msg = messages.find((m) => m.id === String(key));
         const isStreamingMsg =
           msg?.status === 'streaming'
           || (streaming && msg?.id === messages[messages.length - 1]?.id && msg?.role === 'assistant');
-        const body = normalizeThinkTagsForMarkdown(content || '');
+        const body = normalizeThinkTagsForMarkdown(
+          closeStreamingThinkBlock(content || '', isStreamingMsg),
+        );
 
-        // Permissions attached to this assistant message (or active stream fallback)
-        const msgPermissions = msg
-          ? Object.values(pendingPermissions).filter((pr) => {
-              if (pr.threadId !== activeThreadId) return false;
-              if (pr.messageId && pr.messageId === msg.id) return true;
-              // Fallback while messageId race: show on streaming assistant
-              return !pr.messageId && isStreamingMsg;
-            })
-          : [];
-
-        // Empty bubble still streaming, no permission yet → status + dots
-        if (!body && isStreamingMsg && msgPermissions.length === 0) {
+        // Empty bubble still streaming → status + dots. Pending interactions
+        // take over the composer instead of being appended to this message.
+        if (!body && isStreamingMsg) {
           return (
             <div>
               <Text type="secondary" style={{ fontSize: 13 }}>
-                {statusByThread[activeThreadId ?? ''] || t('agentPage.streaming', '生成中…')}
+                {localizedStatus(statusByThread[activeThreadId ?? ''])
+                  || t('agentPage.streaming', '生成中…')}
               </Text>
               <StreamingDots color={token.colorTextSecondary} />
             </div>
@@ -414,29 +1127,6 @@ export function AcpConversationPane() {
                 </div>
               </ChatMessageRenderBoundary>
             ) : null}
-
-            {/* Permission cards sit under the message content (same as ChatView agent mode) */}
-            {msgPermissions.map((pr) => (
-              <PermissionCard
-                key={pr.requestId}
-                conversationId={pr.threadId}
-                toolUseId={pr.requestId}
-                toolName={pr.toolName}
-                input={pr.input}
-                status={
-                  pr.status === 'pending'
-                    ? 'pending'
-                    : pr.status === 'denied'
-                      ? 'denied'
-                      : 'approved'
-                }
-                options={pr.options}
-                onApprove={async (decision) => {
-                  await respondPermission(pr.requestId, decision);
-                }}
-              />
-            ))}
-
             {isStreamingMsg ? <StreamingDots color={token.colorTextSecondary} /> : null}
           </div>
         );
@@ -444,14 +1134,35 @@ export function AcpConversationPane() {
       footer: (content: string, info: { key?: string | number }) =>
         renderMessageFooter(String(info.key ?? ''), String(content ?? ''), 'assistant'),
     },
+    // Resolved plan-review cards sit in the message timeline (not the composer).
+    plan: {
+      placement: 'start' as const,
+      shape: 'corner' as const,
+      variant: 'borderless' as const,
+      avatar: <span style={{ width: 32, display: 'inline-block' }} />,
+      header: () => null,
+      contentRender: (_content: string, info: { key?: string | number }) => {
+        const planId = String(info.key ?? '').replace(/^plan:/, '');
+        const document = planDocuments.find((item) => item.id === planId);
+        if (!document) return null;
+        return (
+          <div style={{ width: '100%', minWidth: 0, maxWidth: '100%' }}>
+            <AcpPlanDocumentCard
+              document={document}
+              onAddToContext={addPlanToContext}
+            />
+          </div>
+        );
+      },
+      footer: () => null,
+    },
   }), [
     userAvatar,
     agentAvatar,
     messages,
-    profile.name,
+    planDocuments,
+    addPlanToContext,
     t,
-    agentMeta?.name,
-    activeThread?.agent_id,
     isDarkMode,
     darkTheme,
     lightTheme,
@@ -461,90 +1172,369 @@ export function AcpConversationPane() {
     statusByThread,
     activeThreadId,
     token.colorTextSecondary,
-    pendingPermissions,
-    respondPermission,
+    token.colorPrimary,
+    renderMessageHeader,
     renderMessageFooter,
+    getBubbleVariant,
+    localizedStatus,
   ]);
 
-  const permissionModeItems = useMemo<MenuProps['items']>(() => [
-    { key: 'default', label: t('common.permissionDefault'), icon: <Shield size={14} /> },
-    {
-      key: 'accept_edits',
-      label: t('common.permissionAcceptEdits'),
-      icon: <ShieldCheck size={14} style={{ color: '#1890ff' }} />,
-    },
-    {
-      key: 'auto_approve',
-      label: t('common.permissionAutoApprove'),
-      icon: <ShieldCheck size={14} style={{ color: '#52c41a' }} />,
-    },
-    {
-      key: 'full_access',
-      label: t('common.permissionFullAccess'),
-      icon: <ShieldAlert size={14} style={{ color: '#ff4d4f' }} />,
-    },
-  ], [t]);
+  const configOptions = sessionSnapshot?.configOptions ?? [];
+  const planOption = configOptions.find(
+    (option) => optionContainsPlan(option),
+  );
+  const advertisedPermissionOption = configOptions.find(
+    (option) => option !== planOption && isPermissionOption(option),
+  ) ?? (planOption && isPermissionOption(planOption) ? planOption : undefined);
+  const sessionModePermissionChoices = (sessionSnapshot?.modes?.availableModes ?? [])
+    .filter((mode) => !isPlanModeValue(mode.id))
+    .filter((mode) => (
+      isDefaultAgentModeValue(mode.id)
+      || isDefaultAgentModeValue(mode.name)
+      || isPermissionModeChoice(mode.id, mode.name)
+    ))
+    .filter((mode) => mode.id && mode.name);
+  const hasSessionModePermissions = sessionModePermissionChoices.length >= 2
+    && sessionModePermissionChoices.some(
+      (mode) => isPermissionModeChoice(mode.id, mode.name),
+    );
+  const sessionModePermissionOption: AcpSessionConfigOption | undefined =
+    !advertisedPermissionOption && hasSessionModePermissions
+      ? {
+          id: '__session_permission_mode',
+          name: 'Permission',
+          category: 'mode',
+          type: 'select',
+          currentValue: sessionModePermissionChoices.some(
+            (mode) => mode.id === sessionSnapshot?.modes?.currentModeId,
+          )
+            ? String(sessionSnapshot?.modes?.currentModeId)
+            : sessionModePermissionChoices.find(
+                (mode) => isDefaultAgentModeValue(mode.id),
+              )?.id ?? sessionModePermissionChoices[0].id,
+          options: sessionModePermissionChoices.map((mode) => ({
+            value: mode.id,
+            name: mode.name,
+            description: mode.description,
+          })),
+        }
+      : undefined;
+  const permissionOption = advertisedPermissionOption ?? sessionModePermissionOption;
+  const permissionUsesSessionMode = permissionOption === sessionModePermissionOption;
+  const modelOption = configOptions.find((option) => isModelOption(option));
+  const thoughtOption = configOptions.find((option) => isThoughtOption(option));
+  const modelConfigExtras = configOptions.filter(
+    (option) =>
+      option !== planOption
+      && option !== permissionOption
+      && option !== modelOption
+      && option !== thoughtOption
+      && isModelConfigExtra(option),
+  );
+  const planMode = sessionSnapshot?.modes?.availableModes.find(
+    (mode) => isPlanModeValue(mode.id) || isPlanModeValue(mode.name),
+  );
+  const planEnabled = planMode
+    ? sessionSnapshot?.modes?.currentModeId === planMode.id
+    : !!planOption && isPlanModeValue(planOption.currentValue);
+  const permissionChoices = configChoices(permissionOption).filter(
+    (choice) => permissionOption !== planOption || !isPlanModeValue(choice.value),
+  );
 
-  const permissionModeIcon = useMemo(() => {
-    switch (permissionMode) {
-      case 'accept_edits': return <ShieldCheck size={14} style={{ color: '#1890ff' }} />;
-      case 'auto_approve': return <ShieldCheck size={14} style={{ color: '#52c41a' }} />;
-      case 'full_access': return <ShieldAlert size={14} style={{ color: '#ff4d4f' }} />;
-      default: return <Shield size={14} />;
+  useEffect(() => {
+    if (!sessionKey) return;
+    const currentMode = sessionSnapshot?.modes?.currentModeId;
+    if (currentMode && !isPlanModeValue(currentMode)) {
+      lastNonPlanModeBySessionRef.current[sessionKey] = currentMode;
+      return;
     }
-  }, [permissionMode]);
-
-  const permissionModeLabel = useMemo(() => {
-    switch (permissionMode) {
-      case 'accept_edits': return t('common.permissionAcceptEdits');
-      case 'auto_approve': return t('common.permissionAutoApprove');
-      case 'full_access': return t('common.permissionFullAccess');
-      default: return t('common.permissionDefault');
+    const currentConfig = permissionOption?.currentValue;
+    if (typeof currentConfig === 'string' && !isPlanModeValue(currentConfig)) {
+      lastNonPlanModeBySessionRef.current[sessionKey] = currentConfig;
     }
-  }, [permissionMode, t]);
+  }, [permissionOption?.currentValue, sessionKey, sessionSnapshot?.modes?.currentModeId]);
 
-  const handlePermissionModeChange = useCallback(async (mode: string) => {
-    const apply = async () => {
-      try {
-        await setPermissionMode(mode);
-      } catch (e) {
-        console.warn(e);
+  const permissionChoiceName = useCallback((choice: AcpSessionConfigSelectOption) => {
+    const token = String(choice.value).trim().toLowerCase().replace(/[\s_-]/g, '');
+    if (token === 'dontask') {
+      return t('agent.permissionDontAsk', '不询问（拒绝）');
+    }
+    if (token === 'auto') {
+      return t('agent.permissionAutoApprove', '自动审批');
+    }
+    if (token === 'acceptedits' || token === 'autoedit' || token === 'agent') {
+      return t('agent.permissionAcceptEdits', '允许编辑');
+    }
+    if (token === 'bypasspermissions' || token === 'dangerouslyskippermissions') {
+      return t('agent.permissionFullAccess', '完全访问');
+    }
+    if (isRestrictivePermissionChoice(choice.value, choice.name)) {
+      return t('agent.permissionAskEveryTime', '每次询问');
+    }
+    if (isFullAccessPermissionChoice(choice.value, choice.name)) {
+      return t('agent.permissionFullAccess', '完全访问');
+    }
+    return choice.name;
+  }, [t]);
+
+  const configChoiceName = useCallback((
+    option: AcpSessionConfigOption | undefined,
+    choice: AcpSessionConfigSelectOption,
+  ) => {
+    if (option && isPermissionOption(option)) return permissionChoiceName(choice);
+    if (option && isBooleanConfigOption(option)) {
+      if (choice.value === 'true') return t('common.on', '开启');
+      if (choice.value === 'false') return t('common.off', '关闭');
+    }
+    if (choice.value === '__agent_default') {
+      return t('agent.agentDefault', 'Agent 默认');
+    }
+    return choice.name;
+  }, [permissionChoiceName, t]);
+
+  const choiceItems = useCallback(
+    (
+      option?: AcpSessionConfigOption,
+      choices: AcpSessionConfigSelectOption[] = configChoices(option),
+    ): MenuProps['items'] => choices.map((choice) => {
+      const showModelIcon = !!option && isModelOption(option);
+      return {
+        key: String(choice.value),
+        label: (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {showModelIcon ? (
+              <span style={{ flexShrink: 0, lineHeight: 0 }}>
+                <AcpModelChoiceIcon
+                  modelId={modelIconKey(choice)}
+                  agentId={effectiveAgentId}
+                  agentName={agentMeta?.name}
+                  agentIcon={agentMeta?.icon}
+                  size={16}
+                />
+              </span>
+            ) : null}
+            <span style={{ minWidth: 0 }}>{configChoiceName(option, choice)}</span>
+          </div>
+        ),
+      };
+    }),
+    [agentMeta?.icon, agentMeta?.name, configChoiceName, effectiveAgentId],
+  );
+
+  const selectedOptionLabel = useCallback((option?: AcpSessionConfigOption) => {
+    if (!option) return selectedConfigLabel(option);
+    const current = configChoices(option).find(
+      (choice) => String(choice.value) === String(option.currentValue),
+    );
+    return current ? configChoiceName(option, current) : selectedConfigLabel(option);
+  }, [configChoiceName]);
+
+  const rememberedPermissionValue = sessionKey
+    ? lastNonPlanModeBySessionRef.current[sessionKey]
+    : undefined;
+  const selectedPermissionValue = planEnabled
+    ? permissionUsesSessionMode || permissionOption === planOption
+      ? rememberedPermissionValue
+        ?? permissionChoices.find((choice) => isDefaultAgentModeValue(choice.value))?.value
+        ?? permissionChoices[0]?.value
+      : permissionOption?.currentValue
+    : permissionOption?.currentValue;
+  const selectedPermissionChoice = permissionChoices.find(
+    (choice) => String(choice.value) === String(selectedPermissionValue),
+  );
+  const selectedPermissionLabel = selectedPermissionChoice
+    ? configChoiceName(permissionOption, selectedPermissionChoice)
+    : selectedOptionLabel(permissionOption);
+
+  const applyConfigChoice = useCallback(async (configId: string, choice: string | boolean) => {
+    if (!sessionKey || configUpdatingId) return;
+    setConfigUpdatingId(configId);
+    try {
+      await setConfigOption(sessionKey, configId, choice);
+    } catch (error) {
+      messageApi.error(String(error));
+    } finally {
+      setConfigUpdatingId(null);
+    }
+  }, [configUpdatingId, messageApi, sessionKey, setConfigOption]);
+
+  const applySessionModeChoice = useCallback(async (modeId: string, updateId: string) => {
+    if (!sessionKey || configUpdatingId) return;
+    setConfigUpdatingId(updateId);
+    try {
+      await setSessionMode(sessionKey, modeId);
+    } catch (error) {
+      messageApi.error(String(error));
+    } finally {
+      setConfigUpdatingId(null);
+    }
+  }, [configUpdatingId, messageApi, sessionKey, setSessionMode]);
+
+  const handlePermissionChange = useCallback((choiceId: string) => {
+    if (!permissionOption) return;
+    const choice = configChoices(permissionOption).find((item) => item.value === choiceId);
+    const needsConfirmation = !isRestrictivePermissionChoice(choiceId, choice?.name);
+    const apply = () => permissionUsesSessionMode
+      ? applySessionModeChoice(choiceId, permissionOption.id)
+      : applyConfigChoice(
+          permissionOption.id,
+          configChoicePayload(permissionOption, choiceId),
+        );
+    if (!needsConfirmation) {
+      void apply();
+      return;
+    }
+    const fullAccess = isFullAccessPermissionChoice(choiceId, choice?.name)
+      || permissionOption.id.toLowerCase().includes('allow_all');
+    modal.confirm({
+      title: fullAccess
+        ? t('agent.permissionFullAccessWarningTitle', '完全访问模式')
+        : t('agent.permissionAcceptEditsWarningTitle', 'Agent 权限变更'),
+      content: choice?.description
+        ?? t('agent.permissionAcceptEditsWarning', 'Agent 将获得文件编辑或命令执行权限，请确认你信任当前 Agent。'),
+      okText: t('common.confirm', '确认'),
+      cancelText: t('common.cancel', '取消'),
+      okButtonProps: fullAccess ? { danger: true } : undefined,
+      onOk: apply,
+    });
+  }, [
+    applyConfigChoice,
+    applySessionModeChoice,
+    modal,
+    permissionOption,
+    permissionUsesSessionMode,
+    t,
+  ]);
+
+  const setPlanModeEnabled = useCallback(async (enabled: boolean) => {
+    if (!sessionKey || streaming || preparing || configUpdatingId) return;
+    if (planMode) {
+      const currentlyOn = sessionSnapshot?.modes?.currentModeId === planMode.id;
+      if (enabled === currentlyOn) return;
+      if (enabled && sessionKey) {
+        const currentMode = sessionSnapshot?.modes?.currentModeId;
+        if (currentMode && !isPlanModeValue(currentMode)) {
+          lastNonPlanModeBySessionRef.current[sessionKey] = currentMode;
+        }
       }
-    };
-    if (mode === 'accept_edits' || mode === 'auto_approve' || mode === 'full_access') {
-      const isFull = mode === 'full_access';
-      const isAuto = mode === 'auto_approve';
-      modal.confirm({
-        title: isFull
-          ? t('agent.permissionFullAccessWarningTitle', '⚠️ 完全访问模式')
-          : isAuto
-            ? t('agent.permissionAutoApproveWarningTitle', '⚠️ 自动审批模式')
-            : t('agent.permissionAcceptEditsWarningTitle', '⚠️ 允许编辑模式'),
-        content: isFull
-          ? t('agent.permissionFullAccessWarning', 'Agent 将拥有完全访问权限，可以执行任何文件操作且不受路径限制。请确保你信任当前使用的模型和 System Prompt。')
-          : isAuto
-            ? t('agent.permissionAutoApproveWarning', 'Agent 将自动批准所有工具权限请求，无需逐一确认。请确保你信任当前 Agent。')
-            : t('agent.permissionAcceptEditsWarning', 'Agent 将自动批准文件编辑操作，无需逐一确认。请确保你了解潜在的安全风险。'),
-        okText: t('common.confirm', '确认'),
-        cancelText: t('common.cancel', '取消'),
-        okButtonProps: isFull ? { danger: true } : undefined,
-        onOk: apply,
-      });
-    } else {
-      await apply();
+      const rememberedMode = sessionKey
+        ? lastNonPlanModeBySessionRef.current[sessionKey]
+        : undefined;
+      const target = enabled
+        ? planMode
+        : sessionSnapshot?.modes?.availableModes.find((mode) => mode.id === rememberedMode)
+          ?? sessionSnapshot?.modes?.availableModes.find(
+            (mode) => isDefaultAgentModeValue(mode.id) || isDefaultAgentModeValue(mode.name),
+          )
+          ?? sessionSnapshot?.modes?.availableModes.find((mode) => mode.id !== planMode.id);
+      if (!target) return;
+      setConfigUpdatingId('session-mode');
+      try {
+        await setSessionMode(sessionKey, target.id);
+      } catch (error) {
+        messageApi.error(String(error));
+      } finally {
+        setConfigUpdatingId(null);
+      }
+      return;
     }
-  }, [modal, setPermissionMode, t]);
+    if (planOption) {
+      const currentlyOn = isPlanModeValue(planOption.currentValue);
+      if (enabled === currentlyOn) return;
+      const choices = configChoices(planOption);
+      const target = enabled
+        ? choices.find((choice) => isPlanModeValue(choice.value))
+        : choices.find((choice) => isDefaultAgentModeValue(choice.value))
+          ?? choices.find((choice) => !isPlanModeValue(choice.value));
+      if (!target) return;
+      await applyConfigChoice(planOption.id, target.value);
+    }
+  }, [
+    applyConfigChoice,
+    configUpdatingId,
+    messageApi,
+    planMode,
+    planOption,
+    preparing,
+    sessionKey,
+    sessionSnapshot?.modes?.availableModes,
+    sessionSnapshot?.modes?.currentModeId,
+    setSessionMode,
+    streaming,
+  ]);
+
+  const togglePlanMode = useCallback(async () => {
+    await setPlanModeEnabled(!planEnabled);
+  }, [planEnabled, setPlanModeEnabled]);
+
+  const disablePlanMode = useCallback(async () => {
+    if (!planEnabled) return;
+    await setPlanModeEnabled(false);
+  }, [planEnabled, setPlanModeEnabled]);
 
   const agentMenuItems = useMemo<MenuProps['items']>(
     () =>
       agents.map((a) => ({
         key: a.id,
-        icon: <AcpAgentIcon agentId={a.id} agentName={a.name} icon={a.icon} size={16} />,
-        label: a.name,
+        // Icon lives inside the label so spacing is reliable (antd item-icon margin varies by theme).
+        label: (
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              minWidth: 0,
+            }}
+          >
+            <AcpAgentIcon agentId={a.id} agentName={a.name} icon={a.icon} size={16} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{a.name}</span>
+          </span>
+        ),
         disabled: !!activeThreadId, // thread is bound to one agent for life
       })),
     [agents, activeThreadId],
   );
+
+  const projectMenuItems = useMemo<MenuProps['items']>(
+    () =>
+      projects.map((p) => ({
+        key: p.id,
+        label: (
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              minWidth: 0,
+              maxWidth: 280,
+            }}
+          >
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</span>
+          </span>
+        ),
+      })),
+    [projects],
+  );
+
+  /** Shared dashed-underline chip for welcome title agent / project pickers. */
+  const welcomeLinkStyle: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    margin: '0 2px',
+    padding: '0 2px',
+    border: 'none',
+    borderBottom: `1px dashed ${token.colorTextSecondary}`,
+    borderRadius: 0,
+    background: 'transparent',
+    color: token.colorText,
+    fontSize: 'inherit',
+    fontWeight: 600,
+    lineHeight: 1.35,
+    height: 'auto',
+    cursor: 'pointer',
+    verticalAlign: 'baseline',
+  };
 
   const gitBranchItems = useMemo<MenuProps['items']>(() => {
     if (!gitInfo?.isRepo || gitInfo.branches.length === 0) return [];
@@ -581,9 +1571,62 @@ export function AcpConversationPane() {
     [activeProjectId, gitInfo?.branch, messageApi, t],
   );
 
-  const handleSend = async (textOverride?: string) => {
-    const text = (textOverride ?? value).trim();
-    if (!text || sending || streaming) return;
+  const resizeTextareaToContent = useCallback(() => {
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.style.height = 'auto';
+      const desired = hasUserResizedRef.current
+        ? userMinHeightRef.current
+        : Math.max(textarea.scrollHeight, userMinHeightRef.current);
+      textarea.style.height = `${Math.min(desired, COMPOSER_ABSOLUTE_MAX_HEIGHT)}px`;
+    });
+  }, []);
+
+  const removeSnippet = useCallback((id: string) => {
+    setPastedSnippets((previous) => {
+      const target = previous.find((snippet) => snippet.id === id);
+      if (!target) return previous;
+      setValue((current) => removePasteTokens(current, target.index));
+      resizeTextareaToContent();
+      return previous.filter((snippet) => snippet.id !== id);
+    });
+  }, [resizeTextareaToContent]);
+
+  const handlePaste = useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (handleClipboardFiles(event)) return;
+    const text = event.clipboardData?.getData('text/plain');
+    if (!text || !isLongPastedText(text)) return;
+    event.preventDefault();
+    pastedSnippetSeqRef.current += 1;
+    const index = pastedSnippetSeqRef.current;
+    setPastedSnippets((previous) => [...previous, createPastedSnippet(text, index)]);
+
+    const textarea = event.currentTarget;
+    const start = textarea.selectionStart ?? value.length;
+    const end = textarea.selectionEnd ?? start;
+    const inserted = insertPasteTokenAtSelection(value, start, end, index);
+    setValue(inserted.value);
+    requestAnimationFrame(() => {
+      const current = textareaRef.current;
+      if (!current) return;
+      current.focus();
+      current.setSelectionRange(inserted.caret, inserted.caret);
+      current.style.height = 'auto';
+      current.style.height = `${Math.min(
+        Math.max(current.scrollHeight, userMinHeightRef.current),
+        COMPOSER_ABSOLUTE_MAX_HEIGHT,
+      )}px`;
+    });
+  }, [handleClipboardFiles, value]);
+
+  const handleSend = async () => {
+    const submittedValue = value;
+    const submittedSnippets = pastedSnippets;
+    const submittedScopeKey = composerScopeKey;
+    let recoveryScopeKey = submittedScopeKey;
+    const mergedContent = mergePastedSnippetsIntoContent(submittedValue, submittedSnippets);
+    if ((!mergedContent && attachedFiles.length === 0) || sending || streaming) return;
     if (!activeProjectId) {
       messageApi.warning(t('agentPage.selectProjectFirst', '请先选择一个项目'));
       return;
@@ -593,20 +1636,71 @@ export function AcpConversationPane() {
       return;
     }
 
+    const submittedAttachments = detachAttachments();
     setSending(true);
-    if (!textOverride) {
-      setValue('');
-      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    setValue('');
+    setPastedSnippets([]);
+    pastedSnippetSeqRef.current = 0;
+    if (textareaRef.current) {
+      textareaRef.current.style.height = hasUserResizedRef.current
+        ? `${userMinHeightRef.current}px`
+        : 'auto';
     }
+    setStickToBottomState(true);
+    setShowScrollToBottom(false);
     try {
+      const attachmentInputs = submittedAttachments.length > 0
+        ? await Promise.all(
+            submittedAttachments.map(({ file }) => fileToAttachmentInput(file)),
+          )
+        : undefined;
+      const finalContent = mergedContent
+        || t('chat.attachmentOnlyMessage', '(attachment)');
+      const titleSeed = submittedValue.replace(/\[\[paste:#\d+\]\]/g, '').trim()
+        || submittedSnippets[0]?.content.slice(0, 80)
+        || submittedAttachments[0]?.file.name
+        || t('agentPage.newThread', '新任务');
+
       let threadId = activeThreadId;
       if (!threadId) {
+        // The effect above normally finishes this work while the user types.
+        // Only await preparation when no authoritative draft snapshot exists;
+        // otherwise a second IPC delays the first visible message for no gain.
+        if (!draftKey || !sessionByThread[draftKey]) {
+          await prepareDraft(activeProjectId, effectiveAgentId);
+        }
         // First message in project → create thread then send
-        const thread = await createThread(activeProjectId, effectiveAgentId, text.slice(0, 48));
+        const thread = await createThread(activeProjectId, effectiveAgentId, titleSeed.slice(0, 48));
         threadId = thread.id;
+        recoveryScopeKey = `${activeProjectId}:${thread.id}:${effectiveAgentId}`;
+        // Draft adoption is the one scope transition that belongs to this send.
+        // Mark it consumed so a delayed effect cannot erase a failed-send restore.
+        previousComposerScopeRef.current = recoveryScopeKey;
       }
-      await sendPrompt(threadId, text);
+      await sendPrompt(threadId, finalContent, attachmentInputs);
+      revokeComposerAttachments(submittedAttachments);
     } catch (e) {
+      const currentScopeKey = composerScopeRef.current;
+      const currentStore = useAcpStore.getState();
+      const currentThread = [...currentStore.threads, ...currentStore.allThreads]
+        .find((thread) => thread.id === currentStore.activeThreadId);
+      const currentStoreScopeKey = `${currentStore.activeProjectId ?? ''}:${currentStore.activeThreadId ?? 'draft'}:${
+        currentThread?.agent_id ?? effectiveAgentId ?? ''
+      }`;
+      const belongsToSubmission = (scopeKey: string) => scopeKey === submittedScopeKey
+        || scopeKey === recoveryScopeKey;
+      const canRestore = belongsToSubmission(currentScopeKey)
+        && belongsToSubmission(currentStoreScopeKey);
+      if (canRestore) {
+        setValue((current) => current || submittedValue);
+        restoreAttachments(submittedAttachments);
+        setPastedSnippets((current) => (
+          current.length > 0 ? current : submittedSnippets
+        ));
+        resizeTextareaToContent();
+      } else {
+        revokeComposerAttachments(submittedAttachments);
+      }
       messageApi.error(String(e));
     } finally {
       setSending(false);
@@ -614,23 +1708,222 @@ export function AcpConversationPane() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Shift+Tab toggles plan mode (Codex-style), when the agent advertises plan.
+    if (e.key === 'Tab' && e.shiftKey) {
+      if (planOption || planMode) {
+        e.preventDefault();
+        void togglePlanMode();
+      }
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       void handleSend();
     }
   };
 
+  const autoResizeTextarea = useCallback((el: HTMLTextAreaElement) => {
+    el.style.height = 'auto';
+    const desired = hasUserResizedRef.current
+      ? userMinHeightRef.current
+      : Math.max(el.scrollHeight, userMinHeightRef.current);
+    el.style.height = `${Math.min(desired, COMPOSER_ABSOLUTE_MAX_HEIGHT)}px`;
+  }, []);
+
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setValue(e.target.value);
-    const el = e.target;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+    autoResizeTextarea(e.target);
   };
+
+  const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    resizeCleanupRef.current();
+    const textarea = textareaRef.current;
+    const startHeight = textarea ? textarea.offsetHeight : userMinHeightRef.current;
+    dragStateRef.current = { startY: e.clientY, startH: startHeight };
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!dragStateRef.current) return;
+      const delta = dragStateRef.current.startY - ev.clientY;
+      const newH = Math.max(
+        COMPOSER_INITIAL_MIN_HEIGHT,
+        Math.min(COMPOSER_ABSOLUTE_MAX_HEIGHT, dragStateRef.current.startH + delta),
+      );
+      hasUserResizedRef.current = true;
+      setUserMinHeight(newH);
+      userMinHeightRef.current = newH;
+      if (textarea) {
+        textarea.style.height = `${newH}px`;
+      }
+    };
+    const cleanupResize = () => {
+      dragStateRef.current = null;
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', cleanupResize);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      resizeCleanupRef.current = () => {};
+    };
+    resizeCleanupRef.current = cleanupResize;
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', cleanupResize);
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+  }, []);
+
+  useEffect(() => () => {
+    resizeCleanupRef.current();
+  }, []);
+
+  const handleCancel = useCallback(async () => {
+    if (!activeThreadId || cancelling) return;
+    try {
+      await cancelPrompt(activeThreadId);
+    } catch (error) {
+      messageApi.error(String(error));
+    }
+  }, [activeThreadId, cancelPrompt, cancelling, messageApi]);
+
+  const setStickToBottomState = useCallback((next: boolean) => {
+    stickToBottomRef.current = next;
+  }, []);
+
+  const getScrollBox = useCallback((): HTMLElement | null => {
+    return (bubbleListRef.current?.scrollBoxNativeElement as HTMLElement | null | undefined) ?? null;
+  }, []);
+
+  const syncScrollToBottomVisibility = useCallback(() => {
+    const target = getScrollBox();
+    if (!target) return;
+    const next = shouldShowScrollToBottom(
+      target.scrollHeight,
+      target.scrollTop,
+      target.clientHeight,
+      CHAT_SCROLL_IS_REVERSED,
+    );
+    setShowScrollToBottom((prev) => (prev === next ? prev : next));
+  }, [getScrollBox]);
+
+  const scrollListToBottom = useCallback((behavior: ScrollBehavior = 'auto') => {
+    try {
+      bubbleListRef.current?.scrollTo({ top: 'bottom', behavior });
+    } catch {
+      // jsdom (and some hosts) may not implement Element.scrollTo
+    }
+    setShowScrollToBottom(false);
+    setStickToBottomState(true);
+  }, [setStickToBottomState]);
+
+  const handleBubbleListScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const target = event.currentTarget;
+    setShowScrollToBottom(
+      shouldShowScrollToBottom(
+        target.scrollHeight,
+        target.scrollTop,
+        target.clientHeight,
+        CHAT_SCROLL_IS_REVERSED,
+      ),
+    );
+    const keepAutoScroll = shouldKeepAutoScroll(
+      target.scrollHeight,
+      target.scrollTop,
+      target.clientHeight,
+      CHAT_SCROLL_IS_REVERSED,
+      CHAT_AUTO_SCROLL_BOTTOM_THRESHOLD,
+    );
+    if (keepAutoScroll !== stickToBottomRef.current) {
+      setStickToBottomState(keepAutoScroll);
+    }
+  }, [setStickToBottomState]);
+
+  // Reset stick-to-bottom when switching threads
+  useEffect(() => {
+    setShowScrollToBottom(false);
+    setStickToBottomState(true);
+    const id = window.requestAnimationFrame(() => {
+      if (!stickToBottomRef.current) return;
+      try {
+        bubbleListRef.current?.scrollTo({ top: 'bottom', behavior: 'auto' });
+      } catch {
+        // ignore
+      }
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [activeThreadId, setStickToBottomState]);
+
+  // Active: streaming start / end while sticking → scroll to bottom
+  const prevStreamingRef = useRef(false);
+  useEffect(() => {
+    let timeoutId: number | null = null;
+    if (streaming && !prevStreamingRef.current) {
+      timeoutId = window.setTimeout(() => scrollListToBottom('smooth'), 50);
+    } else if (!streaming && prevStreamingRef.current && stickToBottomRef.current) {
+      timeoutId = window.setTimeout(() => {
+        try {
+          bubbleListRef.current?.scrollTo({ top: 'bottom', behavior: 'auto' });
+        } catch {
+          // ignore
+        }
+        syncScrollToBottomVisibility();
+      }, 30);
+    }
+    prevStreamingRef.current = streaming;
+    return () => {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
+    };
+  }, [scrollListToBottom, streaming, syncScrollToBottomVisibility]);
+
+  // Passive: follow message growth while stick-to-bottom (streaming tokens / new bubbles)
+  useEffect(() => {
+    if (!stickToBottomRef.current) {
+      syncScrollToBottomVisibility();
+      return;
+    }
+    const id = window.requestAnimationFrame(() => {
+      if (!stickToBottomRef.current) return;
+      try {
+        bubbleListRef.current?.scrollTo({ top: 'bottom', behavior: 'auto' });
+      } catch {
+        // ignore
+      }
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [messages, streaming, syncScrollToBottomVisibility]);
+
+  // Follow layout growth (markdown / tool cards expanding) while stick-to-bottom
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return;
+    let frameId = 0;
+    const scrollBox = getScrollBox();
+    const scrollContent = scrollBox?.querySelector(
+      '.ant-bubble-list-scroll-content',
+    ) as HTMLElement | null;
+    if (!scrollBox || !scrollContent) return;
+
+    const observer = new ResizeObserver(() => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(() => {
+        if (stickToBottomRef.current) {
+          try {
+            bubbleListRef.current?.scrollTo({ top: 'bottom', behavior: 'auto' });
+          } catch {
+            // ignore
+          }
+        } else {
+          syncScrollToBottomVisibility();
+        }
+      });
+    });
+    observer.observe(scrollContent);
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId);
+      observer.disconnect();
+    };
+  }, [activeThreadId, getScrollBox, messages.length, syncScrollToBottomVisibility]);
 
   const canSend =
     !sending
     && !streaming
-    && value.trim().length > 0
+    && (value.trim().length > 0 || attachedFiles.length > 0 || pastedSnippets.length > 0)
     && !!activeProjectId
     && !!effectiveAgentId;
 
@@ -674,8 +1967,188 @@ export function AcpConversationPane() {
 
   const showProjectEmpty = !!activeProject && (!activeThread || messages.length === 0);
 
+  const activeModelChoice = modelOption
+    ? configChoices(modelOption).find(
+      (c) => String(c.value) === String(modelOption.currentValue),
+    )
+    : undefined;
+
+  const thoughtIsMax = isMaxThoughtLevel(thoughtOption);
+  const thoughtAccent = thoughtIsMax ? '#7c3aed' : undefined;
+
+  const renderConfigDropdown = (
+    option: AcpSessionConfigOption,
+    opts?: {
+      icon?: ReactNode;
+      showModelIcon?: boolean;
+      accentColor?: string;
+    },
+  ) => (
+    <Dropdown
+      key={option.id}
+      menu={{
+        items: choiceItems(option),
+        selectedKeys: [String(option.currentValue)],
+        onClick: ({ key }) => {
+          void applyConfigChoice(option.id, configChoicePayload(option, key));
+        },
+        style: { maxHeight: 360, overflowY: 'auto' },
+      }}
+      trigger={['click']}
+      placement="topRight"
+      disabled={streaming || preparing || !!configUpdatingId}
+    >
+      <Button
+        type="text"
+        size="small"
+        loading={configUpdatingId === option.id}
+        icon={
+          opts?.showModelIcon ? (
+            <AcpModelChoiceIcon
+              modelId={
+                activeModelChoice
+                  ? modelIconKey(activeModelChoice)
+                  : String(option.currentValue ?? 'model')
+              }
+              agentId={effectiveAgentId}
+              agentName={agentMeta?.name}
+              agentIcon={agentMeta?.icon}
+              size={14}
+            />
+          ) : opts?.icon
+        }
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          fontSize: 12,
+          color: opts?.accentColor,
+        }}
+      >
+        {selectedOptionLabel(option)}
+      </Button>
+    </Dropdown>
+  );
+
+  const renderSpeedToggle = (option: AcpSessionConfigOption) => {
+    const enabled = isSpeedEnabled(option);
+    const label = option.name || t('agentPage.fast', 'Fast');
+    const tip = enabled
+      ? t('agentPage.fastOnTip', '{{name}} 已开启', { name: label })
+      : t('agentPage.fastOffTip', '{{name}} 已关闭', { name: label });
+    return (
+      <Tooltip key={option.id} title={tip}>
+        <Button
+          type="text"
+          size="small"
+          loading={configUpdatingId === option.id}
+          disabled={streaming || preparing || !!configUpdatingId}
+          aria-pressed={enabled}
+          aria-label={label}
+          onClick={() => {
+            const next = nextSpeedValue(option);
+            void applyConfigChoice(
+              option.id,
+              typeof next === 'boolean' ? next : next,
+            );
+          }}
+          icon={(
+            <Zap
+              size={14}
+              fill={enabled ? 'currentColor' : 'none'}
+              style={{ color: enabled ? token.colorWarning : token.colorTextSecondary }}
+            />
+          )}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            color: enabled ? token.colorWarning : token.colorTextSecondary,
+          }}
+        />
+      </Tooltip>
+    );
+  };
+
+  const renderPlanProgressControl = () => (
+    streaming && activePlan && activePlan.total > 0 ? (
+      <Popover
+        placement="topRight"
+        title={t('agentPage.planProgress', '计划进度')}
+        content={(
+          <div style={{ width: 280, maxHeight: 260, overflowY: 'auto' }}>
+            {activePlan.entries.map((entry, index) => (
+              <div
+                key={`${index}-${entry.content}`}
+                style={{ display: 'flex', gap: 8, paddingBlock: 4, fontSize: 12 }}
+              >
+                <span>{['completed', 'complete', 'done'].includes(entry.status) ? '✓' : '○'}</span>
+                <span style={{ flex: 1 }}>{entry.content}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      >
+        <Button type="text" size="small" style={{ display: 'flex', gap: 5 }}>
+          <Progress
+            type="circle"
+            size={16}
+            showInfo={false}
+            percent={(activePlan.completed / activePlan.total) * 100}
+          />
+          <ListTodo size={14} />
+          {activePlan.completed}/{activePlan.total}
+        </Button>
+      </Popover>
+    ) : null
+  );
+
+  const renderStopControl = () => (
+    streaming ? (
+      <Button
+        shape="circle"
+        size="small"
+        danger
+        icon={<Square size={14} />}
+        onClick={() => void handleCancel()}
+        loading={cancelling}
+        aria-label={t('agentPage.stop', '停止')}
+      />
+    ) : null
+  );
+
   const renderComposer = () => (
-    <div className="px-4 pb-3 pt-1 shrink-0">
+    <div className="relative px-4 pb-3 pt-1 shrink-0" {...dragHandlers}>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        style={{ display: 'none' }}
+        onChange={handleFileChange}
+      />
+      <AttachmentChips
+        attachments={attachedFiles}
+        snippets={pastedSnippets}
+        onRemoveAttachment={removeAttachment}
+        onRemoveSnippet={removeSnippet}
+      />
+      {showScrollToBottom && !showProjectEmpty ? (
+        <Button
+          size="small"
+          shape="round"
+          icon={<ChevronDown size={14} />}
+          onClick={() => scrollListToBottom('smooth')}
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: -28,
+            zIndex: 2,
+            transform: 'translateX(-50%)',
+            boxShadow: token.boxShadowSecondary,
+          }}
+        >
+          {t('chat.scrollToBottom')}
+        </Button>
+      ) : null}
       <div
         style={{
           border: '1px solid var(--border-color)',
@@ -684,13 +2157,110 @@ export function AcpConversationPane() {
           overflow: 'hidden',
         }}
       >
+        {activeInteraction ? (
+          <div
+            style={{
+              display: 'flex',
+              minWidth: 0,
+              maxHeight: 'min(60vh, 520px)',
+              flexDirection: 'column',
+              gap: 8,
+              padding: 14,
+              overflow: 'hidden',
+            }}
+          >
+            {pendingInteractions.length > 1 ? (
+              <div
+                style={{
+                  display: 'flex',
+                  flexShrink: 0,
+                  alignItems: 'center',
+                  justifyContent: 'flex-end',
+                  gap: 4,
+                }}
+              >
+                <Button
+                  type="text"
+                  size="small"
+                  disabled={clampedInteractionIndex <= 0}
+                  icon={<ChevronLeft size={16} />}
+                  aria-label={t('agentPage.interactionPrevItem', '上一项')}
+                  onClick={() => setInteractionCursor((index) => Math.max(0, index - 1))}
+                />
+                <Text
+                  type="secondary"
+                  aria-live="polite"
+                  style={{
+                    minWidth: 44,
+                    textAlign: 'center',
+                    fontSize: 12,
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  {clampedInteractionIndex + 1}/{pendingInteractions.length}
+                </Text>
+                <Button
+                  type="text"
+                  size="small"
+                  disabled={clampedInteractionIndex >= pendingInteractions.length - 1}
+                  icon={<ChevronRight size={16} />}
+                  aria-label={t('agentPage.interactionNextItem', '下一项')}
+                  onClick={() => setInteractionCursor((index) => (
+                    Math.min(pendingInteractions.length - 1, index + 1)
+                  ))}
+                />
+              </div>
+            ) : null}
+            <div style={{ minWidth: 0, minHeight: 0, flex: 1, overflow: 'hidden' }}>
+              <AcpInteractionComposer
+                key={activeInteraction.requestId}
+                request={activeInteraction}
+                onSubmit={(submission) => (
+                  'optionId' in submission
+                    ? respondPermission(
+                        activeInteraction.requestId,
+                        submission.optionId,
+                        submission.feedback,
+                      )
+                    : respondQuestionnaire(
+                        activeInteraction.requestId,
+                        submission.questionnaire,
+                      )
+                )}
+              />
+            </div>
+            <div className="flex items-center justify-end gap-1" style={{ flexShrink: 0 }}>
+              {renderPlanProgressControl()}
+              {renderStopControl()}
+            </div>
+          </div>
+        ) : (
+          <>
+        {/* Drag-to-resize handle (parity with chat InputArea) */}
+        <div
+          onMouseDown={handleResizeMouseDown}
+          style={{
+            height: 10,
+            cursor: 'ns-resize',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          }}
+        >
+          <GripHorizontal size={14} style={{ color: token.colorTextQuaternary, opacity: 0.5 }} />
+        </div>
         <textarea
           className="aqbot-input-textarea"
           ref={textareaRef}
           value={value}
           onChange={handleInput}
           onKeyDown={handleKeyDown}
-          placeholder={t('agentPage.inputPlaceholder', 'Do anything')}
+          onPaste={handlePaste}
+          placeholder={t('agentPage.inputPlaceholder', '做点什么…')}
+          aria-label={t('agentPage.inputPlaceholder', '做点什么…')}
+          name="acp-prompt"
+          autoComplete="off"
           rows={1}
           disabled={sending || !activeProjectId}
           style={{
@@ -698,53 +2268,78 @@ export function AcpConversationPane() {
             border: 'none',
             outline: 'none',
             resize: 'none',
-            padding: '12px 16px 8px',
+            padding: '8px 16px 8px',
             fontSize: token.fontSize,
             lineHeight: 1.6,
             backgroundColor: 'transparent',
             color: token.colorText,
             fontFamily: 'inherit',
-            minHeight: 44,
-            maxHeight: 200,
+            minHeight: userMinHeight,
+            maxHeight: COMPOSER_ABSOLUTE_MAX_HEIGHT,
+            height: hasUserResizedRef.current ? userMinHeight : undefined,
             overflowY: 'auto',
           }}
         />
-        {/* Inside input: agent (only pickable before first message) + send */}
+        {/* Inside input: permission (left) · model/reasoning/fast + send (right) */}
         <div className="flex flex-wrap items-center justify-between gap-1 px-2 pb-2">
           <div className="flex flex-wrap items-center gap-0.5">
-            <Dropdown
-              menu={{
-                items: agentMenuItems,
-                selectedKeys: effectiveAgentId ? [effectiveAgentId] : [],
-                onClick: ({ key }) => {
-                  if (!activeThreadId) setComposerAgentId(key);
-                },
-              }}
-              trigger={['click']}
-              disabled={!!activeThreadId || agents.length === 0}
-            >
+            <Tooltip title={t('agentPage.attachFile')}>
               <Button
                 type="text"
                 size="small"
-                style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}
+                icon={<Paperclip size={14} />}
+                onClick={openFilePicker}
+                disabled={sending || streaming || !activeProjectId || !effectiveAgentId}
+                aria-label={t('agentPage.attachFile')}
+              />
+            </Tooltip>
+            {permissionOption ? (
+              <Dropdown
+                menu={{
+                  items: choiceItems(permissionOption, permissionChoices),
+                  selectedKeys: selectedPermissionValue == null
+                    ? []
+                    : [String(selectedPermissionValue)],
+                  onClick: ({ key }) => handlePermissionChange(key),
+                }}
+                trigger={['click']}
+                placement="topLeft"
+                disabled={planEnabled || streaming || preparing || !!configUpdatingId}
               >
-                {effectiveAgentId ? (
-                  <AcpAgentIcon
-                    agentId={effectiveAgentId}
-                    agentName={agentMeta?.name}
-                    icon={agentMeta?.icon}
-                    size={16}
-                  />
-                ) : (
-                  <Bot size={14} />
-                )}
-                {agentMeta?.name || t('agentPage.selectAgent')}
-              </Button>
-            </Dropdown>
+                <Button
+                  type="text"
+                  size="small"
+                  loading={preparing || configUpdatingId === permissionOption.id}
+                  icon={isFullAccessPermissionChoice(
+                    selectedPermissionValue,
+                    selectedPermissionLabel,
+                  )
+                    ? <ShieldAlert size={14} style={{ color: '#ff4d4f' }} />
+                    : /agent|auto|acceptedits/i.test(String(selectedPermissionValue))
+                      ? <ShieldCheck size={14} style={{ color: '#1890ff' }} />
+                      : <Shield size={14} />}
+                  style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}
+                >
+                  {selectedPermissionLabel}
+                </Button>
+              </Dropdown>
+            ) : null}
           </div>
-          <div className="flex items-center gap-2 ml-auto">
+          <div className="flex items-center gap-1 ml-auto">
+            {modelOption ? renderConfigDropdown(modelOption, { showModelIcon: true }) : null}
+            {thoughtOption ? renderConfigDropdown(thoughtOption, {
+              icon: (
+                <BrainCircuit
+                  size={14}
+                  style={thoughtAccent ? { color: thoughtAccent } : undefined}
+                />
+              ),
+              accentColor: thoughtAccent,
+            }) : null}
+            {modelConfigExtras.map((option) => renderSpeedToggle(option))}
+            {renderPlanProgressControl()}
             {streaming ? (
-              <Button shape="circle" size="small" danger icon={<Square size={14} />} disabled />
+              renderStopControl()
             ) : (
               <Button
                 type="primary"
@@ -754,39 +2349,124 @@ export function AcpConversationPane() {
                 onClick={() => void handleSend()}
                 disabled={!canSend}
                 loading={sending}
+                aria-label={t('agentPage.send', '发送')}
               />
             )}
           </div>
         </div>
+          </>
+        )}
       </div>
 
-      {/* Bottom bar: permission left · git branch right */}
+      {/* Bottom bar: agent picker + plan tag · git branch */}
       <div className="flex flex-wrap items-center justify-between gap-y-1 px-1 pt-1">
         <div className="flex flex-wrap items-center gap-1">
+          {sessionKey && !sessionSnapshot ? (
+            preparing || !statusByThread[sessionKey] ? (
+              <Button type="text" size="small" loading disabled style={{ fontSize: 12 }}>
+                {agentProcessReady
+                  ? t('agentPage.preparingConversation', '正在准备对话…')
+                  : t('agentPage.preparing', '正在连接 Agent…')}
+              </Button>
+            ) : (
+              <Tooltip
+                title={localizedStatus(statusByThread[sessionKey])
+                  || t('agentPage.prepareFailed', 'Agent 连接失败')}
+              >
+                <Button
+                  type="text"
+                  danger
+                  size="small"
+                  icon={<RefreshCw size={14} />}
+                  onClick={() => {
+                    if (activeThreadId) {
+                      void prepareSession(activeThreadId).catch(() => undefined);
+                    } else if (activeProjectId && effectiveAgentId) {
+                      void prepareDraft(activeProjectId, effectiveAgentId).catch(() => undefined);
+                    }
+                  }}
+                  style={{ fontSize: 12 }}
+                >
+                  {t('agentPage.retryConnection', '重试连接')}
+                </Button>
+              </Tooltip>
+            )
+          ) : null}
           <Dropdown
             menu={{
-              items: permissionModeItems,
-              selectedKeys: [permissionMode],
-              onClick: ({ key }) => void handlePermissionModeChange(key),
+              items: agentMenuItems,
+              selectedKeys: effectiveAgentId ? [effectiveAgentId] : [],
+              onClick: ({ key }) => {
+                if (!activeThreadId) {
+                  composerScopeRef.current = `${activeProjectId ?? ''}:draft:${key}`;
+                  setComposerAgentId(key);
+                }
+              },
             }}
             trigger={['click']}
-            placement="topLeft"
+            disabled={!!activeThreadId || agents.length === 0}
           >
             <Button
               type="text"
               size="small"
-              icon={permissionModeIcon}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-                fontSize: 12,
-                ...(permissionMode === 'full_access' ? { color: '#ff4d4f' } : {}),
-              }}
+              style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}
             >
-              {permissionModeLabel}
+              {effectiveAgentId ? (
+                <AcpAgentIcon
+                  agentId={effectiveAgentId}
+                  agentName={agentMeta?.name}
+                  icon={agentMeta?.icon}
+                  size={16}
+                />
+              ) : (
+                <Bot size={14} />
+              )}
+              {agentMeta?.name || t('agentPage.selectAgent')}
             </Button>
           </Dropdown>
+          {planEnabled ? (
+            <span
+              aria-label={t('agentPage.plan', '计划')}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                height: 24,
+                paddingInline: 8,
+                borderRadius: token.borderRadiusSM,
+                border: `1px solid ${token.colorBorder}`,
+                background: token.colorBgContainer,
+                color: token.colorText,
+                fontSize: 12,
+                lineHeight: 1,
+                boxSizing: 'border-box',
+              }}
+            >
+              <ListTodo size={12} style={{ flexShrink: 0 }} />
+              <span>{t('agentPage.plan', '计划')}</span>
+              <button
+                type="button"
+                aria-label={t('common.close', '关闭')}
+                onClick={() => void disablePlanMode()}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  margin: 0,
+                  marginInlineStart: 2,
+                  padding: 0,
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'inherit',
+                  opacity: 0.55,
+                  cursor: 'pointer',
+                  lineHeight: 0,
+                }}
+              >
+                <X size={12} />
+              </button>
+            </span>
+          ) : null}
         </div>
         <div className="flex items-center gap-2 ml-auto">
           {gitInfo?.isRepo ? (
@@ -841,6 +2521,27 @@ export function AcpConversationPane() {
           ) : null}
         </div>
       </div>
+      {isDragging ? (
+        <div
+          className="fixed inset-0 z-[1000] flex items-center justify-center"
+          style={{
+            background: 'rgba(0, 0, 0, 0.36)',
+            backdropFilter: 'blur(2px)',
+            pointerEvents: 'none',
+          }}
+        >
+          <div
+            className="flex flex-col items-center gap-3 rounded-2xl px-10 py-8"
+            style={{
+              color: token.colorTextLightSolid,
+              border: '2px dashed currentColor',
+            }}
+          >
+            <Upload size={34} />
+            <Text style={{ color: 'inherit' }}>{t('agentPage.dropFiles')}</Text>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 
@@ -891,18 +2592,6 @@ export function AcpConversationPane() {
                 margin: 'auto',
               }}
             >
-              <div style={{ opacity: 0.35, marginBottom: 4 }}>
-                {effectiveAgentId ? (
-                  <AcpAgentIcon
-                    agentId={effectiveAgentId}
-                    agentName={agentMeta?.name}
-                    icon={agentMeta?.icon}
-                    size={48}
-                  />
-                ) : (
-                  <Bot size={48} strokeWidth={1.25} />
-                )}
-              </div>
               <Title
                 level={3}
                 style={{
@@ -911,12 +2600,58 @@ export function AcpConversationPane() {
                   textAlign: 'center',
                   fontSize: 22,
                   width: '100%',
+                  lineHeight: 1.55,
                 }}
               >
-                {t('agentPage.projectWelcome', {
-                  name: activeProject.name,
-                  defaultValue: `要在 ${activeProject.name} 内开发什么？`,
-                })}
+                {/* 让 {Agent} 在 {project} 中开发什么 — agent/project are dashed dropdowns */}
+                {t('agentPage.projectWelcomePrefix', '让')}
+                {' '}
+                <Dropdown
+                  menu={{
+                    items: agentMenuItems,
+                    selectedKeys: effectiveAgentId ? [effectiveAgentId] : [],
+                    onClick: ({ key }) => {
+                      if (!activeThreadId) setComposerAgentId(key);
+                    },
+                  }}
+                  trigger={['click']}
+                  disabled={agents.length === 0}
+                >
+                  <button type="button" style={welcomeLinkStyle}>
+                    {effectiveAgentId ? (
+                      <AcpAgentIcon
+                        agentId={effectiveAgentId}
+                        agentName={agentMeta?.name}
+                        icon={agentMeta?.icon}
+                        size={20}
+                      />
+                    ) : (
+                      <Bot size={18} />
+                    )}
+                    <span>
+                      {agentMeta?.name || t('agentPage.selectAgent', '选择 Agent')}
+                    </span>
+                  </button>
+                </Dropdown>
+                {' '}
+                {t('agentPage.projectWelcomeMiddle', '在')}
+                {' '}
+                <Dropdown
+                  menu={{
+                    items: projectMenuItems,
+                    selectedKeys: activeProjectId ? [activeProjectId] : [],
+                    onClick: ({ key }) => {
+                      void selectProject(key);
+                    },
+                  }}
+                  trigger={['click']}
+                >
+                  <button type="button" style={welcomeLinkStyle}>
+                    <span>{activeProject.name}</span>
+                  </button>
+                </Dropdown>
+                {' '}
+                {t('agentPage.projectWelcomeSuffix', '中做点什么？')}
               </Title>
               <Prompts
                 items={projectPromptItems}
@@ -972,11 +2707,37 @@ export function AcpConversationPane() {
                 width: 100%;
                 box-sizing: border-box;
               }
+              /* Plan cards occupy the full message content width */
+              .aqbot-acp-bubble-list .ant-bubble-content [data-type="acp-plan"],
+              .aqbot-acp-bubble-list .ant-bubble-content .acp-plan-node,
+              .aqbot-acp-bubble-list .ant-bubble-start .ant-bubble-content {
+                max-width: 100%;
+              }
+              .aqbot-acp-bubble-list .ant-bubble-start.ant-bubble-role-plan .ant-bubble-content,
+              .aqbot-acp-bubble-list .ant-bubble-start.ant-bubble-role-plan .ant-bubble-content-wrapper {
+                width: 100%;
+                max-width: 100%;
+              }
+              /* Match ChatView conversation bubble styles */
+              .aqbot-acp-bubble-list.bubble-compact .ant-bubble {
+                margin-bottom: 4px;
+              }
+              .aqbot-acp-bubble-list.bubble-compact .ant-bubble-content {
+                padding: 6px 10px;
+              }
+              .aqbot-acp-bubble-list.bubble-minimal .ant-bubble-content {
+                background: transparent !important;
+                box-shadow: none !important;
+                border: none !important;
+                padding: 4px 0;
+              }
             `}</style>
             <Bubble.List
-              className="aqbot-acp-bubble-list"
+              ref={bubbleListRef}
+              className={`aqbot-acp-bubble-list bubble-${bubbleStyle}`}
               items={bubbleItems}
-              autoScroll
+              autoScroll={false}
+              onScroll={handleBubbleListScroll}
               role={roles as never}
               style={{
                 height: '100%',

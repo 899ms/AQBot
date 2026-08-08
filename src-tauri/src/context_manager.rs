@@ -107,10 +107,7 @@ pub fn resolve_message_count_limit(
 /// `None` leaves history unchanged. `Some(0)` keeps the last message group
 /// (current user turn). Tool-call groups are kept atomically so the provider
 /// never receives an orphan `tool` result without its assistant call.
-pub fn apply_message_count_limit(
-    history: &[ChatMessage],
-    limit: Option<u32>,
-) -> Vec<ChatMessage> {
+pub fn apply_message_count_limit(history: &[ChatMessage], limit: Option<u32>) -> Vec<ChatMessage> {
     let Some(raw_limit) = limit else {
         return history.to_vec();
     };
@@ -351,7 +348,10 @@ pub fn build_summary_prompt_with_custom(
 }
 
 /// Rebuild a compression prompt from stored `source_text` (retry path).
-pub fn build_summary_prompt_from_source(source_text: &str, system_prompt: &str) -> Vec<ChatMessage> {
+pub fn build_summary_prompt_from_source(
+    source_text: &str,
+    system_prompt: &str,
+) -> Vec<ChatMessage> {
     vec![
         ChatMessage {
             role: "system".to_string(),
@@ -362,10 +362,7 @@ pub fn build_summary_prompt_from_source(source_text: &str, system_prompt: &str) 
         },
         ChatMessage {
             role: "user".to_string(),
-            content: ChatContent::Text(format!(
-                "{}{}",
-                source_text, COMPRESSION_FOOTER_REMINDER
-            )),
+            content: ChatContent::Text(format!("{}{}", source_text, COMPRESSION_FOOTER_REMINDER)),
             reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
@@ -562,27 +559,12 @@ mod tests {
 
     #[test]
     fn resolve_message_count_limit_prefers_conversation_over_global() {
-        assert_eq!(
-            resolve_message_count_limit(Some(1), Some(10)),
-            Some(1)
-        );
-        assert_eq!(
-            resolve_message_count_limit(None, Some(3)),
-            Some(3)
-        );
+        assert_eq!(resolve_message_count_limit(Some(1), Some(10)), Some(1));
+        assert_eq!(resolve_message_count_limit(None, Some(3)), Some(3));
         assert_eq!(resolve_message_count_limit(None, None), None);
-        assert_eq!(
-            resolve_message_count_limit(Some(50), Some(3)),
-            None
-        );
-        assert_eq!(
-            resolve_message_count_limit(None, Some(50)),
-            None
-        );
-        assert_eq!(
-            resolve_message_count_limit(Some(0), None),
-            Some(0)
-        );
+        assert_eq!(resolve_message_count_limit(Some(50), Some(3)), None);
+        assert_eq!(resolve_message_count_limit(None, Some(50)), None);
+        assert_eq!(resolve_message_count_limit(Some(0), None), Some(0));
     }
 
     #[test]
@@ -596,10 +578,7 @@ mod tests {
         ];
 
         assert_eq!(apply_message_count_limit(&history, None).len(), 5);
-        assert_eq!(
-            apply_message_count_limit(&history, Some(50)).len(),
-            5
-        );
+        assert_eq!(apply_message_count_limit(&history, Some(50)).len(), 5);
 
         let limited_one = apply_message_count_limit(&history, Some(1));
         assert_eq!(limited_one.len(), 1);

@@ -612,127 +612,12 @@ pub(crate) async fn persist_attachments(
     conversation_id: &str,
     attachments: &[AttachmentInput],
 ) -> aqbot_core::error::Result<Vec<Attachment>> {
-    for (index, attachment) in attachments.iter().enumerate() {
-        if aqbot_core::inline_media::contains_inline_image_data(&attachment.file_name)
-            || aqbot_core::inline_media::contains_inline_image_data(&attachment.file_type)
-        {
-            return Err(aqbot_core::error::AQBotError::Validation(format!(
-                "Attachment {index} metadata contains inline image data"
-            )));
-        }
-    }
-    aqbot_core::storage_paths::ensure_documents_dirs()?;
-    let file_store = aqbot_core::file_store::FileStore::new();
-    let _file_reference_guard = aqbot_core::repo::stored_file::lock_file_references().await;
-    let txn = state.sea_db.begin().await?;
-    let mut created_paths = Vec::new();
-    let operation = async {
-        let mut persisted = Vec::with_capacity(attachments.len());
-        for attachment in attachments {
-            let data = base64::engine::general_purpose::STANDARD
-                .decode(&attachment.data)
-                .map_err(|e| {
-                    aqbot_core::error::AQBotError::Validation(format!(
-                        "Invalid attachment base64 for {}: {}",
-                        attachment.file_name, e
-                    ))
-                })?;
-            let saved =
-                file_store.save_file(&data, &attachment.file_name, &attachment.file_type)?;
-            if saved.created {
-                created_paths.push(saved.storage_path.clone());
-            }
-            let stored_file_id = aqbot_core::utils::gen_id();
-            aqbot_core::entity::stored_files::ActiveModel {
-                id: Set(stored_file_id.clone()),
-                hash: Set(saved.hash),
-                original_name: Set(attachment.file_name.clone()),
-                mime_type: Set(attachment.file_type.clone()),
-                size_bytes: Set(saved.size_bytes),
-                storage_path: Set(saved.storage_path.clone()),
-                conversation_id: Set(Some(conversation_id.to_string())),
-                ..Default::default()
-            }
-            .insert(&txn)
-            .await?;
-
-            persisted.push(Attachment {
-                id: stored_file_id,
-                file_type: attachment.file_type.clone(),
-                file_name: attachment.file_name.clone(),
-                file_path: saved.storage_path,
-                file_size: attachment.file_size,
-                data: None,
-            });
-        }
-        Ok::<_, aqbot_core::error::AQBotError>(persisted)
-    }
-    .await;
-
-    let persisted = match operation {
-        Ok(persisted) => persisted,
-        Err(error) => {
-            let rollback_error = txn.rollback().await.err();
-            let cleanup_errors =
-                cleanup_created_attachment_paths(&state.sea_db, &file_store, &created_paths).await;
-            return Err(attachment_persistence_failure(
-                error,
-                rollback_error,
-                cleanup_errors,
-            ));
-        }
-    };
-    if let Err(error) = txn.commit().await {
-        let cleanup_errors =
-            cleanup_created_attachment_paths(&state.sea_db, &file_store, &created_paths).await;
-        return Err(attachment_persistence_failure(
-            error.into(),
-            None,
-            cleanup_errors,
-        ));
-    }
-    Ok(persisted)
-}
-
-async fn cleanup_created_attachment_paths(
-    db: &DatabaseConnection,
-    file_store: &aqbot_core::file_store::FileStore,
-    paths: &[String],
-) -> Vec<String> {
-    let mut errors = Vec::new();
-    for path in paths {
-        match aqbot_core::repo::stored_file::count_stored_files_with_storage_path(db, path).await {
-            Ok(0) => {
-                if let Err(error) = file_store.delete_file(path) {
-                    errors.push(format!("failed to remove {path}: {error}"));
-                }
-            }
-            Ok(_) => {}
-            Err(error) => errors.push(format!("failed to inspect {path}: {error}")),
-        }
-    }
-    errors
-}
-
-fn attachment_persistence_failure(
-    primary: aqbot_core::error::AQBotError,
-    rollback: Option<sea_orm::DbErr>,
-    cleanup: Vec<String>,
-) -> aqbot_core::error::AQBotError {
-    if rollback.is_none() && cleanup.is_empty() {
-        return primary;
-    }
-    aqbot_core::error::AQBotError::Validation(format!(
-        "{primary}; rollback error: {}; cleanup errors: {}",
-        rollback
-            .map(|error| error.to_string())
-            .unwrap_or_else(|| "none".to_string()),
-        if cleanup.is_empty() {
-            "none".to_string()
-        } else {
-            cleanup.join(", ")
-        }
-    ))
+    aqbot_core::attachment_persistence::persist_attachments(
+        &state.sea_db,
+        Some(conversation_id),
+        attachments,
+    )
+    .await
 }
 
 pub(crate) async fn cleanup_new_message_attachments(
@@ -1445,11 +1330,8 @@ fn resolve_compressed_until_with_keep(
     keep_last_n: u32,
     force_retain_from_id: Option<&str>,
 ) -> Option<String> {
-    let force_idx = force_retain_from_id.and_then(|id| {
-        db_messages
-            .iter()
-            .position(|message| message.id == id)
-    });
+    let force_idx =
+        force_retain_from_id.and_then(|id| db_messages.iter().position(|message| message.id == id));
 
     let compressible_indices: Vec<usize> = db_messages
         .iter()
@@ -1467,11 +1349,7 @@ fn resolve_compressed_until_with_keep(
         .len()
         .saturating_sub(keep_last_n as usize);
     let keep_start_by_force = force_idx
-        .and_then(|force| {
-            compressible_indices
-                .iter()
-                .position(|&idx| idx >= force)
-        })
+        .and_then(|force| compressible_indices.iter().position(|&idx| idx >= force))
         .unwrap_or(compressible_indices.len());
     let keep_start = keep_start_by_n.min(keep_start_by_force);
 
@@ -4414,29 +4292,28 @@ pub async fn send_message(
             Some(&user_message.id),
         );
         // Perform synchronous compression before sending
-        let compression_result = if messages_to_compress.is_empty()
-            || compressed_until_message_id.is_none()
-        {
-            None
-        } else {
-            do_compress(
-                &state.sea_db,
-                &conversation_id,
-                &messages_to_compress,
-                effective_existing_summary.map(|s| s.summary_text.as_str()),
-                compressed_until_message_id.as_deref(),
-                &provider,
-                &decrypted_key,
-                &key_row.id,
-                &resolved_proxy,
-                &conversation.model_id,
-                use_max_completion_tokens,
-                &global_settings,
-                &state.master_key,
-            )
-            .await
-            .ok()
-        };
+        let compression_result =
+            if messages_to_compress.is_empty() || compressed_until_message_id.is_none() {
+                None
+            } else {
+                do_compress(
+                    &state.sea_db,
+                    &conversation_id,
+                    &messages_to_compress,
+                    effective_existing_summary.map(|s| s.summary_text.as_str()),
+                    compressed_until_message_id.as_deref(),
+                    &provider,
+                    &decrypted_key,
+                    &key_row.id,
+                    &resolved_proxy,
+                    &conversation.model_id,
+                    use_max_completion_tokens,
+                    &global_settings,
+                    &state.master_key,
+                )
+                .await
+                .ok()
+            };
 
         if let Some(summary) = compression_result {
             // Insert compression marker
@@ -5529,12 +5406,8 @@ pub async fn compress_context(
     );
 
     let mut boundary_start_index = context_boundary.start_index;
-    let mut compressed_until_message_id = resolve_compressed_until_with_keep(
-        &db_messages,
-        boundary_start_index,
-        keep_last_n,
-        None,
-    );
+    let mut compressed_until_message_id =
+        resolve_compressed_until_with_keep(&db_messages, boundary_start_index, keep_last_n, None);
 
     // Fall back: if nothing to compress after boundary (only keep-N left), try full history.
     if compressed_until_message_id.is_none() && boundary_start_index > 0 {
@@ -5562,9 +5435,9 @@ pub async fn compress_context(
         return Err("No messages to compress".to_string());
     }
 
-    let effective_existing_summary = existing_summary
-        .as_ref()
-        .filter(|_| context_boundary.use_summary && boundary_start_index == context_boundary.start_index);
+    let effective_existing_summary = existing_summary.as_ref().filter(|_| {
+        context_boundary.use_summary && boundary_start_index == context_boundary.start_index
+    });
 
     // Compress
     let use_max_completion_tokens = aqbot_core::repo::provider::get_model(
@@ -5661,9 +5534,8 @@ pub async fn retry_compression(
         .first()
         .map(|k| k.key_encrypted.clone())
         .ok_or_else(|| "No API key configured".to_string())?;
-    let decrypted_key =
-        aqbot_core::crypto::decrypt_key(&fallback_key_encrypted, &state.master_key)
-            .map_err(|e| e.to_string())?;
+    let decrypted_key = aqbot_core::crypto::decrypt_key(&fallback_key_encrypted, &state.master_key)
+        .map_err(|e| e.to_string())?;
 
     let global_settings = aqbot_core::repo::settings::get_settings(&state.sea_db)
         .await
@@ -5683,8 +5555,9 @@ pub async fn retry_compression(
                 let first_key = p.keys.first().cloned();
                 match first_key {
                     Some(k) => {
-                        let dk = aqbot_core::crypto::decrypt_key(&k.key_encrypted, &state.master_key)
-                            .map_err(|e| e.to_string())?;
+                        let dk =
+                            aqbot_core::crypto::decrypt_key(&k.key_encrypted, &state.master_key)
+                                .map_err(|e| e.to_string())?;
                         let override_umc =
                             aqbot_core::repo::provider::get_model(&state.sea_db, pid, mid)
                                 .await
@@ -5783,10 +5656,7 @@ pub async fn retry_compression(
 
     ensure_conversation_summary_safe_for_ipc(&summary)?;
 
-    let _ = app.emit(
-        "conversation:summary-updated",
-        summary.clone(),
-    );
+    let _ = app.emit("conversation:summary-updated", summary.clone());
 
     Ok(summary)
 }
@@ -7231,9 +7101,27 @@ mod tests {
     fn resolve_compressed_until_with_keep_last_n() {
         let messages = vec![
             test_message("u1", MessageRole::User, "u1", None, 0, true, None, None),
-            test_message("a1", MessageRole::Assistant, "a1", Some("u1"), 0, true, None, None),
+            test_message(
+                "a1",
+                MessageRole::Assistant,
+                "a1",
+                Some("u1"),
+                0,
+                true,
+                None,
+                None,
+            ),
             test_message("u2", MessageRole::User, "u2", None, 0, true, None, None),
-            test_message("a2", MessageRole::Assistant, "a2", Some("u2"), 0, true, None, None),
+            test_message(
+                "a2",
+                MessageRole::Assistant,
+                "a2",
+                Some("u2"),
+                0,
+                true,
+                None,
+                None,
+            ),
             test_message("u3", MessageRole::User, "u3", None, 0, true, None, None),
         ];
 

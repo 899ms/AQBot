@@ -148,8 +148,8 @@ pub async fn list_tool_executions(
 ) -> Result<Vec<ToolExecution>, String> {
     let executions =
         aqbot_core::repo::tool_execution::list_tool_executions(&state.sea_db, &conversation_id)
-        .await
-        .map_err(|e| e.to_string())?;
+            .await
+            .map_err(|e| e.to_string())?;
     Ok(sanitize_tool_executions_for_ipc(executions))
 }
 
@@ -162,8 +162,7 @@ fn sanitize_tool_executions_for_ipc(mut executions: Vec<ToolExecution>) -> Vec<T
             aqbot_core::inline_media::filter_complete_inline_data(&execution.server_id);
         execution.tool_name =
             aqbot_core::inline_media::filter_complete_inline_data(&execution.tool_name);
-        execution.status =
-            aqbot_core::inline_media::filter_complete_inline_data(&execution.status);
+        execution.status = aqbot_core::inline_media::filter_complete_inline_data(&execution.status);
         execution.created_at =
             aqbot_core::inline_media::filter_complete_inline_data(&execution.created_at);
         for preview in [
@@ -181,9 +180,7 @@ fn sanitize_tool_executions_for_ipc(mut executions: Vec<ToolExecution>) -> Vec<T
     executions
 }
 
-fn sanitize_tool_descriptors_for_ipc(
-    mut descriptors: Vec<ToolDescriptor>,
-) -> Vec<ToolDescriptor> {
+fn sanitize_tool_descriptors_for_ipc(mut descriptors: Vec<ToolDescriptor>) -> Vec<ToolDescriptor> {
     for descriptor in &mut descriptors {
         descriptor.id = aqbot_core::inline_media::filter_complete_inline_data(&descriptor.id);
         descriptor.server_id =

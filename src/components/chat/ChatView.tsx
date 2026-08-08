@@ -1,8 +1,8 @@
 import React, { useMemo, useCallback, useRef, useState, useEffect, useSyncExternalStore } from 'react';
-import { CloseCircleFilled, SyncOutlined } from '@ant-design/icons';
-import { Typography, Button, Dropdown, Input, App, Avatar, Alert, Popconfirm, Popover, theme, Tag, Image, Tooltip, Modal, Spin, Checkbox, Tabs } from 'antd';
+import { SyncOutlined } from '@ant-design/icons';
+import { Typography, Button, Dropdown, Input, App, Avatar, Alert, Popconfirm, Popover, theme, Tag, Tooltip, Modal, Spin, Checkbox, Tabs } from 'antd';
 import type { InputRef } from 'antd';
-import { Pencil, Share2, FileImage, FileCode, FileText, FileType, Bot, Lightbulb, Code, Languages, Copy, Check, RotateCcw, User, Trash2, ChevronLeft, ChevronRight, ChevronDown, Scissors, Paperclip, AlertCircle, X, ArrowDown, ArrowUp, ArrowLeftRight, Zap, Sparkles, TextCursorInput, GitBranch, ChartNoAxesColumn, MessageSquare, ArrowUpRight, ArrowDownRight, Coins, Clock, Timer, Download, PanelLeftClose, PanelLeftOpen, ListChecks } from 'lucide-react';
+import { Pencil, Share2, FileImage, FileCode, FileText, FileType, Bot, Lightbulb, Code, Languages, Copy, Check, RotateCcw, User, Trash2, ChevronLeft, ChevronRight, ChevronDown, Scissors, AlertCircle, X, ArrowDown, ArrowUp, ArrowLeftRight, Zap, Sparkles, TextCursorInput, GitBranch, ChartNoAxesColumn, MessageSquare, ArrowUpRight, ArrowDownRight, Coins, Clock, Timer, Download, PanelLeftClose, PanelLeftOpen, ListChecks } from 'lucide-react';
 import { ModelIcon } from '@lobehub/icons';
 import { getConvIcon } from '@/lib/convIcon';
 import { getRoleIntro } from '@/lib/roleIntro';
@@ -53,15 +53,11 @@ import {
 import { useDeferredChatMarkdown } from '@/hooks/useDeferredChatMarkdown';
 import {
   usePageSuspendCleanup,
-  usePageConnectionGeneration,
   usePageTransientOpenState,
 } from '@/components/layout/PageLifecycle';
 import { normalizeHtmlRenderContent } from '@/lib/chatHtmlRender';
 import { normalizeThinkTagsForMarkdown } from '@/lib/thinkTags';
-import {
-  loadStoredMediaSource,
-  normalizeStoredMediaUrlsForPlatform,
-} from '@/lib/storedMedia';
+import { normalizeStoredMediaUrlsForPlatform } from '@/lib/storedMedia';
 import {
   getMessageVersionGroupKey,
   hasMultipleModelVersions,
@@ -120,6 +116,7 @@ import { ChatImageNode } from './ChatImageNode';
 import { HtmlRenderNode } from './HtmlRenderNode';
 import { formatChatTime } from './chatTime';
 import { ChatMessageRenderBoundary } from './ChatMessageRenderBoundary';
+import { MessageAttachmentPreview } from './MessageAttachmentPreview';
 import {
   collectRetainedChatCacheKeys,
   retainMapKeys,
@@ -129,7 +126,7 @@ import { perfNow, perfTraceDuration } from '@/lib/perfTrace';
 import { invoke } from '@/lib/invoke';
 import { registerHighlight } from 'stream-markdown';
 import { useResolvedAvatarSrc } from '@/hooks/useResolvedAvatarSrc';
-import type { Message, Attachment, ConversationStats, ConversationSummary } from '@/types';
+import type { Message, ConversationStats, ConversationSummary } from '@/types';
 
 // ── markstream-react custom thinking component ──────────────────────────
 
@@ -174,172 +171,6 @@ function StreamingAssistantContent({
 }) {
   const liveContent = useLiveStreamContent(messageId, isStreaming);
   return <>{children(liveContent ?? baseContent)}</>;
-}
-
-// ── Attachment preview component ────────────────────────────────────────
-
-const ATTACHMENT_IMG_STYLE: React.CSSProperties = {
-  maxWidth: 200,
-  maxHeight: 160,
-  borderRadius: 8,
-  objectFit: 'cover' as const,
-};
-
-function AttachmentPreview({ att, themeColor }: { att: Attachment; themeColor: string }) {
-  const { t } = useTranslation();
-  const { modal } = App.useApp();
-  const isImage = att.file_type?.startsWith('image/');
-  const [src, setSrc] = React.useState<string | null>(() => {
-    if (!isImage) return null;
-    if (att.data) return `data:${att.file_type};base64,${att.data}`;
-    return null;
-  });
-  const [failed, setFailed] = React.useState(false);
-  const [fileExists, setFileExists] = React.useState<boolean | null>(null);
-  const [previewOpen, setPreviewOpen] = usePageTransientOpenState();
-  const pageConnectionGenerationRef = usePageConnectionGeneration();
-
-  // Stored images use aqbot-media directly. The protocol response is the
-  // existence check, so avoid a separate IPC before every image render.
-  React.useEffect(() => {
-    if (isImage || fileExists !== null) return;
-    if (!att.file_path) { setFileExists(false); return; }
-    let cancelled = false;
-    invoke<boolean>('check_attachment_exists', { filePath: att.file_path })
-      .then((exists) => { if (!cancelled) setFileExists(exists); })
-      .catch(() => { if (!cancelled) setFileExists(false); });
-    return () => { cancelled = true; };
-  }, [att.file_path, fileExists, isImage]);
-
-  // Load image preview without a preceding existence IPC. A missing protocol
-  // resource is surfaced through the image error handler below.
-  React.useEffect(() => {
-    if (!isImage || src || failed) return;
-    if (!att.file_path) {
-      setFailed(true);
-      setFileExists(false);
-      return;
-    }
-    let cancelled = false;
-    loadStoredMediaSource(att.id, att.file_path)
-      .then((dataUrl) => { if (!cancelled) setSrc(dataUrl); })
-      .catch(() => {
-        if (!cancelled) {
-          setFailed(true);
-          setFileExists(false);
-        }
-      });
-    return () => { cancelled = true; };
-  }, [isImage, att.id, att.file_path, src, failed]);
-
-  // Deleted/missing file — show red error tag, click to show location modal
-  if (fileExists === false) {
-    const showMissingModal = () => {
-      const connectionGeneration = pageConnectionGenerationRef.current;
-      invoke<string>('resolve_attachment_path', { filePath: att.file_path })
-        .then((absPath) => {
-          if (pageConnectionGenerationRef.current !== connectionGeneration) return;
-          modal.confirm({
-            icon: <CloseCircleFilled style={{ color: '#ff4d4f' }} />,
-            title: t('chat.attachmentNotFound'),
-            content: absPath,
-            okText: t('chat.attachmentOk'),
-            cancelText: t('chat.attachmentRevealLocation'),
-            onCancel: () => {
-              invoke('reveal_attachment_file', { filePath: att.file_path }).catch(() => {});
-            },
-          });
-        })
-        .catch(() => {
-          if (pageConnectionGenerationRef.current !== connectionGeneration) return;
-          modal.error({
-            title: t('chat.attachmentNotFound'),
-            content: att.file_path || att.file_name,
-            okText: t('chat.attachmentOk'),
-          });
-        });
-    };
-    return (
-      <Tag
-        icon={<AlertCircle size={12} />}
-        color="error"
-        style={{ margin: 0, cursor: 'pointer' }}
-        onClick={showMissingModal}
-      >
-        {att.file_name}
-      </Tag>
-    );
-  }
-
-  // Still checking existence — show neutral loading tag
-  if (fileExists === null && !src) {
-    return (
-      <Tag
-        icon={isImage ? <FileImage size={12} /> : <Paperclip size={12} />}
-        style={{ margin: 0, cursor: 'default', opacity: 0.5 }}
-      >
-        {att.file_name}
-      </Tag>
-    );
-  }
-
-  if (isImage && src) {
-    return (
-      <Image
-        src={src}
-        alt={att.file_name}
-        style={ATTACHMENT_IMG_STYLE}
-        onError={() => {
-          setFailed(true);
-          setFileExists(false);
-        }}
-        preview={{
-          open: previewOpen,
-          onOpenChange: setPreviewOpen,
-          mask: { blur: true },
-          scaleStep: 0.5,
-        }}
-      />
-    );
-  }
-
-  const handleOpen = () => {
-    if (att.file_path) {
-      invoke('open_attachment_file', { filePath: att.file_path }).catch(() => {});
-    }
-  };
-
-  const handleReveal = () => {
-    if (att.file_path) {
-      invoke('reveal_attachment_file', { filePath: att.file_path }).catch(() => {});
-    }
-  };
-
-  const contextMenuItems = att.file_path
-    ? [
-        { key: 'open', label: t('chat.attachmentOpen'), onClick: handleOpen },
-        { key: 'reveal', label: t('chat.attachmentRevealInFinder'), onClick: handleReveal },
-      ]
-    : [];
-
-  const tag = (
-    <Tag
-      icon={isImage ? <FileImage size={12} /> : <Paperclip size={12} />}
-      color={themeColor}
-      style={{ margin: 0, cursor: att.file_path ? 'pointer' : 'default' }}
-      onClick={att.file_path ? handleOpen : undefined}
-    >
-      {att.file_name}
-    </Tag>
-  );
-
-  if (!att.file_path) return tag;
-
-  return (
-    <Dropdown menu={{ items: contextMenuItems }} trigger={['contextMenu']}>
-      {tag}
-    </Dropdown>
-  );
 }
 
 function isChatD2CodeBlockNode(node: ChatMarkdownNode): node is ChatD2CodeBlockNode {
@@ -3787,9 +3618,9 @@ export function ChatView() {
               {renderUserContent(content, 'right')}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: content ? 8 : 0, justifyContent: 'flex-end' }}>
                 {attachments.map((att, i) => (
-                  <AttachmentPreview
+                  <MessageAttachmentPreview
                     key={att.id || `${att.file_name}-${i}`}
-                    att={att}
+                    attachment={att}
                     themeColor={token.colorPrimary}
                   />
                 ))}

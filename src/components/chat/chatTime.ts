@@ -33,3 +33,9 @@ export function formatChatTime(timestamp: number, nowTimestamp: number = Date.no
 
   return `${formatDate(date)} ${time}`;
 }
+
+/** Always include calendar date + wall clock (YYYY-MM-DD HH:mm:ss). */
+export function formatChatDateTime(timestamp: number): string {
+  const date = new Date(normalizeChatTimestamp(timestamp));
+  return `${formatDate(date)} ${formatTime(date)}`;
+}

@@ -3,6 +3,7 @@ import { Button, Modal, theme } from 'antd';
 import { Eye, FileText, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { PastedSnippet } from '@/lib/pastedText';
+import { isImageAttachmentFile } from './attachmentFileTypes';
 
 function fileExtensionBadge(fileName: string): string {
   const ext = fileName.split('.').pop()?.toUpperCase() || 'FILE';
@@ -10,7 +11,7 @@ function fileExtensionBadge(fileName: string): string {
 }
 
 export function isImageFile(file: File): boolean {
-  return file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i.test(file.name);
+  return isImageAttachmentFile(file);
 }
 
 /** Stable composer attachment: preview URL is created once on add and revoked on remove. */

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::OnceLock;
 
-use crate::entity::{drawing_generations, drawing_images, messages, stored_files};
+use crate::entity::{acp_messages, drawing_generations, drawing_images, messages, stored_files};
 use crate::error::{AQBotError, Result};
 use crate::types::Attachment;
 
@@ -75,10 +75,7 @@ pub fn stored_media_ids(content: &str) -> HashSet<String> {
 /// Resolve media references from both message content and attachment metadata.
 /// Malformed attachment JSON is an explicit error: deleting in that state could
 /// otherwise incorrectly treat a still-referenced file as orphaned.
-pub fn message_stored_file_ids(
-    content: &str,
-    attachments_json: &str,
-) -> Result<HashSet<String>> {
+pub fn message_stored_file_ids(content: &str, attachments_json: &str) -> Result<HashSet<String>> {
     let attachments: Vec<Attachment> = serde_json::from_str(attachments_json).map_err(|error| {
         AQBotError::Validation(format!(
             "Invalid message attachments JSON while collecting media references: {error}"
@@ -92,6 +89,63 @@ pub fn message_stored_file_ids(
             .filter(|id| !id.is_empty()),
     );
     Ok(ids)
+}
+
+fn acp_message_stored_file_ids(
+    message_id: &str,
+    content: &str,
+    attachments_json: Option<&str>,
+) -> Result<HashSet<String>> {
+    let mut ids = stored_media_ids(content);
+    let Some(attachments_json) = attachments_json else {
+        return Ok(ids);
+    };
+    let attachments: Vec<Attachment> = serde_json::from_str(attachments_json).map_err(|error| {
+        AQBotError::Validation(format!(
+            "Invalid ACP message {message_id} attachments JSON while collecting media references: {error}"
+        ))
+    })?;
+    for attachment in attachments {
+        if attachment.data.is_some() {
+            return Err(AQBotError::Validation(format!(
+                "ACP message {message_id} attachment metadata contains inline data"
+            )));
+        }
+        if attachment.id.is_empty() {
+            return Err(AQBotError::Validation(format!(
+                "ACP message {message_id} attachment has no stored file id"
+            )));
+        }
+        crate::file_store::FileStore::new()
+            .validated_path(&attachment.file_path)
+            .map_err(|error| {
+                AQBotError::Validation(format!(
+                    "ACP message {message_id} attachment path is invalid: {error}"
+                ))
+            })?;
+        ids.insert(attachment.id);
+    }
+    Ok(ids)
+}
+
+/// Check whether an ACP message still owns a reference to a stored-file row.
+/// Corrupt metadata is an explicit error so cleanup always fails closed.
+pub async fn is_referenced_by_acp<C>(db: &C, stored_file_id: &str) -> Result<bool>
+where
+    C: ConnectionTrait,
+{
+    for message in acp_messages::Entity::find().all(db).await? {
+        if acp_message_stored_file_ids(
+            &message.id,
+            &message.content,
+            message.attachments_json.as_deref(),
+        )?
+        .contains(stored_file_id)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Delete only candidate stored-file rows that have no remaining reference in
@@ -115,6 +169,14 @@ where
         referenced_ids.extend(message_stored_file_ids(
             &message.content,
             &message.attachments,
+        )?);
+    }
+
+    for message in acp_messages::Entity::find().all(db).await? {
+        referenced_ids.extend(acp_message_stored_file_ids(
+            &message.id,
+            &message.content,
+            message.attachments_json.as_deref(),
         )?);
     }
 
@@ -143,10 +205,15 @@ where
         if referenced_ids.contains(candidate_id) {
             continue;
         }
-        let Some(file) = stored_files::Entity::find_by_id(candidate_id).one(db).await? else {
+        let Some(file) = stored_files::Entity::find_by_id(candidate_id)
+            .one(db)
+            .await?
+        else {
             continue;
         };
-        stored_files::Entity::delete_by_id(candidate_id).exec(db).await?;
+        stored_files::Entity::delete_by_id(candidate_id)
+            .exec(db)
+            .await?;
         removed_paths.insert(file.storage_path);
     }
 

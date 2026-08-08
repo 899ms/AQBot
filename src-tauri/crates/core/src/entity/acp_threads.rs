@@ -12,6 +12,10 @@ pub struct Model {
     pub acp_session_id: Option<String>,
     pub runtime_status: String,
     pub mode_id: Option<String>,
+    /// 0 = unpinned, 1 = pinned (pinned threads sort first within a project)
+    pub is_pinned: i32,
+    /// Manual order within a project (after pin group)
+    pub sort_order: i32,
     pub created_at: String,
     pub updated_at: String,
 }

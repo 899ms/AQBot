@@ -35,7 +35,7 @@ pub async fn delete_attachment_reference_locked(
             .is_some()
         {
             return Err(aqbot_core::error::AQBotError::Validation(format!(
-                "Stored file {record_id} is still referenced by a message or Drawing resource"
+                "Stored file {record_id} is still referenced by a message, ACP message, or Drawing resource"
             )));
         }
         Ok::<_, aqbot_core::error::AQBotError>(storage_paths)
@@ -88,6 +88,11 @@ async fn force_delete_stored_file_record_locked(
 ) -> Result<(), String> {
     let txn = db.begin().await.map_err(|e| e.to_string())?;
     let operation = async {
+        if aqbot_core::repo::stored_file::is_referenced_by_acp(&txn, record_id).await? {
+            return Err(aqbot_core::error::AQBotError::Validation(format!(
+                "Stored file {record_id} is still referenced by an ACP message"
+            )));
+        }
         let file = aqbot_core::entity::stored_files::Entity::find_by_id(record_id)
             .one(&txn)
             .await?
@@ -188,10 +193,144 @@ mod tests {
             .unwrap_err();
 
         assert!(error.contains("still referenced"));
-        assert!(aqbot_core::repo::stored_file::get_stored_file(&db, &stored.id)
-            .await
-            .is_ok());
+        assert!(
+            aqbot_core::repo::stored_file::get_stored_file(&db, &stored.id)
+                .await
+                .is_ok()
+        );
         assert!(file_store.resolve_path(&saved.storage_path).exists());
+    }
+
+    #[tokio::test]
+    async fn refuses_to_delete_a_file_that_is_still_referenced_by_acp() {
+        let db = aqbot_core::db::create_test_pool().await.unwrap().conn;
+        let root = tempfile::tempdir().unwrap();
+        let file_store = aqbot_core::file_store::FileStore::with_root(root.path().to_path_buf());
+        let project = aqbot_core::repo::acp::create_project(&db, "ACP files", "/tmp")
+            .await
+            .unwrap();
+        let thread = aqbot_core::repo::acp::create_thread(
+            &db,
+            &project.id,
+            "test-agent",
+            "Referenced ACP file",
+        )
+        .await
+        .unwrap();
+        let saved = file_store
+            .save_file(b"acp-reference", "workspace.tar", "application/x-tar")
+            .unwrap();
+        let stored = aqbot_core::repo::stored_file::create_stored_file(
+            &db,
+            "referenced-acp-file",
+            &saved.hash,
+            "workspace.tar",
+            "application/x-tar",
+            saved.size_bytes,
+            &saved.storage_path,
+            None,
+        )
+        .await
+        .unwrap();
+        let attachment = aqbot_core::types::Attachment {
+            id: stored.id.clone(),
+            file_type: stored.mime_type.clone(),
+            file_name: stored.original_name.clone(),
+            file_path: stored.storage_path.clone(),
+            file_size: stored.size_bytes as u64,
+            data: None,
+        };
+        aqbot_core::entity::acp_messages::ActiveModel {
+            id: Set("acp-message-with-file".to_string()),
+            thread_id: Set(thread.id),
+            role: Set("user".to_string()),
+            content: Set("Inspect this archive".to_string()),
+            status: Set(Some("done".to_string())),
+            attachments_json: Set(Some(serde_json::to_string(&[attachment]).unwrap())),
+            meta_json: Set(None),
+            created_at: Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+
+        let error = delete_attachment_reference(&db, &file_store, &stored.id)
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("still referenced"));
+        assert!(
+            aqbot_core::repo::stored_file::get_stored_file(&db, &stored.id)
+                .await
+                .is_ok()
+        );
+        assert!(file_store.resolve_path(&saved.storage_path).exists());
+    }
+
+    #[tokio::test]
+    async fn force_delete_keeps_a_missing_file_record_referenced_by_acp() {
+        let db = aqbot_core::db::create_test_pool().await.unwrap().conn;
+        let root = tempfile::tempdir().unwrap();
+        let file_store = aqbot_core::file_store::FileStore::with_root(root.path().to_path_buf());
+        let project = aqbot_core::repo::acp::create_project(&db, "ACP missing", "/tmp")
+            .await
+            .unwrap();
+        let thread = aqbot_core::repo::acp::create_thread(
+            &db,
+            &project.id,
+            "test-agent",
+            "Missing ACP file",
+        )
+        .await
+        .unwrap();
+        let saved = file_store
+            .save_file(b"missing-acp-reference", "missing.zip", "application/zip")
+            .unwrap();
+        let stored = aqbot_core::repo::stored_file::create_stored_file(
+            &db,
+            "missing-acp-file",
+            &saved.hash,
+            "missing.zip",
+            "application/zip",
+            saved.size_bytes,
+            &saved.storage_path,
+            None,
+        )
+        .await
+        .unwrap();
+        let attachment = aqbot_core::types::Attachment {
+            id: stored.id.clone(),
+            file_type: stored.mime_type.clone(),
+            file_name: stored.original_name.clone(),
+            file_path: stored.storage_path.clone(),
+            file_size: stored.size_bytes as u64,
+            data: None,
+        };
+        aqbot_core::entity::acp_messages::ActiveModel {
+            id: Set("acp-message-with-missing-file".to_string()),
+            thread_id: Set(thread.id),
+            role: Set("user".to_string()),
+            content: Set(String::new()),
+            status: Set(Some("done".to_string())),
+            attachments_json: Set(Some(serde_json::to_string(&[attachment]).unwrap())),
+            meta_json: Set(None),
+            created_at: Set(chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string()),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        std::fs::remove_file(file_store.resolve_path(&saved.storage_path)).unwrap();
+
+        let error = force_delete_stored_file_record(&db, &file_store, &stored.id)
+            .await
+            .unwrap_err();
+
+        assert!(error.contains("ACP message"));
+        assert!(
+            aqbot_core::repo::stored_file::get_stored_file(&db, &stored.id)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]

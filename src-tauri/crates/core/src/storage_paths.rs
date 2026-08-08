@@ -51,10 +51,59 @@ pub fn default_documents_root() -> PathBuf {
 /// - "image/*" → "images"
 /// - everything else → "files"
 /// - "backup" sentinel → "backups"
+pub fn is_image_mime_type(mime_type: &str) -> bool {
+    mime_type
+        .trim()
+        .get(.."image/".len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("image/"))
+}
+
+fn image_mime_type_from_extension(file_name: &str) -> Option<&'static str> {
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())?
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "png" => Some("image/png"),
+        "apng" => Some("image/apng"),
+        "jpg" | "jpeg" | "jfif" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        "avif" => Some("image/avif"),
+        "heic" => Some("image/heic"),
+        "heif" => Some("image/heif"),
+        "tif" | "tiff" => Some("image/tiff"),
+        "jxl" => Some("image/jxl"),
+        "svg" => Some("image/svg+xml"),
+        "bmp" => Some("image/bmp"),
+        "ico" => Some("image/x-icon"),
+        _ => None,
+    }
+}
+
+pub fn normalize_attachment_mime_type(file_name: &str, mime_type: &str) -> String {
+    let trimmed = mime_type.trim();
+    if is_image_mime_type(trimmed) {
+        return trimmed.to_ascii_lowercase();
+    }
+    if let Some(inferred) = image_mime_type_from_extension(file_name) {
+        return inferred.to_string();
+    }
+    if trimmed.is_empty() {
+        "application/octet-stream".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+pub fn is_image_attachment(file_name: &str, mime_type: &str) -> bool {
+    is_image_mime_type(mime_type) || image_mime_type_from_extension(file_name).is_some()
+}
+
 pub fn file_type_bucket(mime_type: &str) -> &'static str {
-    if mime_type == "backup" {
+    if mime_type.trim().eq_ignore_ascii_case("backup") {
         "backups"
-    } else if mime_type.starts_with("image/") {
+    } else if is_image_mime_type(mime_type) {
         "images"
     } else {
         "files"
@@ -69,7 +118,13 @@ pub fn resolve_documents_path(relative_path: &str) -> PathBuf {
 /// Generates a storage-ready relative path for a new file.
 /// Format: "{bucket}/{hash_prefix}_{sanitized_name}"
 pub fn build_relative_path(original_name: &str, mime_type: &str, hash: &str) -> String {
-    let bucket = file_type_bucket(mime_type);
+    let bucket = if mime_type.trim().eq_ignore_ascii_case("backup") {
+        "backups"
+    } else if is_image_attachment(original_name, mime_type) {
+        "images"
+    } else {
+        file_type_bucket(mime_type)
+    };
     let hash_prefix = &hash[..hash.len().min(12)];
     let sanitized = sanitize_filename(original_name);
     format!("{}/{}_{}", bucket, hash_prefix, sanitized)
@@ -162,6 +217,21 @@ mod tests {
     #[test]
     fn bucket_image_png() {
         assert_eq!(file_type_bucket("image/png"), "images");
+    }
+
+    #[test]
+    fn bucket_image_mime_is_ascii_case_insensitive() {
+        assert_eq!(file_type_bucket(" IMAGE/PNG "), "images");
+    }
+
+    #[test]
+    fn image_extension_overrides_a_misleading_non_image_mime() {
+        assert!(is_image_attachment("photo.PNG", "application/x-custom"));
+        assert_eq!(
+            normalize_attachment_mime_type("photo.PNG", "application/x-custom"),
+            "image/png"
+        );
+        assert!(build_relative_path("photo.PNG", "text/plain", "abcdef").starts_with("images/"));
     }
 
     #[test]

@@ -37,11 +37,14 @@ import { RoleSwitcherPopover } from './toolbar/RoleSwitcherPopover';
 import { SkillPickerPopover } from './toolbar/SkillPickerPopover';
 import {
   AttachmentChips,
-  createComposerAttachment,
-  revokeComposerAttachment,
   revokeComposerAttachments,
-  type ComposerAttachment,
 } from './AttachmentChips';
+import {
+  DOCUMENT_ATTACHMENT_ACCEPT,
+  fileToAttachmentInput,
+  isAllowedChatAttachmentFile,
+  useComposerAttachments,
+} from './composerAttachments';
 import {
   createPastedSnippet,
   insertPasteTokenAtSelection,
@@ -50,80 +53,6 @@ import {
   removePasteTokens,
   type PastedSnippet,
 } from '@/lib/pastedText';
-
-const DOCUMENT_ATTACHMENT_ACCEPT = [
-  '.pdf',
-  '.doc',
-  '.docx',
-  '.txt',
-  '.md',
-  '.markdown',
-  '.csv',
-  '.json',
-  '.html',
-  '.htm',
-  '.xml',
-  'application/pdf',
-  'application/msword',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  'text/plain',
-  'text/markdown',
-  'text/csv',
-  'application/json',
-  'text/html',
-  'text/xml',
-  'application/xml',
-].join(',');
-
-const DOCUMENT_ATTACHMENT_MIME_BY_EXTENSION: Record<string, string> = {
-  pdf: 'application/pdf',
-  doc: 'application/msword',
-  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  txt: 'text/plain',
-  md: 'text/markdown',
-  markdown: 'text/markdown',
-  csv: 'text/csv',
-  json: 'application/json',
-  html: 'text/html',
-  htm: 'text/html',
-  xml: 'application/xml',
-};
-
-const DOCUMENT_ATTACHMENT_MIME_TYPES = new Set(Object.values(DOCUMENT_ATTACHMENT_MIME_BY_EXTENSION));
-
-function getAttachmentMimeType(fileName: string, mimeType?: string): string {
-  if (mimeType && mimeType !== 'application/octet-stream') return mimeType;
-  const extension = fileName.split('.').pop()?.toLowerCase() || '';
-  return DOCUMENT_ATTACHMENT_MIME_BY_EXTENSION[extension] || mimeType || 'application/octet-stream';
-}
-
-function isAllowedAttachmentFile(
-  fileName: string,
-  mimeType: string | undefined,
-  hasVision: boolean,
-  documentAttachmentReadingEnabled: boolean,
-): boolean {
-  const effectiveMimeType = getAttachmentMimeType(fileName, mimeType);
-  if (hasVision && effectiveMimeType.startsWith('image/')) return true;
-  if (!documentAttachmentReadingEnabled) return false;
-  return DOCUMENT_ATTACHMENT_MIME_TYPES.has(effectiveMimeType);
-}
-
-async function fileToAttachmentInput(file: File): Promise<AttachmentInput> {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = (reader.result as string).split(',')[1] || '';
-      resolve({
-        file_name: file.name,
-        file_type: getAttachmentMimeType(file.name, file.type),
-        file_size: file.size,
-        data: base64,
-      });
-    };
-    reader.readAsDataURL(file);
-  });
-}
 
 // In-memory draft cache: persists input text per-conversation across component unmounts
 const _draftCache = new Map<string, string>();
@@ -135,16 +64,12 @@ export function InputArea() {
     const convId = useConversationStore.getState().activeConversationId;
     return convId ? _draftCache.get(convId) || '' : '';
   });
-  const [attachedFiles, setAttachedFiles] = useState<ComposerAttachment[]>([]);
-  const attachedFilesRef = useRef(attachedFiles);
-  attachedFilesRef.current = attachedFiles;
   const [pastedSnippets, setPastedSnippets] = useState<PastedSnippet[]>([]);
   const pastedSnippetSeqRef = useRef(0);
   const [voiceCallVisible, setVoiceCallVisible] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mcpPopoverOpen, setMcpPopoverOpen] = useState(false);
   const [searchDropdownOpen, setSearchDropdownOpen] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const valueRef = useRef(value);
   valueRef.current = value;
@@ -339,37 +264,6 @@ export function InputArea() {
     }
   }, [currentMode, activeConversationId]);
 
-  // Draft persistence: save old draft & restore new when conversation changes
-  useEffect(() => {
-    const prev = prevConvIdRef.current;
-    const next = activeConversationId ?? null;
-    if (prev === next) return;
-
-    if (prev) {
-      const draft = valueRef.current;
-      if (draft) _draftCache.set(prev, draft);
-      else _draftCache.delete(prev);
-    }
-    setValue(next ? _draftCache.get(next) || '' : '');
-    // Attachments and pasted snippets are composer-local and do not follow conversations.
-    revokeComposerAttachments(attachedFilesRef.current);
-    setAttachedFiles([]);
-    setPastedSnippets([]);
-    pastedSnippetSeqRef.current = 0;
-    prevConvIdRef.current = next;
-  }, [activeConversationId]);
-
-  // Save draft on unmount (navigating away from chat page) and revoke attachment previews
-  useEffect(() => {
-    return () => {
-      const convId = prevConvIdRef.current;
-      if (convId && valueRef.current) {
-        _draftCache.set(convId, valueRef.current);
-      }
-      revokeComposerAttachments(attachedFilesRef.current);
-    };
-  }, []);
-
   // Persist companion models per conversation in localStorage
   const companionStorageKey = activeConversationId ? `aqbot:companion-models:${activeConversationId}` : null;
 
@@ -545,8 +439,8 @@ export function InputArea() {
       const isFullAccess = mode === 'full_access';
       modal.confirm({
         title: isFullAccess
-          ? t('agent.permissionFullAccessWarningTitle', '⚠️ 完全访问模式')
-          : t('agent.permissionAcceptEditsWarningTitle', '⚠️ 允许编辑模式'),
+          ? t('agent.permissionFullAccessWarningTitle', '完全访问模式')
+          : t('agent.permissionAcceptEditsWarningTitle', '允许编辑模式'),
         content: isFullAccess
           ? t('agent.permissionFullAccessWarning', 'Agent 将拥有完全访问权限，可以执行任何文件操作且不受路径限制。请确保你信任当前使用的模型和 System Prompt。')
           : t('agent.permissionAcceptEditsWarning', 'Agent 将自动批准文件编辑操作，无需逐一确认。请确保你了解潜在的安全风险。'),
@@ -953,6 +847,61 @@ export function InputArea() {
   }), [activeConversation, currentModel, providers]);
   const documentAttachmentReadingEnabled = settings.document_attachment_reading_enabled ?? false;
   const canAttachFiles = hasVision || documentAttachmentReadingEnabled;
+  const acceptChatAttachment = useCallback(
+    (file: File) => isAllowedChatAttachmentFile(
+      file,
+      hasVision,
+      documentAttachmentReadingEnabled,
+    ),
+    [documentAttachmentReadingEnabled, hasVision],
+  );
+  const handleAttachmentReadError = useCallback((filePath: string, error: unknown) => {
+    console.error('[drag-drop] Failed to read file:', filePath, error);
+  }, []);
+  const {
+    attachments: attachedFiles,
+    attachmentsRef: attachedFilesRef,
+    fileInputRef,
+    isDragging,
+    removeAttachment,
+    resetAttachments,
+    detachAttachments,
+    restoreAttachments,
+    openFilePicker: handleFileSelect,
+    handleFileChange,
+    handleClipboardFiles,
+    dragHandlers,
+  } = useComposerAttachments({
+    enabled: canAttachFiles,
+    acceptFile: acceptChatAttachment,
+    onReadError: handleAttachmentReadError,
+  });
+
+  // Draft text follows the conversation; binary attachments remain composer-local.
+  useEffect(() => {
+    const previousId = prevConvIdRef.current;
+    const nextId = activeConversationId ?? null;
+    if (previousId === nextId) return;
+    if (previousId) {
+      const draft = valueRef.current;
+      if (draft) _draftCache.set(previousId, draft);
+      else _draftCache.delete(previousId);
+    }
+    setValue(nextId ? _draftCache.get(nextId) || '' : '');
+    resetAttachments();
+    setPastedSnippets([]);
+    pastedSnippetSeqRef.current = 0;
+    prevConvIdRef.current = nextId;
+  }, [activeConversationId, resetAttachments]);
+
+  useEffect(() => () => {
+    const conversationId = prevConvIdRef.current;
+    if (conversationId && valueRef.current) {
+      _draftCache.set(conversationId, valueRef.current);
+    }
+    revokeComposerAttachments(attachedFilesRef.current);
+  }, [attachedFilesRef]);
+
   const fileInputAccept = [
     hasVision ? 'image/*' : null,
     documentAttachmentReadingEnabled ? DOCUMENT_ATTACHMENT_ACCEPT : null,
@@ -1089,7 +1038,7 @@ export function InputArea() {
       setValue('');
       // Clear attachments without revoking yet — previews stay valid if send fails and we restore.
       // On success, revoke after the request is accepted.
-      setAttachedFiles([]);
+      detachAttachments();
       setPastedSnippets([]);
       pastedSnippetSeqRef.current = 0;
       // Reset textarea height and drag state after clearing content
@@ -1111,7 +1060,7 @@ export function InputArea() {
       revokeComposerAttachments(submittedAttachments);
     } catch (e) {
       setValue((current) => current || value);
-      setAttachedFiles((current) => (current.length > 0 ? current : submittedAttachments));
+      restoreAttachments(submittedAttachments);
       setPastedSnippets((current) => (current.length > 0 ? current : submittedSnippets));
       console.error('[handleSend] error:', e);
       messageApi.error(String(e));
@@ -1127,7 +1076,7 @@ export function InputArea() {
         }
       });
     }
-  }, [value, attachedFiles, pastedSnippets, sendMessage, sendAgentMessage, sendMultiModelMessage, companionModels, activeConversationId, providers, settings, createConversation, loading, messageApi, t, searchEnabled, searchProviderId, currentMode]);
+  }, [value, attachedFiles, pastedSnippets, sendMessage, sendAgentMessage, sendMultiModelMessage, companionModels, activeConversationId, providers, settings, createConversation, loading, messageApi, t, searchEnabled, searchProviderId, currentMode, detachAttachments, restoreAttachments]);
 
   const handleFillLastMessage = useCallback(() => {
     if (loading || streaming) return;
@@ -1150,49 +1099,6 @@ export function InputArea() {
   const handleCancel = useCallback(() => {
     cancelCurrentStream();
   }, [cancelCurrentStream]);
-
-  const handleFileSelect = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
-
-  const addFiles = useCallback((incoming: File[]) => {
-    if (incoming.length === 0) return;
-    const allowed = incoming.filter((file) =>
-      isAllowedAttachmentFile(
-        file.name,
-        file.type,
-        hasVision,
-        documentAttachmentReadingEnabled,
-      ),
-    );
-    if (allowed.length === 0) return;
-    setAttachedFiles((prev) => {
-      // Deduplicate by name+size+lastModified to avoid Tauri + HTML5 double-drop.
-      const keys = new Set(prev.map((item) => `${item.file.name}:${item.file.size}:${item.file.lastModified}`));
-      const unique = allowed
-        .filter((f) => !keys.has(`${f.name}:${f.size}:${f.lastModified}`))
-        .map((file) => createComposerAttachment(file));
-      return unique.length > 0 ? [...prev, ...unique] : prev;
-    });
-  }, [documentAttachmentReadingEnabled, hasVision]);
-
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files) {
-      addFiles(Array.from(files));
-    }
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-  }, [addFiles]);
-
-  const removeAttachment = useCallback((id: string) => {
-    setAttachedFiles((prev) => {
-      const target = prev.find((item) => item.id === id);
-      if (target) revokeComposerAttachment(target);
-      return prev.filter((item) => item.id !== id);
-    });
-  }, []);
 
   const resizeTextareaToContent = useCallback(() => {
     requestAnimationFrame(() => {
@@ -1218,34 +1124,7 @@ export function InputArea() {
   }, [resizeTextareaToContent]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-    const items = e.clipboardData?.items;
-    if (!items) return;
-
-    // Prefer file/image items when attachment is allowed.
-    if (canAttachFiles) {
-      const files: File[] = [];
-      for (const item of items) {
-        if (item.kind === 'file') {
-          const file = item.getAsFile();
-          if (
-            file &&
-            isAllowedAttachmentFile(
-              file.name,
-              file.type,
-              hasVision,
-              documentAttachmentReadingEnabled,
-            )
-          ) {
-            files.push(file);
-          }
-        }
-      }
-      if (files.length > 0) {
-        e.preventDefault();
-        addFiles(files);
-        return;
-      }
-    }
+    if (canAttachFiles && handleClipboardFiles(e)) return;
 
     // Long plain-text paste → compact snippet + inline reference token at caret.
     const text = e.clipboardData?.getData('text/plain');
@@ -1274,10 +1153,8 @@ export function InputArea() {
         el.style.height = Math.min(desired, ABSOLUTE_MAX_HEIGHT) + 'px';
       });
     }
-  }, [addFiles, canAttachFiles, documentAttachmentReadingEnabled, hasVision]);
+  }, [canAttachFiles, handleClipboardFiles]);
 
-  // Drag-and-drop overlay (Tauri native)
-  const [isDragging, setIsDragging] = useState(false);
   usePageSuspendCleanup(() => {
     setVoiceCallVisible(false);
     setSettingsOpen(false);
@@ -1287,116 +1164,8 @@ export function InputArea() {
     setThinkingDropdownOpen(false);
     setKbPopoverOpen(false);
     setMemoryPopoverOpen(false);
-    setIsDragging(false);
     resizeCleanupRef.current();
   });
-
-  useEffect(() => {
-    if (!canAttachFiles) return;
-
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-
-    (async () => {
-      const { getCurrentWebview } = await import('@tauri-apps/api/webview');
-      const { readFile } = await import('@tauri-apps/plugin-fs');
-
-      const nextUnlisten = await getCurrentWebview().onDragDropEvent(async (event) => {
-        if (cancelled) return;
-        const { type } = event.payload;
-        if (type === 'enter') {
-          setIsDragging(true);
-        } else if (type === 'leave') {
-          setIsDragging(false);
-        } else if (type === 'drop') {
-          setIsDragging(false);
-          const { paths } = event.payload;
-          const files: File[] = [];
-          for (const filePath of paths) {
-            try {
-              const fileName = filePath.split(/[\\/]/).pop() || 'file';
-              const ext = fileName.split('.').pop()?.toLowerCase() || '';
-              const mimeMap: Record<string, string> = {
-                png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
-                gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
-                bmp: 'image/bmp', ico: 'image/x-icon',
-                pdf: 'application/pdf',
-                doc: 'application/msword',
-                docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-                txt: 'text/plain',
-                json: 'application/json', csv: 'text/csv',
-                md: 'text/markdown', markdown: 'text/markdown',
-                html: 'text/html', htm: 'text/html', xml: 'application/xml',
-                js: 'text/javascript', ts: 'text/typescript',
-                zip: 'application/zip',
-              };
-              const mimeType = mimeMap[ext] || 'application/octet-stream';
-              if (
-                !isAllowedAttachmentFile(
-                  fileName,
-                  mimeType,
-                  hasVision,
-                  documentAttachmentReadingEnabled,
-                )
-              ) {
-                continue;
-              }
-              const bytes = await readFile(filePath);
-              files.push(new File([bytes], fileName, { type: mimeType }));
-            } catch (err) {
-              console.error('[drag-drop] Failed to read file:', filePath, err);
-            }
-          }
-          if (!cancelled && files.length > 0) {
-            addFiles(files);
-          }
-        }
-      });
-      if (cancelled) nextUnlisten();
-      else unlisten = nextUnlisten;
-    })().catch((error) => {
-      if (!cancelled) console.error('[drag-drop] Failed to register listener:', error);
-    });
-
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [addFiles, canAttachFiles, documentAttachmentReadingEnabled, hasVision]);
-
-  // HTML5 drag-and-drop fallback (browser / non-Tauri paths)
-  const handleHtmlDragEnter = useCallback((e: React.DragEvent) => {
-    if (!canAttachFiles) return;
-    if (![...e.dataTransfer.types].includes('Files')) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(true);
-  }, [canAttachFiles]);
-
-  const handleHtmlDragOver = useCallback((e: React.DragEvent) => {
-    if (!canAttachFiles) return;
-    if (![...e.dataTransfer.types].includes('Files')) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = 'copy';
-  }, [canAttachFiles]);
-
-  const handleHtmlDragLeave = useCallback((e: React.DragEvent) => {
-    if (!canAttachFiles) return;
-    // Only clear when leaving the outer container, not child nodes.
-    if (e.currentTarget === e.target) {
-      setIsDragging(false);
-    }
-  }, [canAttachFiles]);
-
-  const handleHtmlDrop = useCallback((e: React.DragEvent) => {
-    if (!canAttachFiles) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-    const files = Array.from(e.dataTransfer.files || []);
-    addFiles(files);
-  }, [addFiles, canAttachFiles]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1536,10 +1305,7 @@ export function InputArea() {
   return (
     <div
       className="px-4 pb-3 pt-1"
-      onDragEnter={handleHtmlDragEnter}
-      onDragOver={handleHtmlDragOver}
-      onDragLeave={handleHtmlDragLeave}
-      onDrop={handleHtmlDrop}
+      {...dragHandlers}
     >
       <input
         ref={fileInputRef}

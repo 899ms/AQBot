@@ -553,9 +553,20 @@ pub fn run() {
         commands::acp::acp_list_all_threads,
         commands::acp::acp_create_thread,
         commands::acp::acp_delete_thread,
+        commands::acp::acp_rename_thread,
+        commands::acp::acp_toggle_thread_pin,
+        commands::acp::acp_reorder_threads,
+        commands::acp::acp_duplicate_thread,
         commands::acp::acp_list_messages,
+        commands::acp::acp_prewarm_enabled_agents,
+        commands::acp::acp_prepare_draft,
+        commands::acp::acp_prepare_session,
+        commands::acp::acp_set_config_option,
+        commands::acp::acp_set_mode,
+        commands::acp::acp_cancel,
         commands::acp::acp_prompt,
         commands::acp::acp_respond_permission,
+        commands::acp::acp_respond_questionnaire,
         commands::acp::acp_registry_source,
         commands::acp::acp_git_info,
         commands::acp::acp_git_checkout,
@@ -902,6 +913,18 @@ pub fn run() {
                             error = %err,
                             "Failed to recover stale partial assistant messages"
                         );
+                    }
+                }
+                match rt.block_on(aqbot_core::repo::acp::interrupt_all_streaming_messages(
+                    &sea_db,
+                    "The previous Agent turn was interrupted",
+                )) {
+                    Ok(count) if count > 0 => {
+                        tracing::info!(count, "Marked stale ACP turns as interrupted");
+                    }
+                    Ok(_) => {}
+                    Err(err) => {
+                        tracing::warn!(error = %err, "Failed to recover stale ACP turns");
                     }
                 }
             }

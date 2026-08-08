@@ -187,18 +187,21 @@ function AppRoot() {
 
   // Load persisted settings from backend on startup, then apply native settings
   useEffect(() => {
+    // Start ACP bootstrap immediately. The store owns the single-flight guard,
+    // so React StrictMode may re-run this effect without spawning duplicate
+    // Agent processes. Do not make Agent readiness wait for unrelated settings
+    // or native window initialization.
+    try {
+      useAcpStore.getState().warmBootstrap();
+    } catch (e) {
+      console.warn('Failed to warm ACP store:', e);
+    }
+
     const init = async () => {
       try {
         await useSettingsStore.getState().fetchSettings();
       } catch (e) {
         console.warn('Failed to fetch settings:', e);
-      }
-
-      // Warm ACP cache early so Agent page does not flash "未配置" on first open
-      try {
-        useAcpStore.getState().warmBootstrap();
-      } catch (e) {
-        console.warn('Failed to warm ACP store:', e);
       }
 
       if (!isTauri()) return;
