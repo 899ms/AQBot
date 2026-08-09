@@ -10,6 +10,8 @@ vi.mock('react-i18next', () => ({
       'agentPage.loading': '加载中',
       'agentPage.noAgents': '请先在 设置 → ACP Agent 中启用至少一个 Agent',
       'agentPage.openSettings': '打开 ACP 设置',
+      'agentPage.retryConnection': '重试连接',
+      'error.loadFailed': '加载失败，请重试',
     })[key] ?? key,
   }),
 }));
@@ -33,6 +35,7 @@ describe('AgentPage', () => {
       useAcpStore.setState({
         config: null,
         configReady: true,
+        configError: null,
         projectsReady: true,
         threadsReady: true,
       });
@@ -49,6 +52,51 @@ describe('AgentPage', () => {
     expect(screen.getByTestId('acp-unconfigured-empty-state')).toBeInTheDocument();
     expect(screen.queryByTestId('acp-sidebar')).not.toBeInTheDocument();
     expect(screen.queryByTestId('acp-conversation-pane')).not.toBeInTheDocument();
+  });
+
+  it('shows configuration failure separately from a valid empty agent list', () => {
+    act(() => {
+      useAcpStore.setState({ configError: 'invalid agents.toml' });
+    });
+
+    render(<AgentPage />);
+
+    expect(screen.getByText('加载失败，请重试')).toBeInTheDocument();
+    expect(screen.getByText('invalid agents.toml')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重试连接' })).toBeInTheDocument();
+    expect(screen.queryByTestId('acp-unconfigured-empty-state')).not.toBeInTheDocument();
+  });
+
+  it('keeps a valid cached workbench usable while config revalidation shows a warning', () => {
+    act(() => {
+      useAcpStore.setState({
+        config: {
+          general: {
+            idleTimeoutSecs: 300,
+            maxConcurrentProcesses: 4,
+            permissionDefault: 'default',
+            registryRefresh: 'daily',
+          },
+          agents: [{
+            id: 'codex',
+            name: 'Codex',
+            source: 'custom',
+            command: 'codex',
+            args: [],
+            enabled: true,
+            sort: 0,
+          }],
+        },
+        configError: 'temporary config read failure',
+      });
+    });
+
+    render(<AgentPage />);
+
+    expect(screen.getByTestId('acp-sidebar')).toBeInTheDocument();
+    expect(screen.getByTestId('acp-conversation-pane')).toBeInTheDocument();
+    expect(screen.getByText('temporary config read failure')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重试连接' })).toBeInTheDocument();
   });
 
   it('opens the ACP Agent settings from the setup prompt', () => {

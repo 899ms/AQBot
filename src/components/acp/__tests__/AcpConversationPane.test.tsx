@@ -356,6 +356,81 @@ describe('AcpConversationPane', () => {
     });
   });
 
+  it('shows message history loading separately from a genuinely empty thread', () => {
+    useAcpStore.setState({
+      runningByThread: { 'thread-1': false },
+      messages: [],
+      messagesLoadingByThread: { 'thread-1': true },
+      messagesErrorByThread: {},
+    });
+
+    const { container } = render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+
+    expect(screen.getByText('加载中...')).toBeInTheDocument();
+    expect(screen.queryByText('探索并理解代码')).not.toBeInTheDocument();
+    expect(container.querySelector('.lucide-arrow-up')?.closest('button')).toBeDisabled();
+  });
+
+  it('shows a retry action when message history loading fails', async () => {
+    useAcpStore.setState({
+      runningByThread: { 'thread-1': false },
+      messages: [],
+      messagesLoadingByThread: { 'thread-1': false },
+      messagesErrorByThread: { 'thread-1': 'database unavailable' },
+    });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_git_info') return { branch: null, branches: [], isRepo: false };
+      if (command === 'acp_list_messages') return [];
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+
+    render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+
+    expect(screen.getByText('加载失败，请重试')).toBeInTheDocument();
+    expect(screen.getByText('database unavailable')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重试连接' }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('acp_list_messages', { threadId: 'thread-1' });
+      expect(useAcpStore.getState().messagesErrorByThread['thread-1']).toBeUndefined();
+    });
+  });
+
+  it('keeps a message history refresh error visible when cached messages remain', () => {
+    useAcpStore.setState({
+      runningByThread: { 'thread-1': false },
+      messages: [{
+        id: 'assistant-cached',
+        thread_id: 'thread-1',
+        role: 'assistant',
+        content: 'cached response',
+        status: 'done',
+        attachments: [],
+        created_at: '2026-08-08T00:00:01Z',
+      }],
+      messagesLoadingByThread: { 'thread-1': false },
+      messagesErrorByThread: { 'thread-1': 'refresh failed' },
+    });
+
+    render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+
+    expect(screen.getByRole('alert')).toHaveTextContent('加载失败，请重试');
+    expect(screen.getByRole('alert')).toHaveTextContent('refresh failed');
+    expect(within(screen.getByRole('alert')).getByRole('button', { name: '重试连接' }))
+      .toBeEnabled();
+  });
+
   it('labels session setup separately when the Agent process is already ready', async () => {
     const pendingSession = new Promise<AcpSessionSnapshot>(() => undefined);
     useAcpStore.setState({
@@ -444,7 +519,7 @@ describe('AcpConversationPane', () => {
     const decisionComposer = await screen.findByRole('group', { name: '需要权限' });
     expect(decisionComposer).toHaveAttribute('aria-live', 'polite');
     expect(screen.getByText('write_file')).toBeInTheDocument();
-    expect(screen.queryByText('delete_file')).not.toBeInTheDocument();
+    expect(screen.getByText('delete_file')).not.toBeVisible();
     expect(screen.getByText('1/2')).toBeInTheDocument();
     expect(screen.queryByPlaceholderText('做点什么…')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: '停止' })).toBeEnabled();
@@ -453,6 +528,7 @@ describe('AcpConversationPane', () => {
     // Can navigate between pending approvals without resolving
     fireEvent.click(screen.getByRole('button', { name: '下一项' }));
     expect(await screen.findByText('delete_file')).toBeInTheDocument();
+    expect(screen.getByText('write_file')).not.toBeVisible();
     expect(screen.getByText('2/2')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '上一项' }));
     expect(await screen.findByText('write_file')).toBeInTheDocument();
@@ -486,6 +562,98 @@ describe('AcpConversationPane', () => {
       expect(screen.getByPlaceholderText('做点什么…')).toHaveFocus();
     });
     expect(useAcpStore.getState().pendingPermissions['permission-1']).toBeUndefined();
+  });
+
+  it('keeps the same approval active when an earlier queued request closes', async () => {
+    const permission = (requestId: string, toolName: string, sequence: number) => ({
+      threadId: 'thread-1',
+      requestId,
+      toolName,
+      input: {},
+      status: 'pending' as const,
+      sequence,
+      options: [{ id: 'allow_once', label: 'Allow once', variant: 'primary' as const }],
+    });
+    useAcpStore.setState({
+      runningByThread: { 'thread-1': true },
+      pendingPermissions: {
+        'permission-a': permission('permission-a', 'tool-a', 1),
+        'permission-b': permission('permission-b', 'tool-b', 2),
+        'permission-c': permission('permission-c', 'tool-c', 3),
+      },
+    });
+
+    render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '下一项' }));
+    expect(await screen.findByText('tool-b')).toBeVisible();
+    expect(screen.getByText('2/3')).toBeInTheDocument();
+
+    act(() => {
+      useAcpStore.setState((state) => {
+        const { 'permission-a': _closed, ...remaining } = state.pendingPermissions;
+        return { pendingPermissions: remaining };
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('tool-b')).toBeVisible();
+      expect(screen.getByText('tool-c')).not.toBeVisible();
+      expect(screen.getByText('1/2')).toBeInTheDocument();
+    });
+  });
+
+  it('preserves plan feedback drafts while navigating between pending interactions', async () => {
+    const options = [
+      { id: 'approved', label: 'Approve and implement', variant: 'primary' as const },
+      { id: 'cancelled', label: 'Continue planning', variant: 'default' as const },
+      { id: 'abandoned', label: 'Abandon plan', variant: 'danger' as const },
+    ];
+    useAcpStore.setState({
+      runningByThread: { 'thread-1': true },
+      pendingPermissions: {
+        'plan-1': {
+          threadId: 'thread-1',
+          requestId: 'plan-1',
+          kind: 'plan_review',
+          toolName: 'plan',
+          input: { planContent: 'First plan' },
+          status: 'pending',
+          sequence: 1,
+          options,
+        },
+        'plan-2': {
+          threadId: 'thread-1',
+          requestId: 'plan-2',
+          kind: 'plan_review',
+          toolName: 'plan',
+          input: { planContent: 'Second plan' },
+          status: 'pending',
+          sequence: 2,
+          options,
+        },
+      },
+    });
+    render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '进行改变' }));
+    fireEvent.change(screen.getByPlaceholderText('描述希望如何调整计划…'), {
+      target: { value: 'Keep the storage path unchanged' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '下一项' }));
+    expect(await screen.findByText('2/2')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '上一项' }));
+
+    expect(await screen.findByPlaceholderText('描述希望如何调整计划…'))
+      .toHaveValue('Keep the storage path unchanged');
   });
 
   it('temporarily closes a streaming Grok think block so progress is visible immediately', async () => {
@@ -528,6 +696,9 @@ describe('AcpConversationPane', () => {
     expect(screen.getByText('GPT-5.6 Codex')).toBeInTheDocument();
     expect(screen.getByText('High')).toBeInTheDocument();
     expect(screen.getByTestId('smart-model-icon')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '模型: GPT-5.6 Codex' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '推理强度: High' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '需要权限: 每次询问' })).toBeInTheDocument();
     // Plan tag only appears while plan mode is active (enabled via shortcut)
     expect(screen.queryByLabelText('计划')).not.toBeInTheDocument();
   });
@@ -652,6 +823,66 @@ describe('AcpConversationPane', () => {
     });
   });
 
+  it('scopes configuration pending and errors to the session that started the update', async () => {
+    let rejectUpdate!: (error: Error) => void;
+    const pendingUpdate = new Promise<AcpSessionSnapshot>((_, reject) => {
+      rejectUpdate = reject;
+    });
+    const fastSnapshot: AcpSessionSnapshot = {
+      ...sessionSnapshot,
+      configOptions: [
+        ...sessionSnapshot.configOptions,
+        {
+          id: 'fast',
+          name: 'Fast',
+          category: 'model_config',
+          type: 'select',
+          currentValue: 'false',
+          options: [],
+        },
+      ],
+    };
+    const otherThread = {
+      ...useAcpStore.getState().threads[0],
+      id: 'thread-2',
+      title: 'Other task',
+      runtime_status: 'idle',
+    };
+    useAcpStore.setState((state) => ({
+      threads: [...state.threads, otherThread],
+      allThreads: [...state.threads, otherThread],
+      runningByThread: { 'thread-1': false, 'thread-2': false },
+      sessionByThread: {
+        'thread-1': fastSnapshot,
+        'thread-2': { ...fastSnapshot, sessionId: 'acp-session-2' },
+      },
+    }));
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'acp_git_info') {
+        return Promise.resolve({ branch: null, branches: [], isRepo: false });
+      }
+      if (command === 'acp_set_config_option') return pendingUpdate;
+      return Promise.reject(new Error(`Unexpected invoke: ${command}`));
+    });
+
+    render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Fast' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Fast' })).toBeDisabled());
+
+    act(() => {
+      useAcpStore.setState({ activeThreadId: 'thread-2', messages: [] });
+    });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Fast' })).toBeEnabled());
+    await act(async () => rejectUpdate(new Error('thread one update failed')));
+    expect(screen.queryByText('thread one update failed')).not.toBeInTheDocument();
+  });
+
   it('highlights the reasoning control in purple when set to the highest level', async () => {
     useAcpStore.setState({
       runningByThread: { 'thread-1': false },
@@ -705,6 +936,104 @@ describe('AcpConversationPane', () => {
         value: 'plan',
       });
     });
+  });
+
+  it('leaves Shift+Tab navigation intact while plan mode cannot be changed', async () => {
+    useAcpStore.setState({ runningByThread: { 'thread-1': true } });
+    render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+
+    const input = await screen.findByPlaceholderText('做点什么…');
+    invokeMock.mockClear();
+    const keyboardNavigationContinues = fireEvent.keyDown(input, {
+      key: 'Tab',
+      shiftKey: true,
+    });
+
+    expect(keyboardNavigationContinues).toBe(true);
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      'acp_set_config_option',
+      expect.anything(),
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith('acp_set_mode', expect.anything());
+  });
+
+  it('ignores a checkout response after navigation moves to another project', async () => {
+    let resolveCheckout!: (value: {
+      branch: string;
+      branches: string[];
+      isRepo: boolean;
+    }) => void;
+    const checkout = new Promise<{
+      branch: string;
+      branches: string[];
+      isRepo: boolean;
+    }>((resolve) => {
+      resolveCheckout = resolve;
+    });
+    const secondProject = {
+      ...useAcpStore.getState().projects[0],
+      id: 'project-2',
+      name: 'Second project',
+      root_path: '/tmp/second-project',
+    };
+    useAcpStore.setState((state) => ({
+      runningByThread: { 'thread-1': false },
+      projects: [...state.projects, secondProject],
+    }));
+    invokeMock.mockImplementation(async (
+      command: string,
+      args?: { projectId?: string },
+    ) => {
+      if (command === 'acp_git_info') {
+        return args?.projectId === 'project-2'
+          ? { branch: 'develop', branches: ['develop'], isRepo: true }
+          : { branch: 'main', branches: ['main', 'feature'], isRepo: true };
+      }
+      if (command === 'acp_git_checkout') return checkout;
+      if (command === 'acp_prepare_draft') return sessionSnapshot;
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+    const user = userEvent.setup();
+    render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+
+    await user.click(await screen.findByRole('button', { name: /main/i }));
+    await user.click(await screen.findByRole('menuitem', { name: /feature/i }));
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('acp_git_checkout', {
+        projectId: 'project-1',
+        branch: 'feature',
+      });
+    });
+
+    act(() => {
+      useAcpStore.setState({
+        activeProjectId: 'project-2',
+        activeThreadId: null,
+        threads: [],
+        messages: [],
+      });
+    });
+    expect(await screen.findByRole('button', { name: /develop/i })).toBeInTheDocument();
+
+    await act(async () => {
+      resolveCheckout({
+        branch: 'feature',
+        branches: ['main', 'feature'],
+        isRepo: true,
+      });
+      await checkout;
+    });
+
+    expect(screen.getByRole('button', { name: /develop/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /feature/i })).not.toBeInTheDocument();
   });
 
   it('recognizes Copilot URI plan modes without treating mode as a permission selector', async () => {
@@ -2191,6 +2520,48 @@ describe('AcpConversationPane', () => {
       expect(screen.queryByText('old-scope.bin')).not.toBeInTheDocument();
       expect(screen.getByPlaceholderText('做点什么…')).toHaveValue('');
     });
+  });
+
+  it('keeps unsent text scoped to the thread where it was drafted', async () => {
+    const otherThread = {
+      ...useAcpStore.getState().threads[0],
+      id: 'thread-2',
+      title: 'Other task',
+      runtime_status: 'idle',
+    };
+    useAcpStore.setState((state) => ({
+      threads: [...state.threads, otherThread],
+      allThreads: [...state.threads, otherThread],
+      runningByThread: { 'thread-1': false, 'thread-2': false },
+      sessionByThread: {
+        'thread-1': sessionSnapshot,
+        'thread-2': sessionSnapshot,
+      },
+    }));
+    const { container } = render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+    const textarea = screen.getByPlaceholderText('做点什么…') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'thread one draft' } });
+    fireEvent.change(container.querySelector<HTMLInputElement>('input[type="file"]')!, {
+      target: { files: [new File(['draft'], 'thread-one.bin')] },
+    });
+    expect(await screen.findByText('thread-one.bin')).toBeInTheDocument();
+
+    act(() => {
+      useAcpStore.setState({ activeThreadId: 'thread-2', messages: [] });
+    });
+    await waitFor(() => expect(textarea).toHaveValue(''));
+    expect(screen.queryByText('thread-one.bin')).not.toBeInTheDocument();
+    fireEvent.change(textarea, { target: { value: 'thread two draft' } });
+
+    act(() => {
+      useAcpStore.setState({ activeThreadId: 'thread-1', messages: [] });
+    });
+    await waitFor(() => expect(textarea).toHaveValue('thread one draft'));
+    expect(await screen.findByText('thread-one.bin')).toBeInTheDocument();
   });
 
   it('renders persisted user attachment names in message history', async () => {

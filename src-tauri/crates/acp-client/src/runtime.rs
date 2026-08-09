@@ -8,15 +8,15 @@
 use crate::config::ConfiguredAgent;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AgentNotification, BooleanConfigOptionCapabilities, CancelNotification,
-    ClientCapabilities, ClientNotification, ClientSessionCapabilities, ContentBlock,
-    ExtNotification, ImageContent, InitializeRequest, LoadSessionRequest, McpServer,
-    NewSessionResponse, PermissionOptionKind, PromptRequest, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, ResourceLink, ResumeSessionRequest,
-    SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory,
-    SessionConfigOptionValue, SessionConfigOptionsCapabilities, SessionConfigSelectOption,
-    SessionConfigSelectOptions, SessionId, SessionMode, SessionModeId, SessionModeState,
-    SessionNotification, SessionUpdate, SetSessionConfigOptionRequest, SetSessionModeRequest,
-    TextContent,
+    ClientCapabilities, ClientNotification, ClientSessionCapabilities, CloseSessionRequest,
+    ContentBlock, ExtNotification, ImageContent, Implementation, InitializeRequest,
+    LoadSessionRequest, McpServer, NewSessionResponse, PermissionOptionKind, PromptRequest,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, ResourceLink,
+    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
+    SessionConfigOptionCategory, SessionConfigOptionValue, SessionConfigOptionsCapabilities,
+    SessionConfigSelectOption, SessionConfigSelectOptions, SessionId, SessionMode, SessionModeId,
+    SessionModeState, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
+    SetSessionModeRequest, TextContent,
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{
@@ -25,6 +25,7 @@ use agent_client_protocol::{
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering},
@@ -203,6 +204,7 @@ pub struct RuntimeLimits {
     pub idle_timeout: Duration,
     /// `0` means unlimited.
     pub max_processes: usize,
+    session_control_timeout: Duration,
 }
 
 impl RuntimeLimits {
@@ -210,7 +212,14 @@ impl RuntimeLimits {
         Self {
             idle_timeout: Duration::from_secs(idle_timeout_secs),
             max_processes: max_processes as usize,
+            session_control_timeout: Duration::from_secs(30),
         }
+    }
+
+    #[cfg(test)]
+    fn with_session_control_timeout(mut self, timeout: Duration) -> Self {
+        self.session_control_timeout = timeout;
+        self
     }
 }
 
@@ -390,6 +399,8 @@ struct SessionRoute {
 struct SessionRoutes {
     by_session_id: HashMap<String, SessionRoute>,
     opening: Option<SessionRoute>,
+    pending_notifications: HashMap<String, Vec<SessionNotification>>,
+    routed_notifications: Vec<(SessionRoute, SessionNotification)>,
 }
 
 #[derive(Debug, Clone)]
@@ -825,13 +836,74 @@ impl AcpRuntime {
         Ok(summary)
     }
 
-    /// Drop a live agent process (e.g. thread deleted).
+    /// Detach local runtime state without changing the remote ACP session.
     pub async fn drop_session(&self, session_key: &str) {
         let removed = self.sessions.lock().await.remove(session_key);
         if let Some(live) = removed {
             unregister_live_route(&live).await;
             self.cancel_permissions(&live.permission_scope).await;
         }
+    }
+
+    /// Close a user-deleted ACP session when supported, then detach its local state.
+    pub async fn close_session(&self, session_key: &str) -> anyhow::Result<bool> {
+        let lifecycle = self.session_lifecycle_lock(session_key).await;
+        let _lifecycle = lifecycle.lock().await;
+        let Some(live) = self.sessions.lock().await.get(session_key).cloned() else {
+            return Ok(false);
+        };
+        let _admission = live.admission_lock.lock().await;
+        if live.prompt_state.load(Ordering::Acquire) != PROMPT_IDLE {
+            anyhow::bail!("cannot close an ACP session while a prompt is running");
+        }
+        let _operation = live.operation_lock.lock().await;
+        let _process = live.process_operation_lock.lock().await;
+        if live.prompt_state.load(Ordering::Acquire) != PROMPT_IDLE {
+            anyhow::bail!("cannot close an ACP session while a prompt is running");
+        }
+        if !self
+            .sessions
+            .lock()
+            .await
+            .get(session_key)
+            .is_some_and(|current| current.permission_scope == live.permission_scope)
+        {
+            return Ok(false);
+        }
+
+        let session_id = { live.active.lock().await.id.clone() };
+        if let Some(session_id) = session_id {
+            let metadata = live_metadata(&live).await?;
+            if metadata.capabilities.session_capabilities.close.is_some() {
+                let connection = live_connection(&live).await?;
+                self.live_control_request(
+                    &live,
+                    "session/close",
+                    connection
+                        .send_request(CloseSessionRequest::new(session_id))
+                        .block_task(),
+                )
+                .await?;
+            }
+        }
+
+        let removed = {
+            let mut sessions = self.sessions.lock().await;
+            if sessions
+                .get(session_key)
+                .is_some_and(|current| current.permission_scope == live.permission_scope)
+            {
+                sessions.remove(session_key)
+            } else {
+                None
+            }
+        };
+        let Some(removed) = removed else {
+            return Ok(false);
+        };
+        unregister_live_route(&removed).await;
+        self.cancel_permissions(&removed.permission_scope).await;
+        Ok(true)
     }
 
     pub async fn drop_agent_sessions(&self, agent_ids: &[String]) {
@@ -1030,17 +1102,27 @@ impl AcpRuntime {
         let _busy = BusyGuard::activate(live.busy.clone());
         *live.event_slot.lock().await = Some(event_tx.clone());
         let result = prepare_live_session(&live, preferred_session_id.as_deref(), &event_tx).await;
+        let session_control_timed_out = result
+            .as_ref()
+            .err()
+            .is_some_and(is_session_control_timeout);
         let drain_result = drain_notification_work(&live.notification_barrier_tx).await;
         *live.event_slot.lock().await = None;
         live.touch();
-        match (result, drain_result) {
+        let outcome = match (result, drain_result) {
             (Ok(snapshot), Ok(())) => Ok(snapshot),
             (Err(error), Ok(())) => Err(error),
             (Ok(_), Err(error)) => Err(error),
             (Err(error), Err(drain_error)) => Err(anyhow::anyhow!(
                 "{error}; ACP notification drain also failed: {drain_error}"
             )),
+        };
+        if session_control_timed_out {
+            drop(_busy);
+            drop(_operation);
+            self.shutdown_process_scope(&live).await;
         }
+        outcome
     }
 
     pub async fn cancel(&self, session_key: &str) -> anyhow::Result<bool> {
@@ -1263,13 +1345,20 @@ impl AcpRuntime {
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| anyhow::anyhow!("model value must be a non-empty string"))?;
             drop(active);
-            connection
-                .send_request(LegacySetModelRequest::new(session_id.clone(), model_id))
-                .block_task()
-                .await
-                .map_err(|e| anyhow::anyhow!("session/set_model failed: {e}"))?;
+            self.live_control_request(
+                &live,
+                "session/set_model",
+                connection
+                    .send_request(LegacySetModelRequest::new(session_id.clone(), model_id))
+                    .block_task(),
+            )
+            .await?;
             let mut active = live.active.lock().await;
-            update_select_value(&mut active.config_options, config_id, model_id);
+            apply_legacy_model_selection(
+                &mut active.config_options,
+                metadata.meta.as_ref(),
+                model_id,
+            );
         } else if set_method == Some("session/set_model_reasoning") && is_grok_shell(&metadata) {
             let reasoning_effort = value
                 .as_str()
@@ -1291,15 +1380,18 @@ impl AcpRuntime {
                 })
                 .ok_or_else(|| anyhow::anyhow!("Grok did not advertise a current model"))?;
             drop(active);
-            connection
-                .send_request(LegacySetModelRequest::with_reasoning(
-                    session_id.clone(),
-                    &model_id,
-                    reasoning_effort,
-                ))
-                .block_task()
-                .await
-                .map_err(|e| anyhow::anyhow!("session/set_model reasoning update failed: {e}"))?;
+            self.live_control_request(
+                &live,
+                "session/set_model_reasoning",
+                connection
+                    .send_request(LegacySetModelRequest::with_reasoning(
+                        session_id.clone(),
+                        &model_id,
+                        reasoning_effort,
+                    ))
+                    .block_task(),
+            )
+            .await?;
             let mut active = live.active.lock().await;
             update_select_value(&mut active.config_options, config_id, reasoning_effort);
         } else {
@@ -1311,15 +1403,19 @@ impl AcpRuntime {
                 anyhow::bail!("config option value must be a string or boolean");
             };
             drop(active);
-            let response = connection
-                .send_request(SetSessionConfigOptionRequest::new(
-                    session_id,
-                    config_id.to_string(),
-                    option_value,
-                ))
-                .block_task()
-                .await
-                .map_err(|e| anyhow::anyhow!("session/set_config_option failed: {e}"))?;
+            let response = self
+                .live_control_request(
+                    &live,
+                    "session/set_config_option",
+                    connection
+                        .send_request(SetSessionConfigOptionRequest::new(
+                            session_id,
+                            config_id.to_string(),
+                            option_value,
+                        ))
+                        .block_task(),
+                )
+                .await?;
             let mut active = live.active.lock().await;
             active.config_options = normalized_config_options_for_session(
                 response.config_options,
@@ -1376,14 +1472,17 @@ impl AcpRuntime {
             anyhow::bail!("unknown ACP session mode `{mode_id}`");
         }
         drop(active);
-        connection
-            .send_request(SetSessionModeRequest::new(
-                session_id,
-                SessionModeId::new(mode_id),
-            ))
-            .block_task()
-            .await
-            .map_err(|e| anyhow::anyhow!("session/set_mode failed: {e}"))?;
+        self.live_control_request(
+            &live,
+            "session/set_mode",
+            connection
+                .send_request(SetSessionModeRequest::new(
+                    session_id,
+                    SessionModeId::new(mode_id),
+                ))
+                .block_task(),
+        )
+        .await?;
         let mut active = live.active.lock().await;
         if let Some(modes) = active.modes.as_mut() {
             modes.current_mode_id = SessionModeId::new(mode_id);
@@ -1540,6 +1639,27 @@ impl AcpRuntime {
             .ok_or_else(|| anyhow::anyhow!("ACP session process is not running"))
     }
 
+    async fn live_control_request<T, E>(
+        &self,
+        live: &LiveSession,
+        method: &'static str,
+        request: impl Future<Output = Result<T, E>>,
+    ) -> anyhow::Result<T>
+    where
+        E: std::fmt::Display,
+    {
+        let result =
+            session_control_request(method, live_session_control_timeout(live)?, request).await;
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(is_session_control_timeout)
+        {
+            self.shutdown_process_scope(live).await;
+        }
+        result
+    }
+
     async fn ensure_live(
         &self,
         session_key: &str,
@@ -1549,13 +1669,7 @@ impl AcpRuntime {
         limits: RuntimeLimits,
         event_tx: &mpsc::UnboundedSender<AcpEvent>,
     ) -> anyhow::Result<()> {
-        let session_lock = {
-            let mut locks = self.session_locks.lock().await;
-            locks
-                .entry(session_key.to_string())
-                .or_insert_with(|| Arc::new(Mutex::new(())))
-                .clone()
-        };
+        let session_lock = self.session_lifecycle_lock(session_key).await;
         let _session_guard = session_lock.lock().await;
         let pool_guard = self.pool_lock.lock().await;
         let fingerprint = LaunchFingerprint::new(agent, auto_approve);
@@ -1802,6 +1916,14 @@ impl AcpRuntime {
             message: ACP_STATUS_AGENT_READY.into(),
         });
         Ok(())
+    }
+
+    async fn session_lifecycle_lock(&self, session_key: &str) -> Arc<Mutex<()>> {
+        let mut locks = self.session_locks.lock().await;
+        locks
+            .entry(session_key.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     async fn cancel_permissions(&self, scope: &str) {
@@ -2077,6 +2199,46 @@ async fn wait_until_ready(mut ready: watch::Receiver<ReadyState>) -> anyhow::Res
     .map_err(|_| anyhow::anyhow!("agent initialize timed out"))?
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{method} timed out after {timeout_ms} ms")]
+struct SessionControlTimeout {
+    method: &'static str,
+    timeout_ms: u128,
+}
+
+fn is_session_control_timeout(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|cause| cause.downcast_ref::<SessionControlTimeout>().is_some())
+}
+
+async fn session_control_request<T, E>(
+    method: &'static str,
+    timeout: Duration,
+    request: impl Future<Output = Result<T, E>>,
+) -> anyhow::Result<T>
+where
+    E: std::fmt::Display,
+{
+    match tokio::time::timeout(timeout, request).await {
+        Ok(Ok(response)) => Ok(response),
+        Ok(Err(error)) => Err(anyhow::anyhow!("{method} failed: {error}")),
+        Err(_) => Err(SessionControlTimeout {
+            method,
+            timeout_ms: timeout.as_millis(),
+        }
+        .into()),
+    }
+}
+
+fn live_session_control_timeout(live: &LiveSession) -> anyhow::Result<Duration> {
+    Ok(live
+        .runtime_limits
+        .lock()
+        .map_err(|_| anyhow::anyhow!("ACP runtime limits lock is poisoned"))?
+        .session_control_timeout)
+}
+
 fn nested_agent_error_data(raw: &str) -> Option<String> {
     fn strip_dependency_wrappers(value: serde_json::Value) -> (serde_json::Value, bool) {
         match value {
@@ -2247,6 +2409,11 @@ fn spawn_process_anchor(
                     route_extension_notification(notification, &notification_routes).await;
                 }
                 NotificationWork::Barrier(done) => {
+                    flush_routed_session_notifications(
+                        &notification_routes,
+                        &notification_metadata,
+                    )
+                    .await;
                     let _ = done.send(());
                 }
             }
@@ -2442,10 +2609,17 @@ fn spawn_process_anchor(
                     let agent_for_discovery = agent_for_discovery.clone();
                     async move {
                         // Initialize once per process.
-                        let initialize = InitializeRequest::new(ProtocolVersion::V1)
-                            .client_capabilities(aqbot_client_capabilities());
+                        let initialize = aqbot_initialize_request();
                         match connection.send_request(initialize).block_task().await {
                             Ok(response) => {
+                                if response.protocol_version != ProtocolVersion::V1 {
+                                    let msg = format!(
+                                        "initialize failed: unsupported ACP protocol version {}; only version 1 is supported",
+                                        response.protocol_version
+                                    );
+                                    let _ = ready_tx.send(ReadyState::Failed(msg.clone()));
+                                    return Err(agent_client_protocol::util::internal_error(msg));
+                                }
                                 *metadata_slot.lock().await = Some(AgentMetadata {
                                     capabilities: response.agent_capabilities,
                                     meta: response.meta,
@@ -2603,6 +2777,7 @@ fn spawn_logical_session(
     let worker_completion_tx = completion_tx.clone();
     let worker_cancel_tx = cancel_tx.clone();
     let worker_route = route.clone();
+    let worker_session_control_timeout = limits.session_control_timeout;
     tokio::spawn(async move {
         while let Some(job) = job_rx.recv().await {
             let mut cancel_rx = worker_cancel_tx.subscribe();
@@ -2679,6 +2854,7 @@ fn spawn_logical_session(
                                         &worker_route,
                                         &worker_prompt_state,
                                         &worker_prompt_dispatch_lock,
+                                        worker_session_control_timeout,
                                     )
                                     .await
                                 }
@@ -3160,6 +3336,12 @@ fn aqbot_client_capabilities() -> ClientCapabilities {
     ClientCapabilities::new().session(ClientSessionCapabilities::new().config_options(
         SessionConfigOptionsCapabilities::new().boolean(BooleanConfigOptionCapabilities::new()),
     ))
+}
+
+fn aqbot_initialize_request() -> InitializeRequest {
+    InitializeRequest::new(ProtocolVersion::V1)
+        .client_capabilities(aqbot_client_capabilities())
+        .client_info(Implementation::new("aqbot", env!("CARGO_PKG_VERSION")).title("AQBot"))
 }
 
 async fn live_connection(live: &LiveSession) -> anyhow::Result<ConnectionTo<Agent>> {
@@ -3931,13 +4113,18 @@ fn legacy_reasoning_option_from_state(
 ) -> Option<SessionConfigOption> {
     let model_state = model_state.as_object()?;
     let current_model = model_state.get("currentModelId")?.as_str()?;
+    legacy_reasoning_option_for_model_from_state(model_state, current_model)
+}
+
+fn legacy_reasoning_option_for_model_from_state(
+    model_state: &serde_json::Map<String, serde_json::Value>,
+    model_id: &str,
+) -> Option<SessionConfigOption> {
     let model = model_state
         .get("availableModels")?
         .as_array()?
         .iter()
-        .find(|model| {
-            model.get("modelId").and_then(|value| value.as_str()) == Some(current_model)
-        })?;
+        .find(|model| model.get("modelId").and_then(|value| value.as_str()) == Some(model_id))?;
     let model_meta = model.get("_meta")?.as_object()?;
     let efforts = model_meta.get("reasoningEfforts")?.as_array()?;
     let current = model_meta
@@ -4008,6 +4195,37 @@ fn legacy_reasoning_option_from_state(
     )
 }
 
+fn apply_legacy_model_selection(
+    options: &mut Vec<SessionConfigOption>,
+    meta: Option<&agent_client_protocol::schema::v1::Meta>,
+    model_id: &str,
+) {
+    update_select_value(options, "model", model_id);
+    let Some(model_state) = meta
+        .and_then(|meta| meta.get("modelState"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return;
+    };
+    let replacement = legacy_reasoning_option_for_model_from_state(model_state, model_id);
+    let existing = options.iter().position(|option| {
+        option
+            .meta
+            .as_ref()
+            .and_then(|meta| meta.get("aqbotSetMethod"))
+            .and_then(serde_json::Value::as_str)
+            == Some("session/set_model_reasoning")
+    });
+    match (existing, replacement) {
+        (Some(index), Some(replacement)) => options[index] = replacement,
+        (Some(index), None) => {
+            options.remove(index);
+        }
+        (None, Some(replacement)) => options.push(replacement),
+        (None, None) => {}
+    }
+}
+
 async fn prepare_live_session(
     live: &LiveSession,
     preferred_session_id: Option<&str>,
@@ -4015,6 +4233,7 @@ async fn prepare_live_session(
 ) -> anyhow::Result<AcpSessionSnapshot> {
     let connection = live_connection(live).await?;
     let metadata = live_metadata(live).await?;
+    let session_control_timeout = live_session_control_timeout(live)?;
     let mut active = live.active.lock().await;
     let first_prepare = active.id.is_none();
     ensure_routed_agent_session(
@@ -4027,6 +4246,7 @@ async fn prepare_live_session(
         &live.routes,
         &live.session_open_lock,
         &live.route(),
+        session_control_timeout,
     )
     .await?;
     if first_prepare && is_grok_shell(&metadata) {
@@ -4059,6 +4279,7 @@ async fn ensure_routed_agent_session(
     routes: &RouteMap,
     session_open_lock: &Arc<Mutex<()>>,
     route: &SessionRoute,
+    session_control_timeout: Duration,
 ) -> anyhow::Result<()> {
     if let Some(session_id) = active.id.as_ref() {
         register_session_route(routes, session_id, route).await;
@@ -4070,7 +4291,11 @@ async fn ensure_routed_agent_session(
         register_session_route(routes, session_id, route).await;
         return Ok(());
     }
-    routes.lock().await.opening = Some(route.clone());
+    {
+        let mut routes = routes.lock().await;
+        routes.pending_notifications.clear();
+        routes.opening = Some(route.clone());
+    }
     let result = ensure_agent_session(
         connection,
         cwd,
@@ -4078,6 +4303,7 @@ async fn ensure_routed_agent_session(
         metadata,
         active,
         event_tx,
+        session_control_timeout,
     )
     .await;
     match (&result, active.id.as_ref()) {
@@ -4093,6 +4319,7 @@ async fn ensure_routed_agent_session(
                 .is_some_and(|opening| opening.permission_scope == route.permission_scope)
             {
                 routes.opening = None;
+                routes.pending_notifications.clear();
             }
         }
     }
@@ -4106,6 +4333,7 @@ async fn ensure_agent_session(
     metadata: &AgentMetadata,
     active: &mut ActiveSession,
     event_tx: &mpsc::UnboundedSender<AcpEvent>,
+    session_control_timeout: Duration,
 ) -> anyhow::Result<()> {
     if active.id.is_some() {
         return Ok(());
@@ -4117,10 +4345,14 @@ async fn ensure_agent_session(
             let _ = event_tx.send(AcpEvent::Status {
                 message: ACP_STATUS_RESTORING_SESSION.into(),
             });
-            match connection
-                .send_request(LoadSessionRequest::new(preferred_id.clone(), cwd.clone()))
-                .block_task()
-                .await
+            match session_control_request(
+                "session/load",
+                session_control_timeout,
+                connection
+                    .send_request(LoadSessionRequest::new(preferred_id.clone(), cwd.clone()))
+                    .block_task(),
+            )
+            .await
             {
                 Ok(response) => {
                     active.id = Some(preferred_id);
@@ -4138,7 +4370,7 @@ async fn ensure_agent_session(
                 Err(error) => {
                     let message = error.to_string();
                     if !is_missing_session_error(&message) {
-                        return Err(anyhow::anyhow!("session/load failed: {message}"));
+                        return Err(error);
                     }
                     tracing::warn!(%error, session = preferred, "saved ACP session is missing");
                     let _ = event_tx.send(AcpEvent::Status {
@@ -4147,10 +4379,14 @@ async fn ensure_agent_session(
                 }
             }
         } else if metadata.capabilities.session_capabilities.resume.is_some() {
-            match connection
-                .send_request(ResumeSessionRequest::new(preferred_id.clone(), cwd.clone()))
-                .block_task()
-                .await
+            match session_control_request(
+                "session/resume",
+                session_control_timeout,
+                connection
+                    .send_request(ResumeSessionRequest::new(preferred_id.clone(), cwd.clone()))
+                    .block_task(),
+            )
+            .await
             {
                 Ok(response) => {
                     active.id = Some(preferred_id);
@@ -4168,7 +4404,7 @@ async fn ensure_agent_session(
                 Err(error) => {
                     let message = error.to_string();
                     if !is_missing_session_error(&message) {
-                        return Err(anyhow::anyhow!("session/resume failed: {message}"));
+                        return Err(error);
                     }
                     tracing::warn!(%error, session = preferred, "saved ACP session is missing");
                     let _ = event_tx.send(AcpEvent::Status {
@@ -4182,11 +4418,14 @@ async fn ensure_agent_session(
     let _ = event_tx.send(AcpEvent::Status {
         message: ACP_STATUS_CREATING_SESSION.into(),
     });
-    let response = connection
-        .send_request(ExtendedNewSessionRequest::new(cwd.clone()))
-        .block_task()
-        .await
-        .map_err(|error| anyhow::anyhow!("session/new failed: {error}"))?;
+    let response = session_control_request(
+        "session/new",
+        session_control_timeout,
+        connection
+            .send_request(ExtendedNewSessionRequest::new(cwd.clone()))
+            .block_task(),
+    )
+    .await?;
     let standard = response.standard;
     active.id = Some(standard.session_id);
     active.modes = normalized_session_modes(standard.modes, metadata);
@@ -4230,6 +4469,7 @@ async fn run_one_prompt(
     route: &SessionRoute,
     prompt_state: &Arc<AtomicU8>,
     prompt_dispatch_lock: &Arc<Mutex<()>>,
+    session_control_timeout: Duration,
 ) -> anyhow::Result<PromptOutcome> {
     let metadata = metadata
         .lock()
@@ -4247,6 +4487,7 @@ async fn run_one_prompt(
         routes,
         session_open_lock,
         route,
+        session_control_timeout,
     )
     .await;
     if let Err(error) = session_open_result {
@@ -4335,6 +4576,7 @@ async fn run_one_prompt(
                     routes,
                     session_open_lock,
                     route,
+                    session_control_timeout,
                 )
                 .await?;
                 session_id = session.id.clone().expect("session recreated above");
@@ -4981,29 +5223,34 @@ async fn handle_grok_ask_user(
 
 async fn resolve_session_route(routes: &RouteMap, session_id: &SessionId) -> Option<SessionRoute> {
     let session_id = session_id.to_string();
-    let mut routes = routes.lock().await;
-    if let Some(route) = routes.by_session_id.get(&session_id) {
-        return Some(route.clone());
-    }
-    let route = routes.opening.clone()?;
-    routes.by_session_id.insert(session_id, route.clone());
-    Some(route)
+    routes.lock().await.by_session_id.get(&session_id).cloned()
 }
 
 async fn register_session_route(routes: &RouteMap, session_id: &SessionId, route: &SessionRoute) {
     let mut routes = routes.lock().await;
+    let session_id = session_id.to_string();
     routes
         .by_session_id
         .retain(|_, existing| existing.permission_scope != route.permission_scope);
     routes
         .by_session_id
-        .insert(session_id.to_string(), route.clone());
+        .insert(session_id.clone(), route.clone());
     if routes
         .opening
         .as_ref()
         .is_some_and(|opening| opening.permission_scope == route.permission_scope)
     {
         routes.opening = None;
+        let matching = routes
+            .pending_notifications
+            .remove(&session_id)
+            .unwrap_or_default();
+        routes.pending_notifications.clear();
+        routes.routed_notifications.extend(
+            matching
+                .into_iter()
+                .map(|notification| (route.clone(), notification)),
+        );
     }
 }
 
@@ -5012,13 +5259,47 @@ async fn route_session_notification(
     routes: &RouteMap,
     metadata: &Arc<Mutex<Option<AgentMetadata>>>,
 ) {
-    let Some(route) = resolve_session_route(routes, &notification.session_id).await else {
+    let session_id = notification.session_id.to_string();
+    let route = {
+        let mut routes = routes.lock().await;
+        if let Some(route) = routes.by_session_id.get(&session_id) {
+            Some(route.clone())
+        } else if routes.opening.is_some() {
+            routes
+                .pending_notifications
+                .entry(session_id.clone())
+                .or_default()
+                .push(notification);
+            return;
+        } else {
+            None
+        }
+    };
+    let Some(route) = route else {
         tracing::warn!(
-            session_id = %notification.session_id,
+            session_id,
             "ignoring ACP update for an unknown logical session"
         );
         return;
     };
+    emit_session_notification(notification, route, metadata).await;
+}
+
+async fn flush_routed_session_notifications(
+    routes: &RouteMap,
+    metadata: &Arc<Mutex<Option<AgentMetadata>>>,
+) {
+    let notifications = std::mem::take(&mut routes.lock().await.routed_notifications);
+    for (route, notification) in notifications {
+        emit_session_notification(notification, route, metadata).await;
+    }
+}
+
+async fn emit_session_notification(
+    notification: SessionNotification,
+    route: SessionRoute,
+    metadata: &Arc<Mutex<Option<AgentMetadata>>>,
+) {
     let event_tx = route.event_slot.lock().await.clone();
     let (discard_tx, _discard_rx) = mpsc::unbounded_channel();
     map_session_notification(
@@ -5954,6 +6235,413 @@ mod tests {
     }
 
     #[test]
+    fn initialize_request_identifies_aqbot_and_its_supported_capabilities() {
+        let serialized =
+            serde_json::to_value(aqbot_initialize_request()).expect("serialize initialize request");
+
+        assert_eq!(
+            serialized,
+            serde_json::json!({
+                "protocolVersion": 1,
+                "clientCapabilities": {
+                    "fs": {
+                        "readTextFile": false,
+                        "writeTextFile": false
+                    },
+                    "terminal": false,
+                    "session": {
+                        "configOptions": {
+                            "boolean": {}
+                        }
+                    }
+                },
+                "clientInfo": {
+                    "name": "aqbot",
+                    "title": "AQBot",
+                    "version": env!("CARGO_PKG_VERSION")
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_rejects_an_agent_that_negotiates_protocol_version_two() {
+        const AGENT: &str = r#"
+import json
+import sys
+
+def respond(request_id, result):
+    print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}), flush=True)
+
+for line in sys.stdin:
+    message = json.loads(line)
+    if message.get("method") == "initialize":
+        respond(message["id"], {"protocolVersion": 2, "agentCapabilities": {}})
+    elif message.get("method") == "session/new":
+        respond(message["id"], {"sessionId": "unsupported-version-session"})
+"#;
+        let runtime = AcpRuntime::new();
+        let agent = ConfiguredAgent {
+            id: "unsupported-protocol-agent".into(),
+            name: "Unsupported protocol agent".into(),
+            enabled: true,
+            source: "custom".into(),
+            command: "python3".into(),
+            args: vec!["-u".into(), "-c".into(), AGENT.into()],
+            env: HashMap::new(),
+            icon: None,
+            sort: 0,
+        };
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            runtime.prepare(
+                "thread-unsupported-version",
+                &agent,
+                std::env::current_dir().expect("current directory"),
+                None,
+                false,
+                RuntimeLimits::new(60, 1),
+                event_tx,
+            ),
+        )
+        .await
+        .expect("unsupported-version handshake must finish")
+        .expect_err("protocol version 2 must be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported ACP protocol version 2"),
+            "{error}"
+        );
+        assert!(!runtime.has_live_session("thread-unsupported-version").await);
+        while let Ok(event) = event_rx.try_recv() {
+            assert!(
+                !matches!(event, AcpEvent::Status { message } if message == ACP_STATUS_AGENT_READY),
+                "unsupported handshake entered Ready"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn prepare_times_out_and_drops_the_process_when_session_new_never_responds() {
+        const AGENT: &str = r#"
+import json
+import sys
+
+for line in sys.stdin:
+    message = json.loads(line)
+    if message.get("method") == "initialize":
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "id": message["id"],
+            "result": {"protocolVersion": 1, "agentCapabilities": {}}
+        }), flush=True)
+"#;
+        let runtime = AcpRuntime::new();
+        let agent = ConfiguredAgent {
+            id: "hanging-session-new-agent".into(),
+            name: "Hanging session/new agent".into(),
+            enabled: true,
+            source: "custom".into(),
+            command: "python3".into(),
+            args: vec!["-u".into(), "-c".into(), AGENT.into()],
+            env: HashMap::new(),
+            icon: None,
+            sort: 0,
+        };
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        let limits =
+            RuntimeLimits::new(60, 1).with_session_control_timeout(Duration::from_millis(100));
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            runtime.prepare(
+                "thread-hanging-session-new",
+                &agent,
+                std::env::current_dir().expect("current directory"),
+                None,
+                false,
+                limits,
+                event_tx,
+            ),
+        )
+        .await
+        .expect("prepare must enforce its session control timeout")
+        .expect_err("a hanging session/new request must fail");
+
+        assert!(
+            error.to_string().contains("session/new timed out"),
+            "{error}"
+        );
+        assert!(!runtime.has_live_session("thread-hanging-session-new").await);
+        assert!(runtime.warm_sessions.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn mode_update_times_out_and_drops_the_unresponsive_process() {
+        const AGENT: &str = r#"
+import json
+import sys
+
+def respond(request_id, result):
+    print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}), flush=True)
+
+for line in sys.stdin:
+    message = json.loads(line)
+    if message.get("method") == "initialize":
+        respond(message["id"], {"protocolVersion": 1, "agentCapabilities": {}})
+    elif message.get("method") == "session/new":
+        respond(message["id"], {
+            "sessionId": "hanging-set-mode-session",
+            "modes": {
+                "currentModeId": "default",
+                "availableModes": [
+                    {"id": "default", "name": "Agent"},
+                    {"id": "plan", "name": "Plan"}
+                ]
+            }
+        })
+"#;
+        let runtime = AcpRuntime::new();
+        let agent = ConfiguredAgent {
+            id: "hanging-set-mode-agent".into(),
+            name: "Hanging set mode agent".into(),
+            enabled: true,
+            source: "custom".into(),
+            command: "python3".into(),
+            args: vec!["-u".into(), "-c".into(), AGENT.into()],
+            env: HashMap::new(),
+            icon: None,
+            sort: 0,
+        };
+        let limits =
+            RuntimeLimits::new(60, 1).with_session_control_timeout(Duration::from_millis(100));
+        let (event_tx, _event_rx) = mpsc::unbounded_channel();
+        runtime
+            .prepare(
+                "thread-hanging-set-mode",
+                &agent,
+                std::env::current_dir().expect("current directory"),
+                None,
+                false,
+                limits,
+                event_tx,
+            )
+            .await
+            .expect("prepare session with modes");
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            runtime.set_mode("thread-hanging-set-mode", "plan"),
+        )
+        .await
+        .expect("set_mode must enforce its control timeout")
+        .expect_err("an unresponsive mode update must fail");
+
+        assert!(
+            error.to_string().contains("session/set_mode timed out"),
+            "{error}"
+        );
+        assert!(!runtime.has_live_session("thread-hanging-set-mode").await);
+        assert!(runtime.warm_sessions.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn close_timeout_tears_down_the_shared_process_without_deadlocking() {
+        const AGENT: &str = r#"
+import json
+import sys
+
+def respond(request_id, result):
+    print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}), flush=True)
+
+for line in sys.stdin:
+    message = json.loads(line)
+    if message.get("method") == "initialize":
+        respond(message["id"], {
+            "protocolVersion": 1,
+            "agentCapabilities": {"sessionCapabilities": {"close": {}}}
+        })
+    elif message.get("method") == "session/new":
+        respond(message["id"], {"sessionId": "hanging-close-session"})
+"#;
+        let runtime = AcpRuntime::new();
+        let agent = ConfiguredAgent {
+            id: "hanging-close-agent".into(),
+            name: "Hanging close agent".into(),
+            enabled: true,
+            source: "custom".into(),
+            command: "python3".into(),
+            args: vec!["-u".into(), "-c".into(), AGENT.into()],
+            env: HashMap::new(),
+            icon: None,
+            sort: 0,
+        };
+        let limits =
+            RuntimeLimits::new(60, 1).with_session_control_timeout(Duration::from_millis(100));
+        runtime
+            .prepare(
+                "thread-hanging-close",
+                &agent,
+                std::env::current_dir().expect("current directory"),
+                None,
+                false,
+                limits,
+                mpsc::unbounded_channel().0,
+            )
+            .await
+            .expect("prepare hanging close session");
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            runtime.close_session("thread-hanging-close"),
+        )
+        .await
+        .expect("close timeout teardown must not deadlock")
+        .expect_err("hanging session/close must fail");
+
+        assert!(error.to_string().contains("session/close timed out"));
+        assert!(!runtime.has_live_session("thread-hanging-close").await);
+        assert!(runtime.warm_sessions.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn opening_session_replays_only_matching_updates_and_cancels_stale_permission() {
+        const AGENT: &str = r#"
+import json
+import sys
+
+log_path = sys.argv[1]
+session_number = 0
+first_session_id = None
+
+def send(message):
+    print(json.dumps(message), flush=True)
+
+def respond(request_id, result):
+    send({"jsonrpc": "2.0", "id": request_id, "result": result})
+
+def update(session_id, text):
+    send({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+            "sessionId": session_id,
+            "update": {
+                "sessionUpdate": "agent_message_chunk",
+                "content": {"type": "text", "text": text}
+            }
+        }
+    })
+
+for line in sys.stdin:
+    message = json.loads(line)
+    if message.get("method") == "initialize":
+        respond(message["id"], {"protocolVersion": 1, "agentCapabilities": {}})
+    elif message.get("method") == "session/new":
+        session_number += 1
+        session_id = f"session-{session_number}"
+        if session_number == 1:
+            first_session_id = session_id
+            respond(message["id"], {"sessionId": session_id})
+            continue
+
+        update(first_session_id, "stale-a-text")
+        update(session_id, "early-b-text")
+        permission_id = 7001
+        send({
+            "jsonrpc": "2.0",
+            "id": permission_id,
+            "method": "session/request_permission",
+            "params": {
+                "sessionId": first_session_id,
+                "toolCall": {"toolCallId": "stale-a-tool", "title": "Stale A edit"},
+                "options": [
+                    {"optionId": "allow-once", "name": "Allow", "kind": "allow_once"},
+                    {"optionId": "reject-once", "name": "Reject", "kind": "reject_once"}
+                ]
+            }
+        })
+        while True:
+            permission_response = json.loads(sys.stdin.readline())
+            if permission_response.get("id") == permission_id:
+                outcome = ((permission_response.get("result") or {}).get("outcome") or {}).get("outcome")
+                with open(log_path, "w", encoding="utf-8") as log:
+                    log.write(outcome or "missing")
+                break
+        respond(message["id"], {"sessionId": session_id})
+"#;
+        let log_path = std::env::temp_dir().join(format!(
+            "aqbot-acp-stale-opening-permission-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let runtime = AcpRuntime::new();
+        let agent = ConfiguredAgent {
+            id: "stale-opening-route-agent".into(),
+            name: "Stale opening route agent".into(),
+            enabled: true,
+            source: "custom".into(),
+            command: "python3".into(),
+            args: vec![
+                "-u".into(),
+                "-c".into(),
+                AGENT.into(),
+                log_path.to_string_lossy().into_owned(),
+            ],
+            env: HashMap::new(),
+            icon: None,
+            sort: 0,
+        };
+        let limits = RuntimeLimits::new(60, 1);
+        let cwd = std::env::current_dir().expect("current directory");
+        runtime
+            .prepare(
+                "thread-a",
+                &agent,
+                cwd.clone(),
+                None,
+                false,
+                limits,
+                mpsc::unbounded_channel().0,
+            )
+            .await
+            .expect("prepare first logical session");
+        runtime.drop_session("thread-a").await;
+
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let snapshot = tokio::time::timeout(
+            Duration::from_secs(5),
+            runtime.prepare("thread-b", &agent, cwd, None, false, limits, event_tx),
+        )
+        .await
+        .expect("stale permission must be cancelled without blocking session/new")
+        .expect("prepare second logical session");
+
+        assert_eq!(snapshot.session_id, "session-2");
+        let events = std::iter::from_fn(|| event_rx.try_recv().ok()).collect::<Vec<_>>();
+        let text = events
+            .iter()
+            .filter_map(|event| match event {
+                AcpEvent::StreamText { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(text, ["early-b-text"]);
+        assert!(events.iter().all(|event| !matches!(
+            event,
+            AcpEvent::PermissionRequest { .. } | AcpEvent::ToolCall { .. }
+        )));
+        assert_eq!(
+            std::fs::read_to_string(&log_path).expect("read permission outcome"),
+            "cancelled"
+        );
+        std::fs::remove_file(log_path).expect("remove permission outcome log");
+    }
+
+    #[test]
     fn extended_new_session_response_skips_future_config_kinds_and_keeps_extensions() {
         let response: ExtendedNewSessionResponse = serde_json::from_value(serde_json::json!({
             "sessionId": "session-forward-compatible",
@@ -6095,6 +6783,76 @@ mod tests {
             panic!("expected select option");
         };
         assert_eq!(select.current_value.to_string(), "high");
+    }
+
+    #[test]
+    fn switching_legacy_model_rebuilds_its_reasoning_selector() {
+        let mut meta = agent_client_protocol::schema::v1::Meta::new();
+        meta.insert(
+            "modelState".into(),
+            serde_json::json!({
+                "currentModelId": "model-a",
+                "availableModels": [
+                    {
+                        "modelId": "model-a",
+                        "name": "Model A",
+                        "_meta": {
+                            "reasoningEffort": "low",
+                            "reasoningEfforts": [
+                                { "id": "low", "label": "Low" },
+                                { "id": "high", "label": "High" }
+                            ]
+                        }
+                    },
+                    {
+                        "modelId": "model-b",
+                        "name": "Model B",
+                        "_meta": {
+                            "reasoningEffort": "medium",
+                            "reasoningEfforts": [
+                                { "id": "none", "label": "None" },
+                                { "id": "medium", "label": "Medium" }
+                            ]
+                        }
+                    }
+                ]
+            }),
+        );
+        let metadata = AgentMetadata {
+            capabilities: AgentCapabilities::default(),
+            meta: Some(meta),
+            launch_config_options: Vec::new(),
+        };
+        let mut options = normalized_config_options(Vec::new(), &metadata);
+
+        apply_legacy_model_selection(&mut options, metadata.meta.as_ref(), "model-b");
+
+        let model = options
+            .iter()
+            .find(|option| option.category == Some(SessionConfigOptionCategory::Model))
+            .expect("target model selector");
+        let SessionConfigKind::Select(model_select) = &model.kind else {
+            panic!("expected model select option");
+        };
+        assert_eq!(model_select.current_value.to_string(), "model-b");
+        let reasoning = options
+            .iter()
+            .find(|option| option.category == Some(SessionConfigOptionCategory::ThoughtLevel))
+            .expect("target model reasoning selector");
+        let SessionConfigKind::Select(select) = &reasoning.kind else {
+            panic!("expected select option");
+        };
+        assert_eq!(select.current_value.to_string(), "medium");
+        let SessionConfigSelectOptions::Ungrouped(choices) = &select.options else {
+            panic!("expected flat reasoning choices");
+        };
+        assert_eq!(
+            choices
+                .iter()
+                .map(|choice| choice.value.to_string())
+                .collect::<Vec<_>>(),
+            ["none", "medium"]
+        );
     }
 
     #[test]

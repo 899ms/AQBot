@@ -3,6 +3,7 @@ use crate::error::{AQBotError, Result};
 use crate::file_store::FileStore;
 use crate::types::{Attachment, AttachmentInput};
 use crate::utils::gen_id;
+use sea_orm::sea_query::Expr;
 use sea_orm::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -490,6 +491,31 @@ pub async fn update_thread_session_id(
         am.update(db).await?;
     }
     Ok(())
+}
+
+/// Atomically persist the session identity and mode only while the thread
+/// still exists. The affected-row result closes the prepare/delete race that
+/// a read-then-update sequence cannot detect.
+pub async fn persist_prepared_thread_session(
+    db: &DatabaseConnection,
+    id: &str,
+    acp_session_id: &str,
+    mode_id: Option<&str>,
+) -> Result<bool> {
+    let result = acp_threads::Entity::update_many()
+        .col_expr(
+            acp_threads::Column::AcpSessionId,
+            Expr::value(Some(acp_session_id.to_string())),
+        )
+        .col_expr(
+            acp_threads::Column::ModeId,
+            Expr::value(mode_id.map(str::to_string)),
+        )
+        .col_expr(acp_threads::Column::UpdatedAt, Expr::value(now_str()))
+        .filter(acp_threads::Column::Id.eq(id))
+        .exec(db)
+        .await?;
+    Ok(result.rows_affected > 0)
 }
 
 pub async fn update_thread_mode(
@@ -1315,6 +1341,31 @@ mod tests {
         let thread = get_thread(&db, &thread.id).await.unwrap().unwrap();
         assert_eq!(thread.acp_session_id.as_deref(), Some("discovered-session"));
         assert_eq!(thread.runtime_status, "running");
+    }
+
+    #[tokio::test]
+    async fn prepared_session_persistence_reports_a_concurrently_deleted_thread() {
+        let db = crate::db::create_test_pool().await.unwrap().conn;
+        let (_, thread) = thread_fixture(&db).await;
+
+        assert!(
+            persist_prepared_thread_session(&db, &thread.id, "prepared-session", Some("plan"),)
+                .await
+                .unwrap()
+        );
+        let persisted = get_thread(&db, &thread.id).await.unwrap().unwrap();
+        assert_eq!(
+            persisted.acp_session_id.as_deref(),
+            Some("prepared-session")
+        );
+        assert_eq!(persisted.mode_id.as_deref(), Some("plan"));
+
+        delete_thread(&db, &thread.id).await.unwrap();
+        assert!(
+            !persist_prepared_thread_session(&db, &thread.id, "late-session", None,)
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

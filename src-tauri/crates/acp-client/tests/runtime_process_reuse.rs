@@ -92,6 +92,8 @@ for line in sys.stdin:
             respond_error(message["id"], "forced shared initialize failure")
             continue
         result = {"protocolVersion": 1, "agentCapabilities": {}}
+        if "supports-close" in sys.argv[2:]:
+            result["agentCapabilities"] = {"sessionCapabilities": {"close": {}}}
         if "fake-grok" in sys.argv[2:]:
             result["_meta"] = {"grokShell": True}
         exit_after_initialize = (
@@ -179,6 +181,12 @@ for line in sys.stdin:
             )
         else:
             respond(message["id"], {"stopReason": "end_turn"})
+    elif method == "session/close":
+        record("session/close", params["sessionId"])
+        if "fail-close" in sys.argv[2:]:
+            respond_error(message["id"], "forced session close failure")
+        else:
+            respond(message["id"], {})
     elif method == "session/set_model":
         record("session/set_model", f"{params['sessionId']}:{params['modelId']}")
         respond(message["id"], {})
@@ -623,6 +631,151 @@ async fn prewarmed_process_hosts_multiple_thread_sessions() {
     assert_eq!(new_session_count, 2, "one ACP session per thread\n{log}");
     assert_ne!(snapshot_a.session_id, snapshot_b.session_id);
 
+    std::fs::remove_file(log_path).expect("remove fake agent log");
+}
+
+#[tokio::test]
+async fn closing_one_supported_session_keeps_the_shared_session_usable() {
+    let log_path = unique_log_path("session-close-isolation");
+    let runtime = AcpRuntime::new();
+    let mut agent = fake_agent(&log_path);
+    agent.args.push("supports-close".into());
+    let limits = RuntimeLimits::new(60, 8);
+    let cwd = std::env::current_dir().expect("current directory");
+    let snapshot_a = runtime
+        .prepare(
+            "thread-a",
+            &agent,
+            cwd.clone(),
+            None,
+            false,
+            limits,
+            events(),
+        )
+        .await
+        .expect("prepare thread-a");
+    let snapshot_b = runtime
+        .prepare(
+            "thread-b",
+            &agent,
+            cwd.clone(),
+            None,
+            false,
+            limits,
+            events(),
+        )
+        .await
+        .expect("prepare thread-b");
+
+    assert!(runtime
+        .close_session("thread-a")
+        .await
+        .expect("close supported session"));
+    assert!(!runtime.has_live_session("thread-a").await);
+    assert!(runtime.has_live_session("thread-b").await);
+    runtime
+        .prompt(
+            "thread-b",
+            &agent,
+            cwd,
+            prompt("still-usable-after-a-close"),
+            Some(snapshot_b.session_id),
+            false,
+            limits,
+            events(),
+        )
+        .await
+        .expect("prompt thread-b after closing thread-a");
+
+    let log = std::fs::read_to_string(&log_path).expect("fake agent log");
+    let closed = log
+        .lines()
+        .filter(|line| line.starts_with("session/close\t"))
+        .collect::<Vec<_>>();
+    assert_eq!(closed.len(), 1, "{log}");
+    assert!(closed[0].ends_with(&snapshot_a.session_id), "{log}");
+    assert!(log.contains("still-usable-after-a-close"), "{log}");
+
+    std::fs::remove_file(log_path).expect("remove fake agent log");
+}
+
+#[tokio::test]
+async fn closing_an_unsupported_session_only_detaches_local_state() {
+    let log_path = unique_log_path("unsupported-session-close");
+    let runtime = AcpRuntime::new();
+    let agent = fake_agent(&log_path);
+    let limits = RuntimeLimits::new(60, 8);
+    runtime
+        .prepare(
+            "thread-a",
+            &agent,
+            std::env::current_dir().expect("current directory"),
+            None,
+            false,
+            limits,
+            events(),
+        )
+        .await
+        .expect("prepare unsupported close session");
+
+    assert!(runtime
+        .close_session("thread-a")
+        .await
+        .expect("detach unsupported close session"));
+    assert!(!runtime.has_live_session("thread-a").await);
+    let log = std::fs::read_to_string(&log_path).expect("fake agent log");
+    assert!(
+        !log.lines().any(|line| line.starts_with("session/close\t")),
+        "{log}"
+    );
+
+    std::fs::remove_file(log_path).expect("remove fake agent log");
+}
+
+#[tokio::test]
+async fn failed_supported_close_is_observable_and_keeps_the_session_usable() {
+    let log_path = unique_log_path("failed-session-close");
+    let runtime = AcpRuntime::new();
+    let mut agent = fake_agent(&log_path);
+    agent.args.push("supports-close".into());
+    agent.args.push("fail-close".into());
+    let limits = RuntimeLimits::new(60, 8);
+    let cwd = std::env::current_dir().expect("current directory");
+    let snapshot = runtime
+        .prepare(
+            "thread-a",
+            &agent,
+            cwd.clone(),
+            None,
+            false,
+            limits,
+            events(),
+        )
+        .await
+        .expect("prepare supported close session");
+
+    let error = runtime
+        .close_session("thread-a")
+        .await
+        .expect_err("agent close rejection must be returned");
+    assert!(error.to_string().contains("forced session close failure"));
+    assert!(runtime.has_live_session("thread-a").await);
+    runtime
+        .prompt(
+            "thread-a",
+            &agent,
+            cwd,
+            prompt("still-usable-after-close-rejection"),
+            Some(snapshot.session_id),
+            false,
+            limits,
+            events(),
+        )
+        .await
+        .expect("prompt after close rejection");
+
+    let log = std::fs::read_to_string(&log_path).expect("fake agent log");
+    assert!(log.contains("still-usable-after-close-rejection"), "{log}");
     std::fs::remove_file(log_path).expect("remove fake agent log");
 }
 

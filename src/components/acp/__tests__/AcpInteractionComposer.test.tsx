@@ -1,5 +1,6 @@
 import { App } from 'antd';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { translateZhCN } from '@/test/i18nTestTranslator';
 import {
@@ -174,7 +175,8 @@ describe('AcpInteractionComposer', () => {
     });
   });
 
-  it('expands plan review content to a near-fullscreen overlay', () => {
+  it('opens plan review in an accessible dialog and restores focus after Escape', async () => {
+    const user = userEvent.setup();
     renderComposer({
       ...baseRequest,
       kind: 'plan_review',
@@ -187,10 +189,20 @@ describe('AcpInteractionComposer', () => {
     });
 
     const expand = screen.getByRole('button', { name: '全屏查看' });
-    fireEvent.click(expand);
+    await user.click(expand);
+    const dialog = screen.getByRole('dialog', { name: '审核计划' });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
     expect(screen.getByRole('button', { name: '退出全屏' })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByRole('button', { name: '退出全屏' }));
-    expect(screen.getByRole('button', { name: '全屏查看' })).toHaveAttribute('aria-pressed', 'false');
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: '审核计划' })).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '全屏查看' })).toHaveFocus();
+    });
   });
 
   it('disables every choice while submitting and reports the selected option', async () => {

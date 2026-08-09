@@ -41,6 +41,7 @@ export interface AcpQuestionnaireComposerProps {
   request: AcpPermissionRequest;
   questionnaire: Questionnaire;
   onSubmit: (submission: AcpQuestionnaireSubmission) => Promise<void>;
+  active?: boolean;
 }
 
 function optionalText(value: unknown): string | undefined {
@@ -156,6 +157,7 @@ export function AcpQuestionnaireComposer({
   request,
   questionnaire,
   onSubmit,
+  active = true,
 }: AcpQuestionnaireComposerProps) {
   const { t } = useTranslation();
   const { token } = theme.useToken();
@@ -198,11 +200,12 @@ export function AcpQuestionnaireComposer({
   }, [request.requestId, questionnaire]);
 
   useEffect(() => {
+    if (!active) return undefined;
     const frame = window.requestAnimationFrame(() => {
       firstControlRef.current?.focus?.();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [request.requestId, safeIndex]);
+  }, [active, request.requestId, safeIndex]);
 
   const updateDraft = (questionIndex: number, update: (draft: AnswerDraft) => AnswerDraft) => {
     setDrafts((current) => current.map((entry, index) => (

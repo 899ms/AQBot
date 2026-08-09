@@ -262,27 +262,112 @@ fn normalize_loaded_agents(file: &mut AcpAgentsFile) -> anyhow::Result<bool> {
 }
 
 pub fn load_agents_file() -> anyhow::Result<AcpAgentsFile> {
-    ensure_acp_dirs()?;
     let path = agents_toml_path();
-    if !path.exists() {
-        let file = AcpAgentsFile::default();
-        save_agents_file(&file)?;
-        return Ok(file);
-    }
-    let text = std::fs::read_to_string(&path)?;
+    load_agents_file_at(&path)
+}
+
+fn load_agents_file_at(path: &Path) -> anyhow::Result<AcpAgentsFile> {
+    Ok(read_agents_file_at(path)?.0)
+}
+
+fn read_agents_file_at(path: &Path) -> anyhow::Result<(AcpAgentsFile, bool)> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((AcpAgentsFile::default(), true));
+        }
+        Err(error) => return Err(error.into()),
+    };
     let mut file: AcpAgentsFile = toml::from_str(&text)?;
     file.validate()?;
-    if normalize_loaded_agents(&mut file)? {
-        save_agents_file(&file)?;
+    let changed = normalize_loaded_agents(&mut file)?;
+    Ok((file, changed))
+}
+
+/// Persist a missing default file or any read-time launch migrations.
+///
+/// Call this during startup, before concurrent configuration commands begin.
+pub fn migrate_agents_file() -> anyhow::Result<AcpAgentsFile> {
+    ensure_acp_dirs()?;
+    let path = agents_toml_path();
+    migrate_agents_file_at(&path)
+}
+
+fn migrate_agents_file_at(path: &Path) -> anyhow::Result<AcpAgentsFile> {
+    let (file, changed) = read_agents_file_at(path)?;
+    if changed {
+        save_agents_file_at(path, &file)?;
     }
     Ok(file)
 }
 
 pub fn save_agents_file(file: &AcpAgentsFile) -> anyhow::Result<()> {
-    file.validate()?;
     ensure_acp_dirs()?;
-    let text = toml::to_string_pretty(file)?;
     let path = agents_toml_path();
+    save_agents_file_at(&path, file)
+}
+
+fn save_agents_file_at(path: &Path, file: &AcpAgentsFile) -> anyhow::Result<()> {
+    save_agents_file_at_with(path, file, replace_file_atomically)
+}
+
+#[cfg(not(windows))]
+fn replace_file_atomically(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(temporary, destination)
+}
+
+#[cfg(windows)]
+fn replace_file_atomically(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(
+            existing_file_name: *const u16,
+            new_file_name: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+
+    fn wide_path(path: &Path) -> std::io::Result<Vec<u16>> {
+        let mut wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+        if wide.contains(&0) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "path contains a NUL character",
+            ));
+        }
+        wide.push(0);
+        Ok(wide)
+    }
+
+    let temporary = wide_path(temporary)?;
+    let destination = wide_path(destination)?;
+    // SAFETY: both buffers are NUL-terminated and remain alive for the call.
+    let replaced = unsafe {
+        MoveFileExW(
+            temporary.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if replaced == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+fn save_agents_file_at_with(
+    path: &Path,
+    file: &AcpAgentsFile,
+    replace: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+) -> anyhow::Result<()> {
+    file.validate()?;
+    let text = toml::to_string_pretty(file)?;
     let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| -> anyhow::Result<()> {
         let mut output = std::fs::OpenOptions::new()
@@ -291,7 +376,7 @@ pub fn save_agents_file(file: &AcpAgentsFile) -> anyhow::Result<()> {
             .open(&temporary)?;
         output.write_all(text.as_bytes())?;
         output.sync_all()?;
-        std::fs::rename(&temporary, &path)?;
+        replace(&temporary, path)?;
         Ok(())
     })();
     if let Err(error) = result {
@@ -491,6 +576,29 @@ pub fn shell_command_line(agent: &ConfiguredAgent) -> String {
 mod tests {
     use super::*;
 
+    struct TestDirectory {
+        path: std::path::PathBuf,
+    }
+
+    impl TestDirectory {
+        fn new(label: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("aqbot-acp-config-{label}-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&path).expect("create test directory");
+            Self { path }
+        }
+
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
     fn agent(id: &str) -> ConfiguredAgent {
         ConfiguredAgent {
             id: id.into(),
@@ -503,6 +611,18 @@ mod tests {
             icon: None,
             sort: 0,
         }
+    }
+
+    fn file_with_agent(id: &str) -> AcpAgentsFile {
+        AcpAgentsFile {
+            general: AcpGeneralConfig::default(),
+            agents: vec![agent(id)],
+        }
+    }
+
+    fn persisted_file(path: &Path) -> AcpAgentsFile {
+        toml::from_str(&std::fs::read_to_string(path).expect("read persisted config"))
+            .expect("parse persisted config")
     }
 
     #[test]
@@ -693,5 +813,95 @@ mod tests {
             1
         );
         assert!(!file.agents[0].enabled);
+    }
+
+    #[test]
+    fn concurrent_reader_is_pure_and_normalization_migration_is_explicit() {
+        let directory = TestDirectory::new("reader-writer");
+        let path = directory.path().join("agents.toml");
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let (read_tx, read_rx) = std::sync::mpsc::channel();
+        let reader_path = path.clone();
+        let reader = std::thread::spawn(move || {
+            ready_tx.send(()).expect("announce reader readiness");
+            read_rx.recv().expect("wait for writer commit");
+            load_agents_file_at(&reader_path)
+        });
+        ready_rx.recv().expect("wait for reader readiness");
+
+        let mut quarantined = agent("fast-agent");
+        quarantined.source = "registry".into();
+        let mut committed = AcpAgentsFile {
+            general: AcpGeneralConfig::default(),
+            agents: vec![quarantined],
+        };
+        committed.general.idle_timeout_secs = 73;
+        save_agents_file_at(&path, &committed).expect("commit writer snapshot");
+        read_tx.send(()).expect("release concurrent reader");
+
+        let loaded = reader
+            .join()
+            .expect("join concurrent reader")
+            .expect("load committed snapshot");
+        assert!(!loaded.agents[0].enabled);
+        let persisted = persisted_file(&path);
+        assert_eq!(persisted.general.idle_timeout_secs, 73);
+        assert!(
+            persisted.agents[0].enabled,
+            "reader overwrote the writer's persisted snapshot"
+        );
+
+        let migrated = migrate_agents_file_at(&path).expect("migrate config");
+
+        assert!(!migrated.agents[0].enabled);
+        assert!(!persisted_file(&path).agents[0].enabled);
+    }
+
+    #[test]
+    fn saving_twice_replaces_the_complete_config() {
+        let directory = TestDirectory::new("save-twice");
+        let path = directory.path().join("agents.toml");
+        let first = file_with_agent("first");
+        let mut second = file_with_agent("second");
+        second.general.idle_timeout_secs = 42;
+
+        save_agents_file_at(&path, &first).expect("save first config");
+        save_agents_file_at(&path, &second).expect("replace with second config");
+
+        let persisted = persisted_file(&path);
+        assert_eq!(persisted.general.idle_timeout_secs, 42);
+        assert_eq!(persisted.agents.len(), 1);
+        assert_eq!(persisted.agents[0].id, "second");
+    }
+
+    #[test]
+    fn failed_replacement_preserves_the_previous_complete_config() {
+        let directory = TestDirectory::new("failed-replace");
+        let path = directory.path().join("agents.toml");
+        let original = file_with_agent("original");
+        let replacement = file_with_agent("replacement");
+        save_agents_file_at(&path, &original).expect("save original config");
+        let original_bytes = std::fs::read(&path).expect("read original config");
+
+        let error = save_agents_file_at_with(&path, &replacement, |_, _| {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "injected replacement failure",
+            ))
+        })
+        .expect_err("replacement must fail");
+
+        assert!(error.to_string().contains("injected replacement failure"));
+        assert_eq!(
+            std::fs::read(&path).expect("read config after failed replacement"),
+            original_bytes
+        );
+        assert_eq!(
+            std::fs::read_dir(directory.path())
+                .expect("list config directory")
+                .count(),
+            1,
+            "temporary config file was not cleaned up"
+        );
     }
 }

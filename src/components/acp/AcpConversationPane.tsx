@@ -75,6 +75,7 @@ import {
   AttachmentChips,
   isImageFile,
   revokeComposerAttachments,
+  type ComposerAttachment,
 } from '@/components/chat/AttachmentChips';
 import { MessageAttachmentPreview } from '@/components/chat/MessageAttachmentPreview';
 import {
@@ -526,6 +527,8 @@ export function AcpConversationPane() {
   const projects = useAcpStore((s) => s.projects);
   const threads = useAcpStore((s) => s.threads);
   const messages = useAcpStore((s) => s.messages);
+  const messagesLoadingByThread = useAcpStore((s) => s.messagesLoadingByThread);
+  const messagesErrorByThread = useAcpStore((s) => s.messagesErrorByThread);
   const activeProjectId = useAcpStore((s) => s.activeProjectId);
   const activeThreadId = useAcpStore((s) => s.activeThreadId);
   const projectsReady = useAcpStore((s) => s.projectsReady);
@@ -539,6 +542,7 @@ export function AcpConversationPane() {
   const planByThread = useAcpStore((s) => s.planByThread);
   const planDocumentsByThread = useAcpStore((s) => s.planDocumentsByThread);
   const pendingPermissions = useAcpStore((s) => s.pendingPermissions);
+  const loadMessages = useAcpStore((s) => s.loadMessages);
   const sendPrompt = useAcpStore((s) => s.sendPrompt);
   const createThread = useAcpStore((s) => s.createThread);
   const ensureRecentDraft = useAcpStore((s) => s.ensureRecentDraft);
@@ -585,16 +589,22 @@ export function AcpConversationPane() {
   );
 
   const [value, setValue] = useState('');
+  const valueRef = useRef(value);
+  valueRef.current = value;
   const [pastedSnippets, setPastedSnippets] = useState<PastedSnippet[]>([]);
+  const pastedSnippetsRef = useRef(pastedSnippets);
+  pastedSnippetsRef.current = pastedSnippets;
   const pastedSnippetSeqRef = useRef(0);
   const [sending, setSending] = useState(false);
   const [composerAgentId, setComposerAgentId] = useState<string | null>(null);
   const [gitInfo, setGitInfo] = useState<AcpGitInfo | null>(null);
   const [gitLoading, setGitLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
-  const [configUpdatingId, setConfigUpdatingId] = useState<string | null>(null);
+  const [configUpdatingBySession, setConfigUpdatingBySession] = useState<Record<string, string>>({});
   const [recentDraftPreparing, setRecentDraftPreparing] = useState(false);
   const [recentDraftError, setRecentDraftError] = useState<string | null>(null);
+  const activeProjectIdRef = useRef(activeProjectId);
+  activeProjectIdRef.current = activeProjectId;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastNonPlanModeBySessionRef = useRef<Record<string, string>>({});
   const bubbleListRef = useRef<BubbleListRef | null>(null);
@@ -612,6 +622,12 @@ export function AcpConversationPane() {
   const agents = enabledAgents();
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
   const activeThread = threads.find((th) => th.id === activeThreadId) ?? null;
+  const messagesLoading = !!(
+    activeThreadId && messagesLoadingByThread[activeThreadId]
+  );
+  const messagesError = activeThreadId
+    ? messagesErrorByThread[activeThreadId]
+    : undefined;
   const streaming = !!(
     activeThreadId
     && (
@@ -633,21 +649,36 @@ export function AcpConversationPane() {
         - (right.sequence ?? Number.MAX_SAFE_INTEGER)
       ))
   ), [activeThreadId, pendingPermissions]);
-  const [interactionCursor, setInteractionCursor] = useState(0);
-  const clampedInteractionIndex = pendingInteractions.length === 0
-    ? 0
-    : Math.min(interactionCursor, pendingInteractions.length - 1);
+  const [activeInteractionId, setActiveInteractionId] = useState<string | null>(null);
+  const previousInteractionIndexRef = useRef(0);
+  const selectedInteractionIndex = activeInteractionId
+    ? pendingInteractions.findIndex((request) => request.requestId === activeInteractionId)
+    : -1;
+  const clampedInteractionIndex = selectedInteractionIndex >= 0
+    ? selectedInteractionIndex
+    : 0;
   const activeInteraction = pendingInteractions[clampedInteractionIndex] ?? null;
+  if (selectedInteractionIndex >= 0) {
+    previousInteractionIndexRef.current = selectedInteractionIndex;
+  }
   const previousInteractionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    setInteractionCursor(0);
+    previousInteractionIndexRef.current = 0;
+    setActiveInteractionId(null);
   }, [activeThreadId]);
 
   useEffect(() => {
-    setInteractionCursor((current) => {
-      if (pendingInteractions.length === 0) return 0;
-      return Math.min(current, pendingInteractions.length - 1);
+    setActiveInteractionId((current) => {
+      if (pendingInteractions.length === 0) return null;
+      if (current && pendingInteractions.some((request) => request.requestId === current)) {
+        return current;
+      }
+      const adjacentIndex = Math.min(
+        previousInteractionIndexRef.current,
+        pendingInteractions.length - 1,
+      );
+      return pendingInteractions[adjacentIndex].requestId;
     });
   }, [pendingInteractions]);
 
@@ -674,6 +705,11 @@ export function AcpConversationPane() {
     ? `draft:${activeProjectId}:${effectiveAgentId}`
     : null;
   const sessionKey = activeThreadId ?? draftKey;
+  const sessionKeyRef = useRef(sessionKey);
+  sessionKeyRef.current = sessionKey;
+  const configUpdatingId = sessionKey
+    ? configUpdatingBySession[sessionKey] ?? null
+    : null;
   const sessionSnapshot = sessionKey ? sessionByThread[sessionKey] : undefined;
   const agentProcessReady = !!(
     effectiveAgentId && agentReadinessById[effectiveAgentId]?.status === 'ready'
@@ -733,6 +769,18 @@ export function AcpConversationPane() {
   const composerScopeRef = useRef(currentComposerScopeKey);
   composerScopeRef.current = currentComposerScopeKey;
   const previousComposerScopeRef = useRef(currentComposerScopeKey);
+  const draftsByScopeRef = useRef(new Map<string, {
+    value: string;
+    snippets: PastedSnippet[];
+    attachments: ComposerAttachment[];
+  }>());
+
+  useEffect(() => () => {
+    for (const draft of draftsByScopeRef.current.values()) {
+      revokeComposerAttachments(draft.attachments);
+    }
+    draftsByScopeRef.current.clear();
+  }, []);
 
   useEffect(() => {
     if (!composerAgentId && agents[0]?.id) {
@@ -750,18 +798,46 @@ export function AcpConversationPane() {
   useEffect(() => {
     const scopeChanged = previousComposerScopeRef.current !== currentComposerScopeKey;
     if (scopeChanged) {
-      const removedImage = attachedFiles.some(({ file }) => isImageFile(file));
-      resetAttachments();
-      setValue((current) => pastedSnippets.reduce(
-        (next, snippet) => removePasteTokens(next, snippet.index),
-        current,
-      ));
-      setPastedSnippets([]);
-      pastedSnippetSeqRef.current = 0;
-      previousComposerScopeRef.current = currentComposerScopeKey;
-      if (removedImage && !supportsImageAttachments) {
+      const previousScope = previousComposerScopeRef.current;
+      const previousDraft = {
+        value: valueRef.current,
+        snippets: pastedSnippetsRef.current,
+        attachments: detachAttachments(),
+      };
+      if (
+        previousDraft.value
+        || previousDraft.snippets.length > 0
+        || previousDraft.attachments.length > 0
+      ) {
+        draftsByScopeRef.current.set(previousScope, previousDraft);
+      } else {
+        draftsByScopeRef.current.delete(previousScope);
+      }
+
+      const nextDraft = draftsByScopeRef.current.get(currentComposerScopeKey);
+      draftsByScopeRef.current.delete(currentComposerScopeKey);
+      const nextValue = nextDraft?.value ?? '';
+      const nextSnippets = nextDraft?.snippets ?? [];
+      valueRef.current = nextValue;
+      pastedSnippetsRef.current = nextSnippets;
+      setValue(nextValue);
+      setPastedSnippets(nextSnippets);
+      pastedSnippetSeqRef.current = nextSnippets.reduce(
+        (maximum, snippet) => Math.max(maximum, snippet.index),
+        0,
+      );
+      const restorableAttachments = (nextDraft?.attachments ?? []).filter(
+        ({ file }) => supportsImageAttachments || !isImageFile(file),
+      );
+      const incompatibleAttachments = (nextDraft?.attachments ?? []).filter(
+        ({ file }) => !supportsImageAttachments && isImageFile(file),
+      );
+      if (restorableAttachments.length > 0) restoreAttachments(restorableAttachments);
+      if (incompatibleAttachments.length > 0) {
+        revokeComposerAttachments(incompatibleAttachments);
         messageApi.warning(t('agentPage.imageAttachmentUnsupported'));
       }
+      previousComposerScopeRef.current = currentComposerScopeKey;
       return;
     }
     if (supportsImageAttachments) return;
@@ -772,10 +848,11 @@ export function AcpConversationPane() {
   }, [
     attachedFiles,
     currentComposerScopeKey,
+    detachAttachments,
     messageApi,
     pastedSnippets,
     removeAttachment,
-    resetAttachments,
+    restoreAttachments,
     supportsImageAttachments,
     t,
   ]);
@@ -825,8 +902,9 @@ export function AcpConversationPane() {
 
   // Load git branch info for active project
   useEffect(() => {
+    setCheckoutLoading(false);
+    setGitInfo(null);
     if (!activeProjectId) {
-      setGitInfo(null);
       return;
     }
     let cancelled = false;
@@ -1267,6 +1345,11 @@ export function AcpConversationPane() {
   const planEnabled = planMode
     ? sessionSnapshot?.modes?.currentModeId === planMode.id
     : !!planOption && isPlanModeValue(planOption.currentValue);
+  const planModeToggleDisabled = !sessionKey
+    || sending
+    || streaming
+    || preparing
+    || !!configUpdatingId;
   const permissionChoices = configChoices(permissionOption).filter(
     (choice) => permissionOption !== planOption || !isPlanModeValue(choice.value),
   );
@@ -1378,25 +1461,45 @@ export function AcpConversationPane() {
 
   const applyConfigChoice = useCallback(async (configId: string, choice: string | boolean) => {
     if (!sessionKey || configUpdatingId) return;
-    setConfigUpdatingId(configId);
+    const targetSessionKey = sessionKey;
+    setConfigUpdatingBySession((current) => ({
+      ...current,
+      [targetSessionKey]: configId,
+    }));
     try {
-      await setConfigOption(sessionKey, configId, choice);
+      await setConfigOption(targetSessionKey, configId, choice);
     } catch (error) {
-      messageApi.error(String(error));
+      if (sessionKeyRef.current === targetSessionKey) {
+        messageApi.error(String(error));
+      }
     } finally {
-      setConfigUpdatingId(null);
+      setConfigUpdatingBySession((current) => {
+        if (current[targetSessionKey] !== configId) return current;
+        const { [targetSessionKey]: _completed, ...remaining } = current;
+        return remaining;
+      });
     }
   }, [configUpdatingId, messageApi, sessionKey, setConfigOption]);
 
   const applySessionModeChoice = useCallback(async (modeId: string, updateId: string) => {
     if (!sessionKey || configUpdatingId) return;
-    setConfigUpdatingId(updateId);
+    const targetSessionKey = sessionKey;
+    setConfigUpdatingBySession((current) => ({
+      ...current,
+      [targetSessionKey]: updateId,
+    }));
     try {
-      await setSessionMode(sessionKey, modeId);
+      await setSessionMode(targetSessionKey, modeId);
     } catch (error) {
-      messageApi.error(String(error));
+      if (sessionKeyRef.current === targetSessionKey) {
+        messageApi.error(String(error));
+      }
     } finally {
-      setConfigUpdatingId(null);
+      setConfigUpdatingBySession((current) => {
+        if (current[targetSessionKey] !== updateId) return current;
+        const { [targetSessionKey]: _completed, ...remaining } = current;
+        return remaining;
+      });
     }
   }, [configUpdatingId, messageApi, sessionKey, setSessionMode]);
 
@@ -1437,7 +1540,7 @@ export function AcpConversationPane() {
   ]);
 
   const setPlanModeEnabled = useCallback(async (enabled: boolean) => {
-    if (!sessionKey || sending || streaming || preparing || configUpdatingId) return;
+    if (planModeToggleDisabled) return;
     if (planMode) {
       const currentlyOn = sessionSnapshot?.modes?.currentModeId === planMode.id;
       if (enabled === currentlyOn) return;
@@ -1457,14 +1560,25 @@ export function AcpConversationPane() {
             (mode) => isDefaultAgentModeValue(mode.id) || isDefaultAgentModeValue(mode.name),
           )
           ?? sessionSnapshot?.modes?.availableModes.find((mode) => mode.id !== planMode.id);
-      if (!target) return;
-      setConfigUpdatingId('session-mode');
+      if (!target || !sessionKey) return;
+      const targetSessionKey = sessionKey;
+      const updateId = 'session-mode';
+      setConfigUpdatingBySession((current) => ({
+        ...current,
+        [targetSessionKey]: updateId,
+      }));
       try {
-        await setSessionMode(sessionKey, target.id);
+        await setSessionMode(targetSessionKey, target.id);
       } catch (error) {
-        messageApi.error(String(error));
+        if (sessionKeyRef.current === targetSessionKey) {
+          messageApi.error(String(error));
+        }
       } finally {
-        setConfigUpdatingId(null);
+        setConfigUpdatingBySession((current) => {
+          if (current[targetSessionKey] !== updateId) return current;
+          const { [targetSessionKey]: _completed, ...remaining } = current;
+          return remaining;
+        });
       }
       return;
     }
@@ -1484,14 +1598,12 @@ export function AcpConversationPane() {
     configUpdatingId,
     messageApi,
     planMode,
+    planModeToggleDisabled,
     planOption,
-    preparing,
     sessionKey,
     sessionSnapshot?.modes?.availableModes,
     sessionSnapshot?.modes?.currentModeId,
-    sending,
     setSessionMode,
-    streaming,
   ]);
 
   const togglePlanMode = useCallback(async () => {
@@ -1585,18 +1697,21 @@ export function AcpConversationPane() {
   const handleGitCheckout = useCallback(
     async (branch: string) => {
       if (!activeProjectId || !branch || branch === gitInfo?.branch) return;
+      const projectId = activeProjectId;
       setCheckoutLoading(true);
       try {
         const info = await invoke<AcpGitInfo>('acp_git_checkout', {
-          projectId: activeProjectId,
+          projectId,
           branch,
         });
+        if (activeProjectIdRef.current !== projectId) return;
         setGitInfo(info);
         messageApi.success(t('agentPage.branchSwitched', { branch }));
       } catch (e) {
+        if (activeProjectIdRef.current !== projectId) return;
         messageApi.error(String(e));
       } finally {
-        setCheckoutLoading(false);
+        if (activeProjectIdRef.current === projectId) setCheckoutLoading(false);
       }
     },
     [activeProjectId, gitInfo?.branch, messageApi, t],
@@ -1663,6 +1778,8 @@ export function AcpConversationPane() {
       || streaming
       || preparing
       || configUpdatingId
+      || messagesLoading
+      || !!messagesError
       || !sessionSnapshot
     ) return;
     if (!effectiveAgentId) {
@@ -1758,7 +1875,7 @@ export function AcpConversationPane() {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Shift+Tab toggles plan mode (Codex-style), when the agent advertises plan.
     if (e.key === 'Tab' && e.shiftKey) {
-      if (planOption || planMode) {
+      if ((planOption || planMode) && !planModeToggleDisabled) {
         e.preventDefault();
         void togglePlanMode();
       }
@@ -1973,6 +2090,8 @@ export function AcpConversationPane() {
     && !streaming
     && !preparing
     && !configUpdatingId
+    && !messagesLoading
+    && !messagesError
     && !!sessionSnapshot
     && (value.trim().length > 0 || attachedFiles.length > 0 || pastedSnippets.length > 0)
     && !!effectiveAgentId;
@@ -2015,7 +2134,18 @@ export function AcpConversationPane() {
     [],
   );
 
-  const showProjectEmpty = !activeThread || messages.length === 0;
+  const showMessageLoadState = !!(
+    activeThread
+    && messages.length === 0
+    && (messagesLoading || messagesError)
+  );
+  const showMessageLoadErrorBanner = !!(
+    activeThread
+    && messages.length > 0
+    && messagesError
+  );
+  const showProjectEmpty = !activeThread
+    || (messages.length === 0 && !showMessageLoadState);
 
   const activeModelChoice = modelOption
     ? configChoices(modelOption).find(
@@ -2052,6 +2182,15 @@ export function AcpConversationPane() {
         type="text"
         size="small"
         loading={configUpdatingId === option.id}
+        aria-label={`${
+          option === modelOption
+            ? t('agentPage.model')
+            : option === thoughtOption
+              ? t('agentPage.reasoning')
+              : option === permissionOption
+                ? t('agentPage.interactionPermissionTitle')
+                : option.name
+        }: ${selectedOptionLabel(option)}`}
         icon={
           opts?.showModelIcon ? (
             <AcpModelChoiceIcon
@@ -2235,7 +2374,10 @@ export function AcpConversationPane() {
                   disabled={clampedInteractionIndex <= 0}
                   icon={<ChevronLeft size={16} />}
                   aria-label={t('agentPage.interactionPrevItem')}
-                  onClick={() => setInteractionCursor((index) => Math.max(0, index - 1))}
+                  onClick={() => {
+                    const previous = pendingInteractions[clampedInteractionIndex - 1];
+                    if (previous) setActiveInteractionId(previous.requestId);
+                  }}
                 />
                 <Text
                   type="secondary"
@@ -2255,29 +2397,42 @@ export function AcpConversationPane() {
                   disabled={clampedInteractionIndex >= pendingInteractions.length - 1}
                   icon={<ChevronRight size={16} />}
                   aria-label={t('agentPage.interactionNextItem')}
-                  onClick={() => setInteractionCursor((index) => (
-                    Math.min(pendingInteractions.length - 1, index + 1)
-                  ))}
+                  onClick={() => {
+                    const next = pendingInteractions[clampedInteractionIndex + 1];
+                    if (next) setActiveInteractionId(next.requestId);
+                  }}
                 />
               </div>
             ) : null}
             <div style={{ minWidth: 0, minHeight: 0, flex: 1, overflow: 'hidden' }}>
-              <AcpInteractionComposer
-                key={activeInteraction.requestId}
-                request={activeInteraction}
-                onSubmit={(submission) => (
-                  'optionId' in submission
-                    ? respondPermission(
-                        activeInteraction.requestId,
-                        submission.optionId,
-                        submission.feedback,
-                      )
-                    : respondQuestionnaire(
-                        activeInteraction.requestId,
-                        submission.questionnaire,
-                      )
-                )}
-              />
+              {pendingInteractions.map((interaction, index) => {
+                const isActive = index === clampedInteractionIndex;
+                return (
+                  <div
+                    key={interaction.requestId}
+                    hidden={!isActive}
+                    aria-hidden={!isActive || undefined}
+                    style={isActive ? { minWidth: 0, minHeight: 0, height: '100%' } : undefined}
+                  >
+                    <AcpInteractionComposer
+                      active={isActive}
+                      request={interaction}
+                      onSubmit={(submission) => (
+                        'optionId' in submission
+                          ? respondPermission(
+                              interaction.requestId,
+                              submission.optionId,
+                              submission.feedback,
+                            )
+                          : respondQuestionnaire(
+                              interaction.requestId,
+                              submission.questionnaire,
+                            )
+                      )}
+                    />
+                  </div>
+                );
+              })}
             </div>
             <div className="flex items-center justify-end gap-1" style={{ flexShrink: 0 }}>
               {renderPlanProgressControl()}
@@ -2360,6 +2515,9 @@ export function AcpConversationPane() {
                   type="text"
                   size="small"
                   loading={preparing || configUpdatingId === permissionOption.id}
+                  aria-label={`${t('agentPage.interactionPermissionTitle')}: ${
+                    selectedPermissionLabel
+                  }`}
                   icon={isFullAccessPermissionChoice(
                     selectedPermissionValue,
                     selectedPermissionLabel,
@@ -2621,7 +2779,47 @@ export function AcpConversationPane() {
     >
       {/* Message / welcome area */}
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        {showProjectEmpty ? (
+        {showMessageLoadState ? (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 12,
+              padding: 24,
+              textAlign: 'center',
+            }}
+          >
+            {messagesLoading ? (
+              <Button type="text" loading disabled>
+                {t('common.loading')}
+              </Button>
+            ) : (
+              <>
+                <Text type="danger">{t('error.loadFailed')}</Text>
+                <Text
+                  type="secondary"
+                  style={{ maxWidth: 560, overflowWrap: 'anywhere' }}
+                >
+                  {messagesError}
+                </Text>
+                <Button
+                  icon={<RefreshCw size={14} />}
+                  onClick={() => {
+                    if (activeThreadId) void loadMessages(activeThreadId);
+                  }}
+                >
+                  {t('agentPage.retryConnection')}
+                </Button>
+              </>
+            )}
+          </div>
+        ) : showProjectEmpty ? (
           <div
             style={{
               position: 'absolute',
@@ -2740,6 +2938,46 @@ export function AcpConversationPane() {
           </div>
         ) : (
           <>
+            {showMessageLoadErrorBanner ? (
+              <div
+                role="alert"
+                style={{
+                  position: 'absolute',
+                  top: 12,
+                  left: 24,
+                  right: 24,
+                  zIndex: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '8px 10px',
+                  border: `1px solid ${token.colorWarningBorder}`,
+                  borderRadius: token.borderRadiusLG,
+                  background: token.colorWarningBg,
+                  boxShadow: token.boxShadowTertiary,
+                }}
+              >
+                <Text type="warning" strong style={{ flexShrink: 0 }}>
+                  {t('error.loadFailed')}
+                </Text>
+                <Text
+                  type="secondary"
+                  ellipsis={{ tooltip: messagesError }}
+                  style={{ minWidth: 0, flex: 1 }}
+                >
+                  {messagesError}
+                </Text>
+                <Button
+                  size="small"
+                  icon={<RefreshCw size={14} />}
+                  onClick={() => {
+                    if (activeThreadId) void loadMessages(activeThreadId);
+                  }}
+                >
+                  {t('agentPage.retryConnection')}
+                </Button>
+              </div>
+            ) : null}
             {/* Match ChatView bubble + markstream layout constraints (code blocks, overflow) */}
             <style>{`
               .aqbot-acp-bubble-list .ant-bubble,
@@ -2804,7 +3042,9 @@ export function AcpConversationPane() {
               role={roles as never}
               style={{
                 height: '100%',
-                padding: '16px 24px',
+                padding: showMessageLoadErrorBanner
+                  ? '72px 24px 16px'
+                  : '16px 24px',
                 overflowX: 'hidden',
               }}
             />

@@ -2,9 +2,10 @@
 
 use crate::AppState;
 use aqbot_acp_client::config::{
-    enabled_agents, is_agent_enabled, load_agents_file, probe_agent, remove_agent, reorder_agents,
-    save_agents_file, set_agent_enabled, sync_configured_registry_agents, upsert_from_registry,
-    AcpAgentsFile, AcpGeneralConfig, ConfiguredAgent,
+    enabled_agents, is_agent_enabled, load_agents_file, migrate_agents_file, probe_agent,
+    remove_agent, reorder_agents, save_agents_file, set_agent_enabled,
+    sync_configured_registry_agents, upsert_from_registry, AcpAgentsFile, AcpGeneralConfig,
+    ConfiguredAgent,
 };
 use aqbot_acp_client::proxy::{
     configured_agent_with_proxy, resolve_proxy_environment, resolve_system_proxy,
@@ -267,6 +268,22 @@ fn record_interaction_outcome(
     }
 }
 
+fn finalize_unfinished_tool_calls(
+    tools: &mut HashMap<String, PersistedAcpToolCall>,
+    terminal_status: &str,
+) {
+    for tool in tools.values_mut() {
+        let status = tool.status.to_ascii_lowercase();
+        let terminal = matches!(
+            status.as_str(),
+            "completed" | "success" | "failed" | "error" | "cancelled" | "canceled"
+        );
+        if !terminal {
+            tool.status = terminal_status.to_string();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tool_transcript_tests {
     use super::*;
@@ -418,6 +435,35 @@ mod tool_transcript_tests {
             tools["tool-1"].output.as_deref(),
             Some("Agent-recorded result")
         );
+    }
+
+    #[test]
+    fn turn_terminal_state_closes_only_unfinished_tool_calls() {
+        let tool = |id: &str, status: &str| PersistedAcpToolCall {
+            tool_call_id: id.into(),
+            tool_name: "execute".into(),
+            status: status.into(),
+            input: None,
+            output: None,
+            approval_status: None,
+            approval_option_id: None,
+            approval_option_kind: None,
+            approval_label: None,
+            sequence: 0,
+        };
+        let mut tools = HashMap::from([
+            ("queued".into(), tool("queued", "queued")),
+            ("running".into(), tool("running", "in_progress")),
+            ("success".into(), tool("success", "completed")),
+            ("failed".into(), tool("failed", "error")),
+        ]);
+
+        finalize_unfinished_tool_calls(&mut tools, "cancelled");
+
+        assert_eq!(tools["queued"].status, "cancelled");
+        assert_eq!(tools["running"].status, "cancelled");
+        assert_eq!(tools["success"].status, "completed");
+        assert_eq!(tools["failed"].status, "error");
     }
 
     #[test]
@@ -809,7 +855,8 @@ pub async fn acp_refresh_registry(state: State<'_, AppState>) -> Result<Registry
 
 #[tauri::command]
 pub async fn acp_get_config() -> Result<AcpAgentsFile, String> {
-    load_agents_file().map_err(|e| e.to_string())
+    let _guard = config_lock().lock().await;
+    migrate_agents_file().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1091,20 +1138,30 @@ pub async fn acp_delete_project(
     state: State<'_, AppState>,
     project_id: String,
 ) -> Result<(), String> {
-    let thread_ids = acp_repo::list_threads_for_project(&state.sea_db, &project_id)
+    let runtime = runtime();
+    delete_project_with_runtime(&state.sea_db, &runtime, &project_id).await
+}
+
+async fn delete_project_with_runtime(
+    db: &sea_orm::DatabaseConnection,
+    runtime: &AcpRuntime,
+    project_id: &str,
+) -> Result<(), String> {
+    let thread_ids = acp_repo::list_threads_for_project(db, project_id)
         .await
         .map_err(|e| e.to_string())?
         .into_iter()
         .map(|thread| thread.id)
         .collect::<Vec<_>>();
-    acp_repo::delete_project(&state.sea_db, &project_id)
-        .await
-        .map_err(|e| e.to_string())?;
-    let runtime = runtime();
-    for thread_id in thread_ids {
-        runtime.drop_session(&thread_id).await;
+    for thread_id in &thread_ids {
+        runtime
+            .close_session(thread_id)
+            .await
+            .map_err(|error| format!("failed to close ACP thread `{thread_id}`: {error}"))?;
     }
-    Ok(())
+    acp_repo::delete_project(db, project_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1211,13 +1268,7 @@ pub async fn acp_create_thread(
         .await
         .map_err(|error| format!("failed to inspect adopted ACP draft: {error}"))?
         .ok_or_else(|| "adopted ACP draft disappeared before persistence".to_string())?;
-    acp_repo::update_thread_session_id(&state.sea_db, &thread.id, &snapshot.session_id)
-        .await
-        .map_err(|error| error.to_string())?;
-    let mode_id = persisted_mode_id(&snapshot);
-    acp_repo::update_thread_mode(&state.sea_db, &thread.id, mode_id.as_deref())
-        .await
-        .map_err(|error| error.to_string())?;
+    persist_live_thread_snapshot(&state.sea_db, &thread.id, &snapshot, None).await?;
     acp_repo::get_thread(&state.sea_db, &thread.id)
         .await
         .map_err(|error| error.to_string())?
@@ -1276,32 +1327,134 @@ pub async fn acp_delete_thread(
     state: State<'_, AppState>,
     thread_id: String,
 ) -> Result<(), String> {
-    let project = match acp_repo::get_thread(&state.sea_db, &thread_id)
+    let runtime = runtime();
+    delete_thread_with_runtime(&state.sea_db, &runtime, &thread_id).await
+}
+
+async fn delete_thread_with_runtime(
+    db: &sea_orm::DatabaseConnection,
+    runtime: &AcpRuntime,
+    thread_id: &str,
+) -> Result<(), String> {
+    let project = match acp_repo::get_thread(db, thread_id)
         .await
         .map_err(|error| error.to_string())?
     {
-        Some(thread) => acp_repo::get_project(&state.sea_db, &thread.project_id)
+        Some(thread) => acp_repo::get_project(db, &thread.project_id)
             .await
             .map_err(|error| error.to_string())?,
         None => None,
     };
-    acp_repo::delete_thread(&state.sea_db, &thread_id)
+    runtime
+        .close_session(thread_id)
+        .await
+        .map_err(|error| format!("failed to close ACP thread `{thread_id}`: {error}"))?;
+    acp_repo::delete_thread(db, thread_id)
         .await
         .map_err(|e| e.to_string())?;
     if let Some(project) = project.filter(|project| project.kind == "recent") {
-        let remaining = acp_repo::list_threads_for_project(&state.sea_db, &project.id)
+        let remaining = acp_repo::list_threads_for_project(db, &project.id)
             .await
             .map_err(|error| error.to_string())?;
         if remaining.is_empty() {
-            acp_repo::delete_project(&state.sea_db, &project.id)
+            acp_repo::delete_project(db, &project.id)
                 .await
                 .map_err(|error| error.to_string())?;
         }
     }
-    // The repository rejects running turns, so removing the now-idle process
-    // cannot invalidate a ResourceLink while the agent is reading it.
-    runtime().drop_session(&thread_id).await;
     Ok(())
+}
+
+#[cfg(test)]
+mod session_delete_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn close_failure_preserves_thread_and_project_records_and_live_session() {
+        const AGENT: &str = r#"
+import json
+import sys
+
+def respond(request_id, result):
+    print(json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}), flush=True)
+
+for line in sys.stdin:
+    message = json.loads(line)
+    method = message.get("method")
+    if method == "initialize":
+        respond(message["id"], {
+            "protocolVersion": 1,
+            "agentCapabilities": {"sessionCapabilities": {"close": {}}}
+        })
+    elif method == "session/new":
+        respond(message["id"], {"sessionId": "delete-failure-session"})
+    elif method == "session/close":
+        print(json.dumps({
+            "jsonrpc": "2.0",
+            "id": message["id"],
+            "error": {"code": -32000, "message": "forced close rejection"}
+        }), flush=True)
+"#;
+        let db = aqbot_core::db::create_test_pool().await.unwrap().conn;
+        let project = acp_repo::create_project(&db, "Project", "/tmp/project")
+            .await
+            .unwrap();
+        let thread = acp_repo::create_thread(&db, &project.id, "failing-close", "Thread")
+            .await
+            .unwrap();
+        let agent = ConfiguredAgent {
+            id: "failing-close".into(),
+            name: "Failing close".into(),
+            enabled: true,
+            source: "custom".into(),
+            command: "python3".into(),
+            args: vec!["-u".into(), "-c".into(), AGENT.into()],
+            env: HashMap::new(),
+            icon: None,
+            sort: 0,
+        };
+        let runtime = AcpRuntime::new();
+        runtime
+            .prepare(
+                &thread.id,
+                &agent,
+                std::env::current_dir().expect("current directory"),
+                None,
+                false,
+                RuntimeLimits::new(60, 1),
+                mpsc::unbounded_channel().0,
+            )
+            .await
+            .expect("prepare deletable thread");
+
+        let error = delete_thread_with_runtime(&db, &runtime, &thread.id)
+            .await
+            .expect_err("close rejection must abort deletion");
+
+        assert!(error.contains("forced close rejection"), "{error}");
+        assert!(acp_repo::get_thread(&db, &thread.id)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(runtime.has_live_session(&thread.id).await);
+
+        let project_error = delete_project_with_runtime(&db, &runtime, &project.id)
+            .await
+            .expect_err("close rejection must abort project deletion");
+        assert!(
+            project_error.contains("forced close rejection"),
+            "{project_error}"
+        );
+        assert!(acp_repo::get_project(&db, &project.id)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(acp_repo::get_thread(&db, &thread.id)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(runtime.has_live_session(&thread.id).await);
+    }
 }
 
 #[tauri::command]
@@ -1553,6 +1706,30 @@ fn is_draft_session_key(session_key: &str) -> bool {
     session_key.starts_with("draft:")
 }
 
+async fn persist_live_thread_snapshot(
+    db: &sea_orm::DatabaseConnection,
+    thread_id: &str,
+    snapshot: &AcpSessionSnapshot,
+    fallback_mode_id: Option<&str>,
+) -> Result<(), String> {
+    let mode_id = persisted_mode_id(snapshot).or_else(|| fallback_mode_id.map(str::to_string));
+    let persisted = acp_repo::persist_prepared_thread_session(
+        db,
+        thread_id,
+        &snapshot.session_id,
+        mode_id.as_deref(),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
+    if persisted {
+        return Ok(());
+    }
+    runtime().drop_session(thread_id).await;
+    Err(format!(
+        "ACP thread `{thread_id}` was deleted while its session was being prepared"
+    ))
+}
+
 async fn schedule_capability_refresh(
     app: AppHandle,
     db: sea_orm::DatabaseConnection,
@@ -1567,16 +1744,10 @@ async fn schedule_capability_refresh(
             Ok(Some((current_key, snapshot))) => {
                 if !is_draft_session_key(&current_key) {
                     if let Err(error) =
-                        acp_repo::update_thread_session_id(&db, &current_key, &snapshot.session_id)
-                            .await
+                        persist_live_thread_snapshot(&db, &current_key, &snapshot, None).await
                     {
-                        tracing::error!(%error, thread_id = %current_key, "failed to persist discovered ACP session state");
-                    }
-                    let mode_id = persisted_mode_id(&snapshot);
-                    if let Err(error) =
-                        acp_repo::update_thread_mode(&db, &current_key, mode_id.as_deref()).await
-                    {
-                        tracing::error!(%error, thread_id = %current_key, "failed to persist discovered ACP mode state");
+                        tracing::warn!(%error, thread_id = %current_key, "discarding late ACP capability discovery");
+                        return;
                     }
                 }
                 if let Err(error) = app.emit(
@@ -1768,13 +1939,7 @@ pub async fn acp_prepare_session(
     event_task
         .await
         .map_err(|error| format!("ACP prepare event forwarder failed: {error}"))?;
-    acp_repo::update_thread_session_id(&state.sea_db, &thread_id, &snapshot.session_id)
-        .await
-        .map_err(|e| e.to_string())?;
-    let mode_id = persisted_mode_id(&snapshot);
-    acp_repo::update_thread_mode(&state.sea_db, &thread_id, mode_id.as_deref())
-        .await
-        .map_err(|error| error.to_string())?;
+    persist_live_thread_snapshot(&state.sea_db, &thread_id, &snapshot, None).await?;
     schedule_capability_refresh(app, state.sea_db.clone(), thread_id).await;
     drop(launch);
     Ok(snapshot)
@@ -1792,13 +1957,7 @@ pub async fn acp_set_config_option(
         .await
         .map_err(|e| e.to_string())?;
     if !is_draft_session_key(&thread_id) {
-        acp_repo::update_thread_session_id(&state.sea_db, &thread_id, &snapshot.session_id)
-            .await
-            .map_err(|error| error.to_string())?;
-        let mode_id = persisted_mode_id(&snapshot);
-        acp_repo::update_thread_mode(&state.sea_db, &thread_id, mode_id.as_deref())
-            .await
-            .map_err(|error| error.to_string())?;
+        persist_live_thread_snapshot(&state.sea_db, &thread_id, &snapshot, None).await?;
     }
     Ok(snapshot)
 }
@@ -1814,10 +1973,7 @@ pub async fn acp_set_mode(
         .await
         .map_err(|e| e.to_string())?;
     if !is_draft_session_key(&thread_id) {
-        let persisted = persisted_mode_id(&snapshot).unwrap_or(mode_id);
-        acp_repo::update_thread_mode(&state.sea_db, &thread_id, Some(&persisted))
-            .await
-            .map_err(|error| error.to_string())?;
+        persist_live_thread_snapshot(&state.sea_db, &thread_id, &snapshot, Some(&mode_id)).await?;
     }
     Ok(snapshot)
 }
@@ -2061,9 +2217,7 @@ pub async fn acp_prompt(
     {
         return Err("ACP agent does not advertise image prompt capability".to_string());
     }
-    acp_repo::update_thread_session_id(&state.sea_db, &thread_id, &snapshot.session_id)
-        .await
-        .map_err(|error| error.to_string())?;
+    persist_live_thread_snapshot(&state.sea_db, &thread_id, &snapshot, None).await?;
 
     let (user_message, assistant) =
         acp_repo::create_prompt_messages(&state.sea_db, &thread_id, &prompt, &attachments)
@@ -2168,15 +2322,13 @@ pub async fn acp_prompt(
                                     .filter(|s| !s.is_empty())
                             })
                             .unwrap_or_default();
-                        let plan_title = title
-                            .clone()
-                            .or_else(|| {
-                                raw.get("title")
-                                    .and_then(|v| v.as_str())
-                                    .map(str::trim)
-                                    .filter(|s| !s.is_empty())
-                                    .map(str::to_string)
-                            });
+                        let plan_title = title.clone().or_else(|| {
+                            raw.get("title")
+                                .and_then(|v| v.as_str())
+                                .map(str::trim)
+                                .filter(|s| !s.is_empty())
+                                .map(str::to_string)
+                        });
                         let marker = if thinking_open {
                             thinking_open = false;
                             format!(
@@ -2521,12 +2673,16 @@ pub async fn acp_prompt(
         }
         let final_text = acc_for_persist.lock().await.clone();
         let duration_ms = turn_started.elapsed().as_millis() as u64;
-        let mut tool_calls = tools_for_persist
-            .lock()
-            .await
-            .values()
-            .cloned()
-            .collect::<Vec<_>>();
+        let terminal_tool_status = match result.as_ref() {
+            Ok(outcome) if outcome.stop_reason.to_ascii_lowercase().contains("cancel") => {
+                "cancelled"
+            }
+            Ok(_) | Err(_) => "error",
+        };
+        let mut tools = tools_for_persist.lock().await;
+        finalize_unfinished_tool_calls(&mut tools, terminal_tool_status);
+        let mut tool_calls = tools.values().cloned().collect::<Vec<_>>();
+        drop(tools);
         tool_calls.sort_by_key(|tool| tool.sequence);
         let meta = serde_json::json!({
             "duration_ms": duration_ms,
@@ -2897,6 +3053,98 @@ fn git_output(cwd: &std::path::Path, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+fn checkout_local_branch(cwd: &std::path::Path, branch: &str) -> Result<(), String> {
+    if branch.trim().is_empty() {
+        return Err("branch name is empty".into());
+    }
+    if branch != branch.trim() {
+        return Err("branch name must match a local branch exactly".into());
+    }
+    if branch.starts_with('-') {
+        return Err("branch name must not start with '-'".into());
+    }
+
+    let local_ref = format!("refs/heads/{branch}");
+    git_output(cwd, &["show-ref", "--verify", "--quiet", &local_ref])
+        .map_err(|error| format!("local branch `{branch}` is not available: {error}"))?;
+
+    git_output(cwd, &["switch", "--", branch])?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod git_checkout_tests {
+    use super::*;
+
+    fn run_git(cwd: &std::path::Path, args: &[&str]) {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .expect("run git command");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn initialized_repository() -> tempfile::TempDir {
+        let repository = tempfile::tempdir().expect("create temporary repository");
+        let cwd = repository.path();
+        run_git(cwd, &["init"]);
+        run_git(cwd, &["config", "user.name", "AQBot Test"]);
+        run_git(cwd, &["config", "user.email", "aqbot@example.invalid"]);
+        std::fs::write(cwd.join("tracked.txt"), "committed\n").expect("write tracked file");
+        run_git(cwd, &["add", "tracked.txt"]);
+        run_git(cwd, &["commit", "-m", "initial"]);
+        repository
+    }
+
+    #[test]
+    fn option_like_branch_is_rejected_without_discarding_dirty_changes() {
+        let repository = initialized_repository();
+        let cwd = repository.path();
+        let tracked = cwd.join("tracked.txt");
+        std::fs::write(&tracked, "dirty\n").expect("make tracked file dirty");
+
+        let result = checkout_local_branch(cwd, "-f");
+        let content = std::fs::read_to_string(&tracked).expect("read tracked file");
+
+        assert!(
+            result.is_err() && content == "dirty\n",
+            "option-like branch result was {result:?}; tracked content was {content:?}"
+        );
+    }
+
+    #[test]
+    fn revision_that_is_not_a_local_branch_name_is_rejected() {
+        let repository = initialized_repository();
+
+        let result = checkout_local_branch(repository.path(), "HEAD");
+
+        assert!(
+            result.is_err(),
+            "revision expression was accepted as a local branch: {result:?}"
+        );
+    }
+
+    #[test]
+    fn existing_local_branch_can_be_checked_out() {
+        let repository = initialized_repository();
+        let cwd = repository.path();
+        run_git(cwd, &["branch", "feature/test"]);
+
+        checkout_local_branch(cwd, "feature/test").expect("checkout local branch");
+
+        assert_eq!(
+            git_output(cwd, &["branch", "--show-current"]).expect("read current branch"),
+            "feature/test"
+        );
+    }
+}
+
 #[tauri::command]
 pub async fn acp_git_info(
     state: State<'_, AppState>,
@@ -2955,10 +3203,6 @@ pub async fn acp_git_checkout(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "project not found".to_string())?;
     let cwd = PathBuf::from(&project.root_path);
-    let branch = branch.trim();
-    if branch.is_empty() {
-        return Err("branch name is empty".into());
-    }
-    git_output(&cwd, &["checkout", branch])?;
+    checkout_local_branch(&cwd, &branch)?;
     acp_git_info(state, project_id).await
 }

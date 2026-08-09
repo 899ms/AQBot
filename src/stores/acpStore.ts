@@ -25,12 +25,39 @@ let _acpPrewarmInFlight: Promise<void> | null = null;
 let _acpRecentDraftInFlight: Promise<AcpProject> | null = null;
 let _acpProjectsLoadGeneration = 0;
 let _acpAllThreadsLoadGeneration = 0;
+let _acpConfigLoadGeneration = 0;
+let _acpConfigMutationVersion = 0;
 const _acpPrepareInFlight = new Map<string, Promise<AcpSessionSnapshot>>();
 const _acpThreadListLoadVersion = new Map<string, number>();
 const _acpMessageLoadVersion = new Map<string, number>();
+const _acpSessionMutationTails = new Map<string, Promise<void>>();
+const _acpSessionLifecycleVersion = new Map<string, number>();
+const _acpRetiredSessionKeys = new Set<string>();
+const _acpAutoApprovalTokens = new Map<string, { threadId: string; token: number }>();
 const _acpFirstOutputTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const _acpStreamingMessageThreads = new Map<string, string>();
 let _acpOptimisticMessageSeq = 0;
 let _acpInteractionSeq = 0;
+let _acpAutoApprovalSeq = 0;
+
+async function serializeAcpSessionMutation<T>(
+  threadId: string,
+  mutation: () => Promise<T>,
+): Promise<T> {
+  const previous = _acpSessionMutationTails.get(threadId) ?? Promise.resolve();
+  const operation = previous.then(mutation, mutation);
+  // The public operation still rejects to its caller; only the private tail is
+  // normalized so one failed update cannot permanently block later choices.
+  const tail = operation.then(() => undefined, () => undefined);
+  _acpSessionMutationTails.set(threadId, tail);
+  try {
+    return await operation;
+  } finally {
+    if (_acpSessionMutationTails.get(threadId) === tail) {
+      _acpSessionMutationTails.delete(threadId);
+    }
+  }
+}
 
 const FIRST_OUTPUT_SILENCE_MS = 12_000;
 export const ACP_HOST_STATUS = {
@@ -65,6 +92,58 @@ function clearFirstOutputTimer(threadId: string): void {
   const timer = _acpFirstOutputTimers.get(threadId);
   if (timer) clearTimeout(timer);
   _acpFirstOutputTimers.delete(threadId);
+}
+
+function invalidateAcpMessageLoad(threadId: string): void {
+  _acpMessageLoadVersion.set(
+    threadId,
+    (_acpMessageLoadVersion.get(threadId) ?? 0) + 1,
+  );
+}
+
+function retireAcpSessionKey(sessionKey: string): void {
+  _acpRetiredSessionKeys.add(sessionKey);
+  invalidateAcpMessageLoad(sessionKey);
+  _acpSessionLifecycleVersion.set(
+    sessionKey,
+    (_acpSessionLifecycleVersion.get(sessionKey) ?? 0) + 1,
+  );
+  invalidateAutoApprovalsForSession(sessionKey);
+  clearFirstOutputTimer(sessionKey);
+}
+
+function isAcpSessionKeyLive(sessionKey: string): boolean {
+  return !_acpRetiredSessionKeys.has(sessionKey);
+}
+
+function beginAutoApproval(requestId: string, threadId: string): number {
+  const token = ++_acpAutoApprovalSeq;
+  _acpAutoApprovalTokens.set(requestId, { threadId, token });
+  return token;
+}
+
+function finishAutoApproval(requestId: string, token: number): boolean {
+  if (_acpAutoApprovalTokens.get(requestId)?.token !== token) return false;
+  _acpAutoApprovalTokens.delete(requestId);
+  return true;
+}
+
+function invalidateAutoApprovalsForSession(threadId: string): void {
+  for (const [requestId, approval] of _acpAutoApprovalTokens) {
+    if (approval.threadId === threadId) _acpAutoApprovalTokens.delete(requestId);
+  }
+}
+
+function takeStreamingMessageIdsForSessions(
+  sessionKeys: ReadonlySet<string>,
+): Set<string> {
+  const messageIds = new Set<string>();
+  for (const [messageId, threadId] of _acpStreamingMessageThreads) {
+    if (!sessionKeys.has(threadId)) continue;
+    messageIds.add(messageId);
+    _acpStreamingMessageThreads.delete(messageId);
+  }
+  return messageIds;
 }
 
 function replaceProjectThreadsInPlace(
@@ -170,7 +249,7 @@ function planDocumentStatusFromResolution(
   reason: 'selected' | 'cancelled' | 'expired' | undefined,
 ): AcpPlanDocument['status'] {
   if (reason === 'expired') return 'expired';
-  if (reason === 'cancelled') return 'expired';
+  if (reason === 'cancelled') return 'cancelled';
   const id = String(optionId ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
   if (id === 'approved' || id === 'approve') return 'approved';
   if (id === 'cancelled' || id === 'cancel') return 'cancelled';
@@ -536,6 +615,8 @@ interface AcpStore {
   projects: AcpProject[];
   threads: AcpThread[];
   messages: AcpMessage[];
+  messagesLoadingByThread: Record<string, boolean>;
+  messagesErrorByThread: Record<string, string>;
   activeProjectId: string | null;
   activeThreadId: string | null;
   streamingText: Record<string, string>;
@@ -564,6 +645,8 @@ interface AcpStore {
   creatingThread: boolean;
   loading: boolean;
   error: string | null;
+  /** Error from the ACP agent configuration fetch, distinct from a valid empty config. */
+  configError: string | null;
   /**
    * True after the first successful (or failed) config fetch this session.
    * Until then, `agents.length === 0` must NOT be treated as "not configured" —
@@ -781,6 +864,105 @@ function removeThreadEntries<T extends { threadId: string }>(
   );
 }
 
+function omitSessionKeys<T>(
+  record: Record<string, T>,
+  sessionKeys: ReadonlySet<string>,
+): Record<string, T> {
+  return Object.fromEntries(
+    Object.entries(record).filter(([key]) => !sessionKeys.has(key)),
+  );
+}
+
+function removeSessionEntries<T extends { threadId: string }>(
+  entries: Record<string, T>,
+  sessionKeys: ReadonlySet<string>,
+): Record<string, T> {
+  return Object.fromEntries(
+    Object.entries(entries).filter(([, entry]) => !sessionKeys.has(entry.threadId)),
+  );
+}
+
+function clearAcpSessionState(
+  state: AcpStore,
+  sessionKeys: ReadonlySet<string>,
+  streamingMessageIds: ReadonlySet<string> = new Set(),
+): Partial<AcpStore> {
+  const removedMessageIds = new Set(
+    state.messages
+      .filter((message) => sessionKeys.has(message.thread_id))
+      .map((message) => message.id),
+  );
+  for (const messageId of streamingMessageIds) removedMessageIds.add(messageId);
+  return {
+    messages: state.messages.filter((message) => !sessionKeys.has(message.thread_id)),
+    streamingText: Object.fromEntries(
+      Object.entries(state.streamingText).filter(([messageId]) => !removedMessageIds.has(messageId)),
+    ),
+    messagesLoadingByThread: omitSessionKeys(state.messagesLoadingByThread, sessionKeys),
+    messagesErrorByThread: omitSessionKeys(state.messagesErrorByThread, sessionKeys),
+    statusByThread: omitSessionKeys(state.statusByThread, sessionKeys),
+    runningByThread: omitSessionKeys(state.runningByThread, sessionKeys),
+    turnActivityByThread: omitSessionKeys(state.turnActivityByThread, sessionKeys),
+    pendingPermissions: removeSessionEntries(state.pendingPermissions, sessionKeys),
+    toolCalls: removeSessionEntries(state.toolCalls, sessionKeys),
+    sessionByThread: omitSessionKeys(state.sessionByThread, sessionKeys),
+    preparingByThread: omitSessionKeys(state.preparingByThread, sessionKeys),
+    cancellingByThread: omitSessionKeys(state.cancellingByThread, sessionKeys),
+    planByThread: omitSessionKeys(state.planByThread, sessionKeys),
+    planDocumentsByThread: omitSessionKeys(state.planDocumentsByThread, sessionKeys),
+    alwaysAllowedToolsByThread: omitSessionKeys(state.alwaysAllowedToolsByThread, sessionKeys),
+    spawnModelByThread: omitSessionKeys(state.spawnModelByThread, sessionKeys),
+    spawnReasoningByThread: omitSessionKeys(state.spawnReasoningByThread, sessionKeys),
+    ...(state.activeThreadId && sessionKeys.has(state.activeThreadId)
+      ? { activeThreadId: null }
+      : {}),
+  };
+}
+
+function projectSessionKeys(state: AcpStore, projectId: string): Set<string> {
+  const keys = new Set(
+    [...state.threads, ...state.allThreads]
+      .filter((thread) => thread.project_id === projectId)
+      .map((thread) => thread.id),
+  );
+  const draftPrefix = `draft:${projectId}:`;
+  const keyedRecords = [
+    state.sessionByThread,
+    state.preparingByThread,
+    state.spawnModelByThread,
+    state.spawnReasoningByThread,
+  ];
+  for (const record of keyedRecords) {
+    for (const key of Object.keys(record)) {
+      if (key.startsWith(draftPrefix)) keys.add(key);
+    }
+  }
+  for (const key of _acpPrepareInFlight.keys()) {
+    if (key.startsWith(draftPrefix)) keys.add(key);
+  }
+  for (const key of _acpSessionMutationTails.keys()) {
+    if (key.startsWith(draftPrefix)) keys.add(key);
+  }
+  return keys;
+}
+
+function finalizeUnfinishedToolCalls(
+  toolCalls: Record<string, AcpToolCallState>,
+  threadId: string,
+  status: 'cancelled' | 'error',
+): Record<string, AcpToolCallState> {
+  let changed = false;
+  const next = Object.fromEntries(Object.entries(toolCalls).map(([key, tool]) => {
+    if (
+      tool.threadId !== threadId
+      || (tool.status !== 'queued' && tool.status !== 'running')
+    ) return [key, tool];
+    changed = true;
+    return [key, { ...tool, status }];
+  }));
+  return changed ? next : toolCalls;
+}
+
 export function acpToolStateKey(
   threadId: string,
   toolCallId: string,
@@ -930,6 +1112,8 @@ export const useAcpStore = create<AcpStore>()(
   threads: [],
   allThreads: [],
   messages: [],
+  messagesLoadingByThread: {},
+  messagesErrorByThread: {},
   activeProjectId: null,
   activeThreadId: null,
   streamingText: {},
@@ -952,6 +1136,7 @@ export const useAcpStore = create<AcpStore>()(
   creatingThread: false,
   loading: false,
   error: null,
+  configError: null,
   configReady: false,
   projectsReady: false,
   threadsReady: false,
@@ -974,21 +1159,33 @@ export const useAcpStore = create<AcpStore>()(
     Object.values(get().toolCalls).filter((t) => t.threadId === threadId),
 
   loadConfig: async () => {
+    const generation = ++_acpConfigLoadGeneration;
+    const mutationVersion = _acpConfigMutationVersion;
     try {
       const config = await invoke<AcpAgentsFile>('acp_get_config');
+      if (
+        generation !== _acpConfigLoadGeneration
+        || mutationVersion !== _acpConfigMutationVersion
+      ) return;
       set({
         config,
         permissionMode: mapPermissionDefaultToMode(config.general?.permissionDefault),
         configReady: true,
+        configError: null,
         error: null,
       });
     } catch (e) {
+      if (
+        generation !== _acpConfigLoadGeneration
+        || mutationVersion !== _acpConfigMutationVersion
+      ) return;
       // Keep any cached config so the UI does not flash "not configured".
-      set({ configReady: true, error: String(e) });
+      set({ configReady: true, configError: String(e), error: String(e) });
     }
   },
 
   loadRegistry: async (refresh = false) => {
+    const configMutationVersion = _acpConfigMutationVersion;
     set({ loading: true, error: null });
     try {
       const registry = await invoke<RegistryFile>(
@@ -997,6 +1194,10 @@ export const useAcpStore = create<AcpStore>()(
       if (refresh) {
         const previousConfig = get().config;
         const config = await invoke<AcpAgentsFile>('acp_get_config');
+        if (configMutationVersion !== _acpConfigMutationVersion) {
+          set({ registry, loading: false });
+          return;
+        }
         const previousById = new Map(
           (previousConfig?.agents ?? []).map((agent) => [agent.id, launchFingerprint(agent)]),
         );
@@ -1005,6 +1206,7 @@ export const useAcpStore = create<AcpStore>()(
             .filter((agent) => previousById.get(agent.id) !== launchFingerprint(agent))
             .map((agent) => agent.id),
         );
+        _acpConfigMutationVersion += 1;
         set((state) => {
           const threadAgent = new Map(
             [...state.allThreads, ...state.threads].map((thread) => [thread.id, thread.agent_id]),
@@ -1018,6 +1220,7 @@ export const useAcpStore = create<AcpStore>()(
           return {
             registry,
             config,
+            configError: null,
             permissionMode: mapPermissionDefaultToMode(config.general?.permissionDefault),
             loading: false,
             sessionByThread: Object.fromEntries(
@@ -1053,7 +1256,8 @@ export const useAcpStore = create<AcpStore>()(
 
   setAgentEnabled: async (agentId, enabled) => {
     const config = await invoke<AcpAgentsFile>('acp_set_agent_enabled', { agentId, enabled });
-    set({ config });
+    _acpConfigMutationVersion += 1;
+    set({ config, configError: null });
     prewarmConfiguredAgents();
   },
 
@@ -1062,14 +1266,17 @@ export const useAcpStore = create<AcpStore>()(
       agentId,
       enabled: true,
     });
-    set({ config });
+    _acpConfigMutationVersion += 1;
+    set({ config, configError: null });
     prewarmConfiguredAgents();
   },
 
   saveGeneral: async (general) => {
     const config = await invoke<AcpAgentsFile>('acp_save_general', { general });
+    _acpConfigMutationVersion += 1;
     set({
       config,
+      configError: null,
       permissionMode: mapPermissionDefaultToMode(config.general?.permissionDefault),
     });
     prewarmConfiguredAgents();
@@ -1088,19 +1295,22 @@ export const useAcpStore = create<AcpStore>()(
 
   upsertCustom: async (agent) => {
     const config = await invoke<AcpAgentsFile>('acp_upsert_custom_agent', { agent });
-    set({ config });
+    _acpConfigMutationVersion += 1;
+    set({ config, configError: null });
     prewarmConfiguredAgents();
   },
 
   removeAgent: async (agentId) => {
     const config = await invoke<AcpAgentsFile>('acp_remove_agent', { agentId });
-    set({ config });
+    _acpConfigMutationVersion += 1;
+    set({ config, configError: null });
     prewarmConfiguredAgents();
   },
 
   reorderAgents: async (agentIds) => {
     const config = await invoke<AcpAgentsFile>('acp_reorder_agents', { agentIds });
-    set({ config });
+    _acpConfigMutationVersion += 1;
+    set({ config, configError: null });
   },
 
   loadProjects: async () => {
@@ -1193,21 +1403,35 @@ export const useAcpStore = create<AcpStore>()(
   },
 
   deleteProject: async (projectId) => {
+    const sessionKeys = projectSessionKeys(get(), projectId);
     await invoke('acp_delete_project', { projectId });
-    const { activeProjectId } = get();
-    if (activeProjectId === projectId) {
-      set({ activeProjectId: null, threads: [], activeThreadId: null, messages: [] });
-    }
-    await get().loadProjects();
-    await get().loadAllThreads();
+    _acpThreadListLoadVersion.set(
+      projectId,
+      (_acpThreadListLoadVersion.get(projectId) ?? 0) + 1,
+    );
+    for (const sessionKey of sessionKeys) retireAcpSessionKey(sessionKey);
+    const streamingMessageIds = takeStreamingMessageIdsForSessions(sessionKeys);
+    set((state) => ({
+      ...clearAcpSessionState(state, sessionKeys, streamingMessageIds),
+      projects: state.projects.filter((project) => project.id !== projectId),
+      threads: state.threads.filter((thread) => thread.project_id !== projectId),
+      allThreads: state.allThreads.filter((thread) => thread.project_id !== projectId),
+      ...(state.activeProjectId === projectId ? { activeProjectId: null } : {}),
+    }));
+    await Promise.all([get().loadProjects(), get().loadAllThreads()]);
   },
 
   selectProject: async (projectId) => {
-    set({ activeProjectId: projectId, activeThreadId: null, messages: [] });
+    set((state) => ({
+      activeProjectId: projectId,
+      activeThreadId: null,
+      messages: [],
+      threads: projectId
+        ? state.allThreads.filter((thread) => thread.project_id === projectId)
+        : [],
+    }));
     if (projectId) {
       await get().loadThreads(projectId);
-    } else {
-      set({ threads: [] });
     }
   },
 
@@ -1384,33 +1608,21 @@ export const useAcpStore = create<AcpStore>()(
       (project) => project.id === threadBeforeDelete?.project_id && project.kind === 'recent',
     )?.id;
     await invoke('acp_delete_thread', { threadId });
-    const { activeProjectId, activeThreadId } = get();
-    set((state) => {
-      const { [threadId]: _removedReasoning, ...spawnReasoningByThread } =
-        state.spawnReasoningByThread;
-      const { [threadId]: _removedModel, ...spawnModelByThread } = state.spawnModelByThread;
-      const { [threadId]: _removedSession, ...sessionByThread } = state.sessionByThread;
-      const { [threadId]: _removedAlways, ...alwaysAllowedToolsByThread } =
-        state.alwaysAllowedToolsByThread;
-      const { [threadId]: _removedPlans, ...planDocumentsByThread } =
-        state.planDocumentsByThread;
-      return {
-        spawnModelByThread,
-        spawnReasoningByThread,
-        sessionByThread,
-        alwaysAllowedToolsByThread,
-        planDocumentsByThread,
-        pendingPermissions: removeThreadEntries(state.pendingPermissions, threadId),
-        toolCalls: removeThreadEntries(state.toolCalls, threadId),
-        ...(recentProjectId
-          ? { projects: state.projects.filter((project) => project.id !== recentProjectId) }
-          : {}),
-        ...(activeThreadId === threadId ? { activeThreadId: null, messages: [] } : {}),
-        ...(recentProjectId && activeProjectId === recentProjectId
-          ? { activeProjectId: null, threads: [] }
-          : {}),
-      };
-    });
+    retireAcpSessionKey(threadId);
+    const { activeProjectId } = get();
+    const deletedKeys = new Set([threadId]);
+    const streamingMessageIds = takeStreamingMessageIdsForSessions(deletedKeys);
+    set((state) => ({
+      ...clearAcpSessionState(state, deletedKeys, streamingMessageIds),
+      threads: state.threads.filter((thread) => thread.id !== threadId),
+      allThreads: state.allThreads.filter((thread) => thread.id !== threadId),
+      ...(recentProjectId
+        ? { projects: state.projects.filter((project) => project.id !== recentProjectId) }
+        : {}),
+      ...(recentProjectId && state.activeProjectId === recentProjectId
+        ? { activeProjectId: null }
+        : {}),
+    }));
     if (activeProjectId && activeProjectId !== recentProjectId) {
       await get().loadThreads(activeProjectId);
     }
@@ -1558,6 +1770,13 @@ export const useAcpStore = create<AcpStore>()(
       }
     }
 
+    // User navigation that happened while the cached selection was being
+    // revalidated is authoritative; never resurrect the startup selection.
+    if (
+      get().activeProjectId !== projectId
+      || get().activeThreadId !== threadId
+    ) return;
+
     if (threadId) {
       // Re-validate after loadThreads (thread may have been deleted server-side)
       const stillThere =
@@ -1575,12 +1794,47 @@ export const useAcpStore = create<AcpStore>()(
   loadMessages: async (threadId) => {
     const version = (_acpMessageLoadVersion.get(threadId) ?? 0) + 1;
     _acpMessageLoadVersion.set(threadId, version);
-    const messages = await invoke<AcpMessage[]>('acp_list_messages', { threadId });
+    set((state) => {
+      const messagesErrorByThread = { ...state.messagesErrorByThread };
+      delete messagesErrorByThread[threadId];
+      return {
+        messagesLoadingByThread: {
+          ...state.messagesLoadingByThread,
+          [threadId]: true,
+        },
+        messagesErrorByThread,
+      };
+    });
+    let messages: AcpMessage[];
+    try {
+      messages = await invoke<AcpMessage[]>('acp_list_messages', { threadId });
+    } catch (error) {
+      if (_acpMessageLoadVersion.get(threadId) !== version) return;
+      set((state) => ({
+        messagesLoadingByThread: {
+          ...state.messagesLoadingByThread,
+          [threadId]: false,
+        },
+        messagesErrorByThread: {
+          ...state.messagesErrorByThread,
+          [threadId]: String(error),
+        },
+      }));
+      return;
+    }
     if (_acpMessageLoadVersion.get(threadId) !== version) return;
     // If a turn is still running, preserve local streaming content so a mid-turn
     // reload does not wipe the live buffer or revive a stuck spinner.
     set((s) => {
-      if (s.activeThreadId !== threadId) return s;
+      const messagesLoadingByThread = {
+        ...s.messagesLoadingByThread,
+        [threadId]: false,
+      };
+      const messagesErrorByThread = { ...s.messagesErrorByThread };
+      delete messagesErrorByThread[threadId];
+      if (s.activeThreadId !== threadId) {
+        return { messagesLoadingByThread, messagesErrorByThread };
+      }
       const hydratedTools = persistedToolCalls(messages);
       const toolCallsForOtherThreads = removeThreadEntries(s.toolCalls, threadId);
       const hydratedPlans = persistedPlanDocuments(messages);
@@ -1620,6 +1874,8 @@ export const useAcpStore = create<AcpStore>()(
       if (!s.runningByThread[threadId]) {
         return {
           messages,
+          messagesLoadingByThread,
+          messagesErrorByThread,
           toolCalls: { ...toolCallsForOtherThreads, ...hydratedTools },
           planDocumentsByThread,
         };
@@ -1639,6 +1895,8 @@ export const useAcpStore = create<AcpStore>()(
       });
       return {
         messages: merged,
+        messagesLoadingByThread,
+        messagesErrorByThread,
         toolCalls: { ...toolCallsForOtherThreads, ...hydratedTools, ...s.toolCalls },
         planDocumentsByThread,
       };
@@ -1649,6 +1907,7 @@ export const useAcpStore = create<AcpStore>()(
     const key = `draft:${projectId}:${agentId}`;
     const existing = _acpPrepareInFlight.get(key);
     if (existing) return existing;
+    const lifecycleVersion = _acpSessionLifecycleVersion.get(key) ?? 0;
     set((s) => ({
       preparingByThread: { ...s.preparingByThread, [key]: true },
     }));
@@ -1659,23 +1918,32 @@ export const useAcpStore = create<AcpStore>()(
       reasoningEffort: get().spawnReasoningByThread[key] ?? null,
     })
       .then((snapshot) => {
+        if ((_acpSessionLifecycleVersion.get(key) ?? 0) !== lifecycleVersion) {
+          throw new Error('ACP draft preparation was superseded');
+        }
         set((s) => ({
           sessionByThread: { ...s.sessionByThread, [key]: snapshot },
         }));
         return snapshot;
       })
       .catch((error) => {
-        set((s) => ({
-          statusByThread: { ...s.statusByThread, [key]: String(error) },
-          error: String(error),
-        }));
+        if ((_acpSessionLifecycleVersion.get(key) ?? 0) === lifecycleVersion) {
+          set((s) => ({
+            statusByThread: { ...s.statusByThread, [key]: String(error) },
+            error: String(error),
+          }));
+        }
         throw error;
       })
       .finally(() => {
-        _acpPrepareInFlight.delete(key);
-        set((s) => ({
-          preparingByThread: { ...s.preparingByThread, [key]: false },
-        }));
+        if (_acpPrepareInFlight.get(key) === task) {
+          _acpPrepareInFlight.delete(key);
+        }
+        if ((_acpSessionLifecycleVersion.get(key) ?? 0) === lifecycleVersion) {
+          set((s) => ({
+            preparingByThread: { ...s.preparingByThread, [key]: false },
+          }));
+        }
       });
     _acpPrepareInFlight.set(key, task);
     return task;
@@ -1684,6 +1952,7 @@ export const useAcpStore = create<AcpStore>()(
   prepareSession: async (threadId) => {
     const existing = _acpPrepareInFlight.get(threadId);
     if (existing) return existing;
+    const lifecycleVersion = _acpSessionLifecycleVersion.get(threadId) ?? 0;
     set((s) => ({
       preparingByThread: { ...s.preparingByThread, [threadId]: true },
     }));
@@ -1693,6 +1962,9 @@ export const useAcpStore = create<AcpStore>()(
       reasoningEffort: get().spawnReasoningByThread[threadId] ?? null,
     })
       .then((snapshot) => {
+        if ((_acpSessionLifecycleVersion.get(threadId) ?? 0) !== lifecycleVersion) {
+          throw new Error('ACP session preparation was superseded');
+        }
         set((s) => ({
           sessionByThread: { ...s.sessionByThread, [threadId]: snapshot },
           statusByThread: { ...s.statusByThread, [threadId]: '' },
@@ -1710,90 +1982,120 @@ export const useAcpStore = create<AcpStore>()(
         return snapshot;
       })
       .catch((error) => {
-        set((s) => ({
-          statusByThread: { ...s.statusByThread, [threadId]: String(error) },
-          error: String(error),
-        }));
+        if ((_acpSessionLifecycleVersion.get(threadId) ?? 0) === lifecycleVersion) {
+          set((s) => ({
+            statusByThread: { ...s.statusByThread, [threadId]: String(error) },
+            error: String(error),
+          }));
+        }
         throw error;
       })
       .finally(() => {
-        _acpPrepareInFlight.delete(threadId);
-        set((s) => ({
-          preparingByThread: { ...s.preparingByThread, [threadId]: false },
-        }));
+        if (_acpPrepareInFlight.get(threadId) === task) {
+          _acpPrepareInFlight.delete(threadId);
+        }
+        if ((_acpSessionLifecycleVersion.get(threadId) ?? 0) === lifecycleVersion) {
+          set((s) => ({
+            preparingByThread: { ...s.preparingByThread, [threadId]: false },
+          }));
+        }
       });
     _acpPrepareInFlight.set(threadId, task);
     return task;
   },
 
-  setConfigOption: async (threadId, configId, value) => {
-    const before = get().sessionByThread[threadId]?.configOptions.find(
-      (option) => option.id === configId,
-    );
-    const snapshot = await invoke<AcpSessionSnapshot>('acp_set_config_option', {
-      threadId,
-      configId,
-      value,
+  setConfigOption: (threadId, configId, value) => {
+    const lifecycleVersion = _acpSessionLifecycleVersion.get(threadId) ?? 0;
+    return serializeAcpSessionMutation(threadId, async () => {
+      if ((_acpSessionLifecycleVersion.get(threadId) ?? 0) !== lifecycleVersion) return;
+      const before = get().sessionByThread[threadId]?.configOptions.find(
+        (option) => option.id === configId,
+      );
+      let snapshot: AcpSessionSnapshot;
+      try {
+        snapshot = await invoke<AcpSessionSnapshot>('acp_set_config_option', {
+          threadId,
+          configId,
+          value,
+        });
+      } catch (error) {
+        if ((_acpSessionLifecycleVersion.get(threadId) ?? 0) !== lifecycleVersion) return;
+        throw error;
+      }
+      if ((_acpSessionLifecycleVersion.get(threadId) ?? 0) !== lifecycleVersion) return;
+      const after = snapshot.configOptions.find((option) => option.id === configId);
+      const spawnArg = after?._meta?.aqbotSpawnArg;
+      const category = after?.category ?? before?.category;
+      const isModelControl = category === 'model'
+        || before?._meta?.aqbotSpawnArg === '--model'
+        || spawnArg === '--model';
+      const isReasoningControl = category === 'thought_level'
+        || /reasoning|effort/i.test(configId)
+        || before?._meta?.aqbotSpawnArg === '--reasoning-effort'
+        || spawnArg === '--reasoning-effort';
+      set((s) => ({
+        sessionByThread: { ...s.sessionByThread, [threadId]: snapshot },
+        threads: s.threads.map((thread) => (
+          thread.id === threadId
+            ? { ...thread, mode_id: snapshotCurrentMode(snapshot) }
+            : thread
+        )),
+        allThreads: s.allThreads.map((thread) => (
+          thread.id === threadId
+            ? { ...thread, mode_id: snapshotCurrentMode(snapshot) }
+            : thread
+        )),
+        ...(isModelControl && typeof value === 'string'
+          ? {
+              spawnModelByThread: spawnArg !== '--model' || value === '__agent_default'
+                ? Object.fromEntries(
+                    Object.entries(s.spawnModelByThread).filter(([key]) => key !== threadId),
+                  )
+                : { ...s.spawnModelByThread, [threadId]: value },
+            }
+          : {}),
+        ...(isReasoningControl && typeof value === 'string'
+          ? {
+              spawnReasoningByThread: spawnArg !== '--reasoning-effort'
+                || value === '__agent_default'
+                ? Object.fromEntries(
+                    Object.entries(s.spawnReasoningByThread).filter(([key]) => key !== threadId),
+                  )
+                : { ...s.spawnReasoningByThread, [threadId]: value },
+            }
+          : {}),
+      }));
     });
-    const after = snapshot.configOptions.find((option) => option.id === configId);
-    const spawnArg = after?._meta?.aqbotSpawnArg;
-    const category = after?.category ?? before?.category;
-    const isModelControl = category === 'model'
-      || before?._meta?.aqbotSpawnArg === '--model'
-      || spawnArg === '--model';
-    const isReasoningControl = category === 'thought_level'
-      || /reasoning|effort/i.test(configId)
-      || before?._meta?.aqbotSpawnArg === '--reasoning-effort'
-      || spawnArg === '--reasoning-effort';
-    set((s) => ({
-      sessionByThread: { ...s.sessionByThread, [threadId]: snapshot },
-      threads: s.threads.map((thread) => (
-        thread.id === threadId
-          ? { ...thread, mode_id: snapshotCurrentMode(snapshot) }
-          : thread
-      )),
-      allThreads: s.allThreads.map((thread) => (
-        thread.id === threadId
-          ? { ...thread, mode_id: snapshotCurrentMode(snapshot) }
-          : thread
-      )),
-      ...(isModelControl && typeof value === 'string'
-        ? {
-            spawnModelByThread: spawnArg !== '--model' || value === '__agent_default'
-              ? Object.fromEntries(
-                  Object.entries(s.spawnModelByThread).filter(([key]) => key !== threadId),
-                )
-              : { ...s.spawnModelByThread, [threadId]: value },
-          }
-        : {}),
-      ...(isReasoningControl && typeof value === 'string'
-        ? {
-            spawnReasoningByThread: spawnArg !== '--reasoning-effort'
-              || value === '__agent_default'
-              ? Object.fromEntries(
-                  Object.entries(s.spawnReasoningByThread).filter(([key]) => key !== threadId),
-                )
-              : { ...s.spawnReasoningByThread, [threadId]: value },
-          }
-        : {}),
-    }));
   },
 
-  setSessionMode: async (threadId, modeId) => {
-    const snapshot = await invoke<AcpSessionSnapshot>('acp_set_mode', { threadId, modeId });
-    set((s) => {
-      const syncMode = (thread: AcpThread) =>
-        thread.id === threadId ? { ...thread, mode_id: modeId } : thread;
-      return {
-        sessionByThread: { ...s.sessionByThread, [threadId]: snapshot },
-        threads: s.threads.map(syncMode),
-        allThreads: s.allThreads.map(syncMode),
-      };
+  setSessionMode: (threadId, modeId) => {
+    const lifecycleVersion = _acpSessionLifecycleVersion.get(threadId) ?? 0;
+    return serializeAcpSessionMutation(threadId, async () => {
+      if ((_acpSessionLifecycleVersion.get(threadId) ?? 0) !== lifecycleVersion) return;
+      let snapshot: AcpSessionSnapshot;
+      try {
+        snapshot = await invoke<AcpSessionSnapshot>('acp_set_mode', { threadId, modeId });
+      } catch (error) {
+        if ((_acpSessionLifecycleVersion.get(threadId) ?? 0) !== lifecycleVersion) return;
+        throw error;
+      }
+      if ((_acpSessionLifecycleVersion.get(threadId) ?? 0) !== lifecycleVersion) return;
+      set((s) => {
+        const syncMode = (thread: AcpThread) =>
+          thread.id === threadId ? { ...thread, mode_id: modeId } : thread;
+        return {
+          sessionByThread: { ...s.sessionByThread, [threadId]: snapshot },
+          threads: s.threads.map(syncMode),
+          allThreads: s.allThreads.map(syncMode),
+        };
+      });
     });
   },
 
   cancelPrompt: async (threadId) => {
     clearFirstOutputTimer(threadId);
+    const previousStatus = get().statusByThread[threadId] ?? '';
+    const previousTurnActivity = get().turnActivityByThread[threadId] ?? false;
     set((s) => ({
       cancellingByThread: { ...s.cancellingByThread, [threadId]: true },
       turnActivityByThread: { ...s.turnActivityByThread, [threadId]: true },
@@ -1803,6 +2105,41 @@ export const useAcpStore = create<AcpStore>()(
       const cancelled = await invoke<boolean>('acp_cancel', { threadId });
       if (!cancelled) throw new Error('No active ACP turn to cancel');
       await get().loadMessages(threadId);
+      if (get().messagesErrorByThread[threadId]) {
+        invalidateAutoApprovalsForSession(threadId);
+        set((s) => {
+          const messageIds = new Set(
+            s.messages
+              .filter((message) => message.thread_id === threadId)
+              .map((message) => message.id),
+          );
+          return {
+            messages: s.messages.map((message) => (
+              message.thread_id === threadId && message.status === 'streaming'
+                ? { ...message, status: 'done' as const }
+                : message
+            )),
+            streamingText: Object.fromEntries(
+              Object.entries(s.streamingText).filter(([messageId]) => !messageIds.has(messageId)),
+            ),
+            runningByThread: { ...s.runningByThread, [threadId]: false },
+            cancellingByThread: { ...s.cancellingByThread, [threadId]: false },
+            turnActivityByThread: { ...s.turnActivityByThread, [threadId]: true },
+            statusByThread: { ...s.statusByThread, [threadId]: '' },
+            planByThread: {
+              ...s.planByThread,
+              [threadId]: { entries: [], completed: 0, total: 0 },
+            },
+            planDocumentsByThread: finalizePendingPlanDocuments(
+              s.planDocumentsByThread,
+              threadId,
+            ),
+            pendingPermissions: removeThreadEntries(s.pendingPermissions, threadId),
+            toolCalls: finalizeUnfinishedToolCalls(s.toolCalls, threadId, 'cancelled'),
+          };
+        });
+        return;
+      }
       const stillStreaming = get().messages.some(
         (message) => message.thread_id === threadId && message.status === 'streaming',
       );
@@ -1819,9 +2156,25 @@ export const useAcpStore = create<AcpStore>()(
         }));
       }
     } catch (error) {
-      set((s) => ({
-        cancellingByThread: { ...s.cancellingByThread, [threadId]: false },
-      }));
+      set((s) => {
+        const cancellationIsStillCurrent =
+          s.statusByThread[threadId] === ACP_STATUS_CANCELLING;
+        return {
+          cancellingByThread: { ...s.cancellingByThread, [threadId]: false },
+          ...(cancellationIsStillCurrent
+            ? {
+                statusByThread: {
+                  ...s.statusByThread,
+                  [threadId]: previousStatus,
+                },
+                turnActivityByThread: {
+                  ...s.turnActivityByThread,
+                  [threadId]: previousTurnActivity,
+                },
+              }
+            : {}),
+        };
+      });
       throw error;
     }
   },
@@ -2040,6 +2393,7 @@ export const useAcpStore = create<AcpStore>()(
   bindEvents: async () => {
     // Tear down any previous generation first (StrictMode remount / leave+reenter Agent).
     const gen = ++_acpListenerGen;
+    _acpAutoApprovalTokens.clear();
     if (_acpUnlisten) {
       _acpUnlisten();
       _acpUnlisten = null;
@@ -2047,6 +2401,9 @@ export const useAcpStore = create<AcpStore>()(
 
     const unlisteners: UnlistenFn[] = [];
     const isLive = () => _acpListenerGen === gen;
+    const isThreadEventLive = (threadId: string) => (
+      isLive() && isAcpSessionKeyLive(threadId)
+    );
     const markTurnActivity = (threadId: string) => {
       clearFirstOutputTimer(threadId);
       set((state) => ({
@@ -2069,6 +2426,7 @@ export const useAcpStore = create<AcpStore>()(
         const runningByThread = { ...s.runningByThread };
         let messages = s.messages;
         for (const [messageId, pending] of batch) {
+          if (!isAcpSessionKeyLive(pending.threadId)) continue;
           const existing = messages.find((message) => message.id === messageId);
           if (
             runningByThread[pending.threadId] === false
@@ -2106,6 +2464,7 @@ export const useAcpStore = create<AcpStore>()(
     };
     const queueStream = (threadId: string, messageId: string, text: string) => {
       const pending = streamBatch.get(messageId);
+      _acpStreamingMessageThreads.set(messageId, threadId);
       streamBatch.set(messageId, {
         threadId,
         text: mergeStreamChunk(pending?.text ?? '', text),
@@ -2117,7 +2476,7 @@ export const useAcpStore = create<AcpStore>()(
       await listen<{ threadId: string; messageId: string; text: string }>(
         'acp-stream-text',
         (event) => {
-          if (!isLive()) return;
+          if (!isThreadEventLive(event.payload.threadId)) return;
           const { threadId, messageId, text } = event.payload;
           markTurnActivity(threadId);
           queueStream(threadId, messageId, text ?? '');
@@ -2129,7 +2488,7 @@ export const useAcpStore = create<AcpStore>()(
       await listen<{ threadId: string; snapshot: AcpSessionSnapshot }>(
         'acp-session-state',
         (event) => {
-          if (!isLive()) return;
+          if (!isThreadEventLive(event.payload.threadId)) return;
           const { threadId, snapshot } = event.payload;
           const modeId = snapshotCurrentMode(snapshot);
           set((s) => ({
@@ -2149,7 +2508,7 @@ export const useAcpStore = create<AcpStore>()(
       await listen<{ threadId: string; messageId?: string; raw: Record<string, unknown> }>(
         'acp-plan',
         (event) => {
-          if (!isLive()) return;
+          if (!isThreadEventLive(event.payload.threadId)) return;
           const { threadId, raw } = event.payload;
           const plan = normalizePlan(raw ?? {});
           // Ignore plan-review documents / non-structured payloads so they
@@ -2165,7 +2524,7 @@ export const useAcpStore = create<AcpStore>()(
 
     unlisteners.push(
       await listen<{ threadId: string; message: string; preparing?: boolean }>('acp-status', (event) => {
-        if (!isLive()) return;
+        if (!isThreadEventLive(event.payload.threadId)) return;
         const { threadId, message, preparing } = event.payload;
         set((s) => ({
           statusByThread: {
@@ -2196,7 +2555,7 @@ export const useAcpStore = create<AcpStore>()(
           description?: string | null;
         }>;
       }>('acp-permission-request', (event) => {
-        if (!isLive()) return;
+        if (!isThreadEventLive(event.payload.threadId)) return;
         const {
           threadId,
           messageId,
@@ -2228,6 +2587,19 @@ export const useAcpStore = create<AcpStore>()(
         const input = typeof inputObj === 'object' && inputObj ? inputObj : { value: inputObj };
         const mappedOptions = mapAcpOptions(options ?? []);
         const sequence = ++_acpInteractionSeq;
+        const pendingRequest: AcpPermissionRequest = {
+          threadId,
+          messageId,
+          requestId,
+          kind,
+          title,
+          toolName: String(toolName),
+          toolCallId,
+          input,
+          options: mappedOptions,
+          status: 'pending',
+          sequence,
+        };
 
         // Session always-allow: auto-approve without surfacing the composer.
         if (
@@ -2236,13 +2608,28 @@ export const useAcpStore = create<AcpStore>()(
         ) {
           const allowOptionId = findAgentAllowOptionId(mappedOptions);
           if (allowOptionId) {
+            const approvalToken = beginAutoApproval(requestId, threadId);
             void invoke('acp_respond_permission', {
               requestId,
               optionId: allowOptionId,
               feedback: null,
-            }).catch((error) => {
-              console.error('[acp] session always-allow auto-respond failed', error);
-            });
+            })
+              .then(() => {
+                finishAutoApproval(requestId, approvalToken);
+              })
+              .catch((error) => {
+                console.error('[acp] session always-allow auto-respond failed', error);
+                if (
+                  !finishAutoApproval(requestId, approvalToken)
+                  || !isThreadEventLive(threadId)
+                ) return;
+                set((state) => ({
+                  pendingPermissions: {
+                    ...state.pendingPermissions,
+                    [requestId]: pendingRequest,
+                  },
+                }));
+              });
             return;
           }
         }
@@ -2250,19 +2637,7 @@ export const useAcpStore = create<AcpStore>()(
         set((s) => {
           const nextPermissions = {
             ...s.pendingPermissions,
-            [requestId]: {
-              threadId,
-              messageId,
-              requestId,
-              kind,
-              title,
-              toolName: String(toolName),
-              toolCallId,
-              input,
-              options: mappedOptions,
-              status: 'pending' as const,
-              sequence,
-            },
+            [requestId]: pendingRequest,
           };
           if (kind !== 'plan_review') {
             return { pendingPermissions: nextPermissions };
@@ -2300,8 +2675,9 @@ export const useAcpStore = create<AcpStore>()(
         selectedOptionKind?: string | null;
         selectedOptionName?: string | null;
       }>('acp-interaction-closed', (event) => {
-        if (!isLive()) return;
+        if (!isThreadEventLive(event.payload.threadId)) return;
         const payload = event.payload;
+        _acpAutoApprovalTokens.delete(payload.requestId);
         markTurnActivity(payload.threadId);
         set((state) => {
           const resolution = {
@@ -2353,18 +2729,10 @@ export const useAcpStore = create<AcpStore>()(
         status?: string | null;
         raw: Record<string, unknown>;
       }>('acp-tool-call', (event) => {
-        if (!isLive()) return;
+        if (!isThreadEventLive(event.payload.threadId)) return;
         const p = event.payload;
         markTurnActivity(p.threadId);
-        const statusRaw = (p.status ?? 'pending').toLowerCase();
-        const status: AcpToolCallState['status'] =
-          statusRaw === 'completed' || statusRaw === 'success'
-            ? 'success'
-            : statusRaw === 'failed' || statusRaw === 'error'
-              ? 'error'
-              : statusRaw === 'in_progress' || statusRaw === 'running'
-                ? 'running'
-                : 'queued';
+        const status = normalizeToolStatus(p.status ?? 'pending');
         set((s) => {
           const toolKey = acpToolStateKey(p.threadId, p.toolCallId, p.messageId);
           const existing = s.toolCalls[toolKey];
@@ -2395,23 +2763,13 @@ export const useAcpStore = create<AcpStore>()(
         status?: string | null;
         raw: Record<string, unknown>;
       }>('acp-tool-call-update', (event) => {
-        if (!isLive()) return;
+        if (!isThreadEventLive(event.payload.threadId)) return;
         const p = event.payload;
         markTurnActivity(p.threadId);
         set((s) => {
           const toolKey = acpToolStateKey(p.threadId, p.toolCallId, p.messageId);
           const existing = s.toolCalls[toolKey];
-          const statusRaw = (p.status ?? existing?.status ?? 'running').toLowerCase();
-          const status: AcpToolCallState['status'] =
-            statusRaw === 'completed' || statusRaw === 'success'
-              ? 'success'
-              : statusRaw === 'failed' || statusRaw === 'error'
-                ? 'error'
-                : statusRaw === 'cancelled'
-                  ? 'cancelled'
-                  : statusRaw === 'in_progress' || statusRaw === 'running'
-                    ? 'running'
-                    : 'queued';
+          const status = normalizeToolStatus(p.status ?? existing?.status ?? 'running');
           const output = extractToolOutput(p.raw ?? {});
           return {
             toolCalls: {
@@ -2437,15 +2795,18 @@ export const useAcpStore = create<AcpStore>()(
         threadId: string;
         messageId: string;
         text: string;
+        stopReason?: string;
         sessionId?: string;
         durationMs?: number;
       }>(
         'acp-done',
         (event) => {
-          if (!isLive()) return;
-          const { threadId, messageId, text, durationMs } = event.payload;
+          if (!isThreadEventLive(event.payload.threadId)) return;
+          const { threadId, messageId, text, stopReason, durationMs } = event.payload;
+          invalidateAutoApprovalsForSession(threadId);
           markTurnActivity(threadId);
           streamBatch.delete(messageId);
+          _acpStreamingMessageThreads.delete(messageId);
           const metaJson =
             typeof durationMs === 'number'
               ? JSON.stringify({ duration_ms: Math.round(durationMs) })
@@ -2494,6 +2855,11 @@ export const useAcpStore = create<AcpStore>()(
                 threadId,
               ),
               pendingPermissions: removeThreadEntries(s.pendingPermissions, threadId),
+              toolCalls: finalizeUnfinishedToolCalls(
+                s.toolCalls,
+                threadId,
+                /cancel/i.test(stopReason ?? '') ? 'cancelled' : 'error',
+              ),
               messages,
             };
           });
@@ -2509,10 +2875,15 @@ export const useAcpStore = create<AcpStore>()(
       await listen<{ threadId: string; messageId?: string; message: string; text?: string }>(
         'acp-error',
         (event) => {
-          if (!isLive()) return;
+          if (!isThreadEventLive(event.payload.threadId)) return;
           const { threadId, messageId, message, text } = event.payload;
+          invalidateAutoApprovalsForSession(threadId);
+          invalidateAcpMessageLoad(threadId);
           markTurnActivity(threadId);
-          if (messageId) streamBatch.delete(messageId);
+          if (messageId) {
+            streamBatch.delete(messageId);
+            _acpStreamingMessageThreads.delete(messageId);
+          }
           set((s) => {
             const nextStreaming = { ...s.streamingText };
             if (messageId) delete nextStreaming[messageId];
@@ -2547,12 +2918,17 @@ export const useAcpStore = create<AcpStore>()(
               statusByThread: { ...s.statusByThread, [threadId]: message },
               runningByThread: { ...s.runningByThread, [threadId]: false },
               cancellingByThread: { ...s.cancellingByThread, [threadId]: false },
+              messagesLoadingByThread: {
+                ...s.messagesLoadingByThread,
+                [threadId]: false,
+              },
               planByThread: { ...s.planByThread, [threadId]: { entries: [], completed: 0, total: 0 } },
               planDocumentsByThread: finalizePendingPlanDocuments(
                 s.planDocumentsByThread,
                 threadId,
               ),
               pendingPermissions: removeThreadEntries(s.pendingPermissions, threadId),
+              toolCalls: finalizeUnfinishedToolCalls(s.toolCalls, threadId, 'error'),
               error: message,
               messages,
             };

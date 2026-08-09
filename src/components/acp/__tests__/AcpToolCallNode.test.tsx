@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react';
 import { App } from 'antd';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAcpStore } from '@/stores/acpStore';
 import { translateZhCN } from '@/test/i18nTestTranslator';
@@ -62,6 +62,49 @@ describe('AcpToolCallNode', () => {
     expect(screen.getByText('README.md')).toBeInTheDocument();
     expect(screen.queryByText('/workspace')).not.toBeInTheDocument();
     expect(screen.getByText('已批准')).toBeInTheDocument();
+  });
+
+  it('exposes tool progress through a polite live region even when details are expandable', () => {
+    useAcpStore.setState((state) => ({
+      toolCalls: {
+        ...state.toolCalls,
+        'thread-1:assistant-1:tool-7': {
+          ...state.toolCalls['thread-1:assistant-1:tool-7'],
+          status: 'running',
+        },
+      },
+    }));
+    const props = {
+      node: {
+        type: 'tool-call',
+        content: 'ls',
+        attrs: { id: 'tool-7', message: 'assistant-1', name: 'terminal' },
+      },
+    } as unknown as ComponentProps<typeof AcpToolCallNode>;
+
+    render(
+      <App>
+        <AcpToolCallNode {...props} />
+      </App>,
+    );
+
+    const liveRegion = screen.getByRole('status');
+    expect(liveRegion).toHaveAttribute('aria-live', 'polite');
+    expect(liveRegion).toHaveTextContent('terminal 正在运行');
+
+    act(() => {
+      useAcpStore.setState((state) => ({
+        toolCalls: {
+          ...state.toolCalls,
+          'thread-1:assistant-1:tool-7': {
+            ...state.toolCalls['thread-1:assistant-1:tool-7'],
+            status: 'success',
+          },
+        },
+      }));
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent('terminal 已完成');
   });
 
   it('localizes a semantic questionnaire action stored as the tool result', () => {

@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { Button, ConfigProvider, Input, Typography, theme } from 'antd';
+import { Button, ConfigProvider, Input, Modal, Typography, theme } from 'antd';
 import { Maximize2, Minimize2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { AcpPermissionRequest, AcpQuestionnaireSubmission } from '@/stores/acpStore';
@@ -31,6 +31,7 @@ export type AcpInteractionRequest = Omit<AcpPermissionRequest, 'options'> & {
 export interface AcpInteractionComposerProps {
   request: AcpInteractionRequest;
   onSubmit: (submission: AcpInteractionSubmission) => Promise<void>;
+  active?: boolean;
 }
 export type AcpInteractionSubmission =
   | { optionId: string; feedback?: string }
@@ -206,6 +207,7 @@ function findPlanOption(
 export function AcpInteractionComposer({
   request,
   onSubmit,
+  active = true,
 }: AcpInteractionComposerProps) {
   const { t } = useTranslation();
   const { token } = theme.useToken();
@@ -237,9 +239,16 @@ export function AcpInteractionComposer({
     setPlanFeedbackMode(false);
     setPlanFeedback('');
     setPlanExpanded(false);
+  }, [request.requestId]);
+
+  useEffect(() => {
+    if (!active) {
+      setPlanExpanded(false);
+      return undefined;
+    }
     const frame = window.requestAnimationFrame(() => firstOptionRef.current?.focus());
     return () => window.cancelAnimationFrame(frame);
-  }, [request.requestId]);
+  }, [active, request.requestId]);
 
   if (request.status !== 'pending') return null;
 
@@ -247,6 +256,7 @@ export function AcpInteractionComposer({
   if (kind === 'question' && questionnaire) {
     return (
       <AcpQuestionnaireComposer
+        active={active}
         request={request}
         questionnaire={questionnaire}
         onSubmit={(submission) => onSubmit({ questionnaire: submission })}
@@ -294,22 +304,14 @@ export function AcpInteractionComposer({
       void submitOption(changeOption.id, text);
     };
 
-    return (
-      <ConfigProvider button={{ autoInsertSpace: false }}>
-        {planExpanded ? (
-          <div
-            role="presentation"
-            onClick={() => setPlanExpanded(false)}
-            style={{
-              position: 'fixed',
-              inset: 0,
-              zIndex: 1099,
-              background: 'rgba(0, 0, 0, 0.45)',
-            }}
-          />
-        ) : null}
+    const closePlanFullscreen = () => {
+      setPlanExpanded(false);
+    };
+
+    const renderPlanForm = (expanded: boolean) => (
         <form
-          aria-labelledby={titleId}
+          aria-label={expanded ? title : undefined}
+          aria-labelledby={expanded ? undefined : titleId}
           aria-busy={submitting}
           onSubmit={(event) => {
             event.preventDefault();
@@ -318,26 +320,12 @@ export function AcpInteractionComposer({
           style={{
             display: 'flex',
             minWidth: 0,
-            width: planExpanded ? 'auto' : '100%',
-            maxHeight: planExpanded ? undefined : 'min(55vh, 480px)',
+            width: '100%',
+            height: expanded ? '100%' : undefined,
+            maxHeight: expanded ? '100%' : 'min(55vh, 480px)',
             flexDirection: 'column',
             gap: 10,
             touchAction: 'manipulation',
-            ...(planExpanded
-              ? {
-                  position: 'fixed',
-                  inset: 16,
-                  zIndex: 1100,
-                  padding: 16,
-                  borderRadius: 16,
-                  background: token.colorBgElevated,
-                  border: `1px solid ${token.colorBorderSecondary}`,
-                  boxShadow: token.boxShadowSecondary,
-                  maxHeight: PLAN_DOCUMENT_EXPANDED_MAX_HEIGHT,
-                  height: PLAN_DOCUMENT_EXPANDED_MAX_HEIGHT,
-                  boxSizing: 'border-box' as const,
-                }
-              : {}),
           }}
         >
           <style>{`
@@ -366,9 +354,11 @@ export function AcpInteractionComposer({
                 gap: 8,
               }}
             >
-              <Text id={titleId} strong style={{ overflowWrap: 'anywhere' }}>
-                {title}
-              </Text>
+              {!expanded ? (
+                <Text id={titleId} strong style={{ overflowWrap: 'anywhere' }}>
+                  {title}
+                </Text>
+              ) : null}
               {request.toolName ? (
                 <code
                   translate="no"
@@ -388,12 +378,15 @@ export function AcpInteractionComposer({
             <Button
               type="text"
               size="small"
-              icon={planExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-              aria-label={planExpanded
+              icon={expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              aria-label={expanded
                 ? t('agentPage.interactionPlanExitFullscreen')
                 : t('agentPage.interactionPlanFullscreen')}
-              aria-pressed={planExpanded}
-              onClick={() => setPlanExpanded((value) => !value)}
+              aria-pressed={expanded}
+              onClick={() => {
+                if (expanded) closePlanFullscreen();
+                else setPlanExpanded(true);
+              }}
             />
           </div>
 
@@ -403,7 +396,7 @@ export function AcpInteractionComposer({
               <AcpPlanMarkdownBody
                 content={planBody}
                 maxHeight={PLAN_DOCUMENT_MAX_HEIGHT}
-                expanded={planExpanded}
+                expanded={expanded}
               />
             </div>
           ) : (
@@ -456,7 +449,7 @@ export function AcpInteractionComposer({
               }}
             >
               <Button
-                ref={firstOptionRef}
+                ref={expanded ? undefined : firstOptionRef}
                 className="aqbot-acp-interaction-option"
                 type="primary"
                 disabled={submitting || !approveOption}
@@ -497,6 +490,52 @@ export function AcpInteractionComposer({
             </Text>
           ) : null}
         </form>
+    );
+
+    return (
+      <ConfigProvider button={{ autoInsertSpace: false }}>
+        <div
+          aria-hidden={planExpanded || undefined}
+          style={{ display: planExpanded ? 'none' : 'contents' }}
+        >
+          {renderPlanForm(false)}
+        </div>
+        <Modal
+          open={planExpanded}
+          title={title}
+          footer={null}
+          closable={false}
+          keyboard
+          mask={{ enabled: true, blur: true, closable: true }}
+          onCancel={closePlanFullscreen}
+          width="calc(100vw - 32px)"
+          zIndex={1100}
+          style={{ top: 16, maxWidth: 'calc(100vw - 32px)', paddingBottom: 0 }}
+          styles={{
+            wrapper: { position: 'fixed' },
+            container: {
+              display: 'flex',
+              height: PLAN_DOCUMENT_EXPANDED_MAX_HEIGHT,
+              maxHeight: PLAN_DOCUMENT_EXPANDED_MAX_HEIGHT,
+              flexDirection: 'column',
+              boxSizing: 'border-box',
+            },
+            header: { flexShrink: 0 },
+            body: {
+              display: 'flex',
+              minHeight: 0,
+              flex: 1,
+              overflow: 'hidden',
+              overscrollBehavior: 'contain',
+            },
+          }}
+          focusable={{ trap: true, focusTriggerAfterClose: true }}
+          transitionName=""
+          maskTransitionName=""
+          destroyOnHidden
+        >
+          {planExpanded ? renderPlanForm(true) : null}
+        </Modal>
       </ConfigProvider>
     );
   }

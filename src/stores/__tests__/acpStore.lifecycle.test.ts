@@ -7,9 +7,15 @@ import type {
   RegistryFile,
 } from '@/types/acp';
 
-const { invokeMock, listenMock } = vi.hoisted(() => ({
+type EventHandler = (event: { payload: Record<string, unknown> }) => void;
+
+const { invokeMock, listenMock, eventHandlers } = vi.hoisted(() => ({
   invokeMock: vi.fn(),
-  listenMock: vi.fn(async () => vi.fn()),
+  eventHandlers: new Map<string, EventHandler>(),
+  listenMock: vi.fn(async (eventName: string, handler: EventHandler) => {
+    eventHandlers.set(eventName, handler);
+    return () => eventHandlers.delete(eventName);
+  }),
 }));
 
 vi.mock('@/lib/invoke', () => ({
@@ -64,6 +70,7 @@ const existingThread: AcpThread = {
 describe('acpStore lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    eventHandlers.clear();
     localStorage.clear();
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       configurable: true,
@@ -146,6 +153,70 @@ describe('acpStore lifecycle', () => {
     });
   });
 
+  it('does not let an older config failure replace a newer successful load', async () => {
+    const requests: Array<{
+      resolve: (value: AcpAgentsFile) => void;
+      reject: (error: Error) => void;
+    }> = [];
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command !== 'acp_get_config') throw new Error(`Unexpected invoke: ${command}`);
+      return new Promise<AcpAgentsFile>((resolve, reject) => {
+        requests.push({ resolve, reject });
+      });
+    });
+    const latestConfig: AcpAgentsFile = {
+      ...config,
+      agents: [{ ...config.agents[0], name: 'Latest Agent' }],
+    };
+
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({ config: null, configError: null, configReady: false });
+    const olderLoad = useAcpStore.getState().loadConfig();
+    const newerLoad = useAcpStore.getState().loadConfig();
+    await vi.waitFor(() => expect(requests).toHaveLength(2));
+
+    requests[1].resolve(latestConfig);
+    await newerLoad;
+    requests[0].reject(new Error('older config read failed'));
+    await olderLoad;
+
+    expect(useAcpStore.getState()).toMatchObject({
+      config: latestConfig,
+      configReady: true,
+      configError: null,
+    });
+  });
+
+  it('does not let an older config load replace a successful config mutation', async () => {
+    let resolveOlderLoad!: (value: AcpAgentsFile) => void;
+    const olderLoadResult = new Promise<AcpAgentsFile>((resolve) => {
+      resolveOlderLoad = resolve;
+    });
+    const updatedConfig: AcpAgentsFile = {
+      ...config,
+      agents: [{ ...config.agents[0], name: 'Updated Agent' }],
+    };
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_get_config') return olderLoadResult;
+      if (command === 'acp_set_agent_enabled') return updatedConfig;
+      if (command === 'acp_prewarm_enabled_agents') return [];
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({ config, configError: null, configReady: true });
+    const loading = useAcpStore.getState().loadConfig();
+    await vi.waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('acp_get_config');
+    });
+    await useAcpStore.getState().setAgentEnabled('grok-build', true);
+    resolveOlderLoad(config);
+    await loading;
+
+    expect(useAcpStore.getState().config).toEqual(updatedConfig);
+    expect(useAcpStore.getState().configError).toBeNull();
+  });
+
   it('selects a thread with a cached session without preparing it again', async () => {
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'acp_list_messages') return [];
@@ -168,6 +239,404 @@ describe('acpStore lifecycle', () => {
     expect(useAcpStore.getState().activeThreadId).toBe('thread-1');
     expect(invokeMock).toHaveBeenCalledWith('acp_list_messages', { threadId: 'thread-1' });
     expect(invokeMock).not.toHaveBeenCalledWith('acp_prepare_session', expect.anything());
+  });
+
+  it('does not resurrect a session when preparation finishes after thread deletion', async () => {
+    let resolvePreparation!: (snapshot: AcpSessionSnapshot) => void;
+    const preparation = new Promise<AcpSessionSnapshot>((resolve) => {
+      resolvePreparation = resolve;
+    });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_prepare_session') return preparation;
+      if (command === 'acp_delete_thread') return undefined;
+      if (command === 'acp_list_threads' || command === 'acp_list_all_threads') return [];
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      activeProjectId: 'project-1',
+      activeThreadId: 'thread-1',
+      threads: [existingThread],
+      allThreads: [existingThread],
+      messages: [{
+        id: 'assistant-deleted',
+        thread_id: 'thread-1',
+        role: 'assistant',
+        content: 'partial',
+        status: 'streaming',
+        attachments: [],
+        created_at: '2026-08-08T00:00:00Z',
+      }],
+      streamingText: { 'assistant-deleted': 'partial' },
+      sessionByThread: {},
+      preparingByThread: {},
+      runningByThread: { 'thread-1': true },
+      statusByThread: { 'thread-1': 'Preparing' },
+      turnActivityByThread: { 'thread-1': true },
+      cancellingByThread: { 'thread-1': false },
+      planByThread: {
+        'thread-1': { entries: [{ content: 'Inspect', status: 'pending' }], completed: 0, total: 1 },
+      },
+    });
+
+    const preparing = useAcpStore.getState().prepareSession('thread-1')
+      .catch(() => undefined);
+    await vi.waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('acp_prepare_session', expect.anything());
+    });
+    await useAcpStore.getState().deleteThread('thread-1');
+    resolvePreparation(cachedSession);
+    await preparing;
+
+    const state = useAcpStore.getState();
+    expect(state.sessionByThread['thread-1']).toBeUndefined();
+    expect(state.preparingByThread['thread-1']).toBeUndefined();
+    expect(state.runningByThread['thread-1']).toBeUndefined();
+    expect(state.statusByThread['thread-1']).toBeUndefined();
+    expect(state.turnActivityByThread['thread-1']).toBeUndefined();
+    expect(state.cancellingByThread['thread-1']).toBeUndefined();
+    expect(state.planByThread['thread-1']).toBeUndefined();
+    expect(state.activeThreadId).toBeNull();
+    expect(state.threads).toEqual([]);
+    expect(state.allThreads).toEqual([]);
+    expect(state.messages).toEqual([]);
+    expect(state.streamingText['assistant-deleted']).toBeUndefined();
+  });
+
+  it('ignores every late thread event after the thread is deleted', async () => {
+    const deletedThread = { ...existingThread, id: 'thread-deleted' };
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_delete_thread') return undefined;
+      if (command === 'acp_list_threads' || command === 'acp_list_all_threads') return [];
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      activeProjectId: deletedThread.project_id,
+      activeThreadId: null,
+      threads: [deletedThread],
+      allThreads: [deletedThread],
+      messages: [],
+      sessionByThread: {},
+      statusByThread: {},
+      runningByThread: {},
+      pendingPermissions: {},
+      toolCalls: {},
+      planByThread: {},
+      streamingText: {},
+    });
+    const cleanup = await useAcpStore.getState().bindEvents();
+
+    eventHandlers.get('acp-stream-text')?.({
+      payload: {
+        threadId: deletedThread.id,
+        messageId: 'assistant-flushed-before-delete',
+        text: 'flushed text',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(
+      useAcpStore.getState().streamingText['assistant-flushed-before-delete'],
+    ).toBe('flushed text');
+
+    eventHandlers.get('acp-stream-text')?.({
+      payload: {
+        threadId: deletedThread.id,
+        messageId: 'assistant-queued-before-delete',
+        text: 'queued text',
+      },
+    });
+    await useAcpStore.getState().deleteThread(deletedThread.id);
+
+    eventHandlers.get('acp-session-state')?.({
+      payload: { threadId: deletedThread.id, snapshot: cachedSession },
+    });
+    eventHandlers.get('acp-status')?.({
+      payload: { threadId: deletedThread.id, message: 'late status' },
+    });
+    eventHandlers.get('acp-plan')?.({
+      payload: {
+        threadId: deletedThread.id,
+        messageId: 'assistant-late',
+        raw: { entries: [{ content: 'late plan', status: 'pending' }] },
+      },
+    });
+    eventHandlers.get('acp-permission-request')?.({
+      payload: {
+        threadId: deletedThread.id,
+        messageId: 'assistant-late',
+        requestId: 'permission-late',
+        raw: { toolCall: { toolCallId: 'tool-late', kind: 'execute' } },
+        options: [{ optionId: 'allow', name: 'Allow', kind: 'AllowOnce' }],
+      },
+    });
+    eventHandlers.get('acp-tool-call')?.({
+      payload: {
+        threadId: deletedThread.id,
+        messageId: 'assistant-late',
+        toolCallId: 'tool-late',
+        status: 'running',
+        raw: {},
+      },
+    });
+    eventHandlers.get('acp-stream-text')?.({
+      payload: {
+        threadId: deletedThread.id,
+        messageId: 'assistant-late',
+        text: 'late text',
+      },
+    });
+    eventHandlers.get('acp-done')?.({
+      payload: {
+        threadId: deletedThread.id,
+        messageId: 'assistant-late',
+        text: 'late text',
+      },
+    });
+    eventHandlers.get('acp-error')?.({
+      payload: {
+        threadId: deletedThread.id,
+        messageId: 'assistant-late',
+        message: 'late error',
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const state = useAcpStore.getState();
+    expect(state.sessionByThread[deletedThread.id]).toBeUndefined();
+    expect(state.statusByThread[deletedThread.id]).toBeUndefined();
+    expect(state.runningByThread[deletedThread.id]).toBeUndefined();
+    expect(state.planByThread[deletedThread.id]).toBeUndefined();
+    expect(state.pendingPermissions['permission-late']).toBeUndefined();
+    expect(state.toolCalls[`${deletedThread.id}:assistant-late:tool-late`]).toBeUndefined();
+    expect(state.streamingText['assistant-late']).toBeUndefined();
+    expect(state.streamingText['assistant-queued-before-delete']).toBeUndefined();
+    expect(state.streamingText['assistant-flushed-before-delete']).toBeUndefined();
+    expect(state.messages).toEqual([]);
+    cleanup();
+  });
+
+  it('retires every child thread and draft when a project is deleted', async () => {
+    const projectId = 'project-deleted';
+    const threadId = 'thread-project-deleted';
+    const draftKey = `draft:${projectId}:grok-build`;
+    const deletedProject: AcpProject = {
+      id: projectId,
+      name: 'Deleted project',
+      root_path: '/tmp/project-deleted',
+      kind: 'project',
+      sort_order: 0,
+      created_at: '2026-08-08T00:00:00Z',
+      updated_at: '2026-08-08T00:00:00Z',
+    };
+    const deletedThread: AcpThread = {
+      ...existingThread,
+      id: threadId,
+      project_id: projectId,
+    };
+    let resolveThreadPreparation!: (snapshot: AcpSessionSnapshot) => void;
+    let resolveDraftPreparation!: (snapshot: AcpSessionSnapshot) => void;
+    const threadPreparation = new Promise<AcpSessionSnapshot>((resolve) => {
+      resolveThreadPreparation = resolve;
+    });
+    const draftPreparation = new Promise<AcpSessionSnapshot>((resolve) => {
+      resolveDraftPreparation = resolve;
+    });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_prepare_session') return threadPreparation;
+      if (command === 'acp_prepare_draft') return draftPreparation;
+      if (command === 'acp_delete_project') return undefined;
+      if (command === 'acp_list_projects' || command === 'acp_list_all_threads') return [];
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      projects: [deletedProject],
+      activeProjectId: projectId,
+      activeThreadId: threadId,
+      threads: [deletedThread],
+      allThreads: [deletedThread],
+      messages: [{
+        id: 'assistant-project-deleted',
+        thread_id: threadId,
+        role: 'assistant',
+        content: 'partial',
+        status: 'streaming',
+        attachments: [],
+        created_at: '2026-08-08T00:00:00Z',
+      }],
+      streamingText: { 'assistant-project-deleted': 'partial' },
+      sessionByThread: { [threadId]: cachedSession, [draftKey]: cachedSession },
+      preparingByThread: {},
+      runningByThread: { [threadId]: true },
+      statusByThread: { [threadId]: 'Working' },
+      turnActivityByThread: { [threadId]: true },
+      cancellingByThread: { [threadId]: false },
+      planByThread: {
+        [threadId]: { entries: [{ content: 'Inspect', status: 'pending' }], completed: 0, total: 1 },
+      },
+      planDocumentsByThread: { [threadId]: [] },
+      alwaysAllowedToolsByThread: { [threadId]: ['execute'] },
+      spawnModelByThread: { [threadId]: 'model-a', [draftKey]: 'model-a' },
+      spawnReasoningByThread: { [threadId]: 'high', [draftKey]: 'high' },
+      messagesLoadingByThread: { [threadId]: true },
+      messagesErrorByThread: { [threadId]: 'old load failure' },
+      pendingPermissions: {
+        'permission-project-deleted': {
+          threadId,
+          requestId: 'permission-project-deleted',
+          toolName: 'execute',
+          input: {},
+          options: [],
+          status: 'pending',
+        },
+      },
+      toolCalls: {
+        [`${threadId}:assistant-project-deleted:tool-1`]: {
+          threadId,
+          messageId: 'assistant-project-deleted',
+          toolCallId: 'tool-1',
+          toolName: 'execute',
+          status: 'running',
+        },
+      },
+      error: null,
+    });
+
+    const preparingThread = useAcpStore.getState().prepareSession(threadId);
+    const preparingDraft = useAcpStore.getState().prepareDraft(projectId, 'grok-build');
+    await vi.waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('acp_prepare_session', expect.anything());
+      expect(invokeMock).toHaveBeenCalledWith('acp_prepare_draft', expect.anything());
+    });
+    await useAcpStore.getState().deleteProject(projectId);
+    resolveThreadPreparation(cachedSession);
+    resolveDraftPreparation(cachedSession);
+    await Promise.allSettled([preparingThread, preparingDraft]);
+
+    const state = useAcpStore.getState();
+    expect(state.projects).toEqual([]);
+    expect(state.threads).toEqual([]);
+    expect(state.allThreads).toEqual([]);
+    expect(state.activeProjectId).toBeNull();
+    expect(state.activeThreadId).toBeNull();
+    expect(state.messages).toEqual([]);
+    expect(state.streamingText['assistant-project-deleted']).toBeUndefined();
+    for (const key of [threadId, draftKey]) {
+      expect(state.sessionByThread[key]).toBeUndefined();
+      expect(state.preparingByThread[key]).toBeUndefined();
+      expect(state.spawnModelByThread[key]).toBeUndefined();
+      expect(state.spawnReasoningByThread[key]).toBeUndefined();
+    }
+    expect(state.runningByThread[threadId]).toBeUndefined();
+    expect(state.statusByThread[threadId]).toBeUndefined();
+    expect(state.turnActivityByThread[threadId]).toBeUndefined();
+    expect(state.cancellingByThread[threadId]).toBeUndefined();
+    expect(state.planByThread[threadId]).toBeUndefined();
+    expect(state.planDocumentsByThread[threadId]).toBeUndefined();
+    expect(state.alwaysAllowedToolsByThread[threadId]).toBeUndefined();
+    expect(state.messagesLoadingByThread[threadId]).toBeUndefined();
+    expect(state.messagesErrorByThread[threadId]).toBeUndefined();
+    expect(state.pendingPermissions['permission-project-deleted']).toBeUndefined();
+    expect(state.toolCalls[`${threadId}:assistant-project-deleted:tool-1`]).toBeUndefined();
+    expect(state.error).toBeNull();
+  });
+
+  it('does not restore a late configuration snapshot after thread deletion', async () => {
+    const configuredSession: AcpSessionSnapshot = {
+      ...cachedSession,
+      configOptions: [{
+        id: 'reasoning_effort',
+        name: 'Reasoning effort',
+        category: 'thought_level',
+        type: 'select',
+        currentValue: 'high',
+        options: [{ value: 'high', name: 'High' }],
+      }],
+    };
+    let resolveConfiguration!: (snapshot: AcpSessionSnapshot) => void;
+    const configuration = new Promise<AcpSessionSnapshot>((resolve) => {
+      resolveConfiguration = resolve;
+    });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_set_config_option') return configuration;
+      if (command === 'acp_delete_thread') return undefined;
+      if (command === 'acp_list_threads' || command === 'acp_list_all_threads') return [];
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      activeProjectId: 'project-1',
+      activeThreadId: 'thread-1',
+      threads: [existingThread],
+      allThreads: [existingThread],
+      sessionByThread: { 'thread-1': cachedSession },
+    });
+
+    const updating = useAcpStore.getState().setConfigOption(
+      'thread-1',
+      'reasoning_effort',
+      'high',
+    );
+    await vi.waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('acp_set_config_option', expect.anything());
+    });
+    await useAcpStore.getState().deleteThread('thread-1');
+    resolveConfiguration(configuredSession);
+    await updating;
+
+    expect(useAcpStore.getState().sessionByThread['thread-1']).toBeUndefined();
+  });
+
+  it('distinguishes message loading, failure, and a successfully loaded history', async () => {
+    let rejectMessages!: (error: Error) => void;
+    const pendingMessages = new Promise<never>((_, reject) => {
+      rejectMessages = reject;
+    });
+    let listCalls = 0;
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_list_messages') {
+        listCalls += 1;
+        if (listCalls === 1) return pendingMessages;
+        return [{
+          id: 'user-loaded',
+          thread_id: 'thread-1',
+          role: 'user',
+          content: 'Persisted history',
+          status: 'done',
+          attachments: [],
+          created_at: '2026-08-08T00:00:01Z',
+        }];
+      }
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      activeThreadId: 'thread-1',
+      messages: [],
+      messagesLoadingByThread: {},
+      messagesErrorByThread: {},
+    });
+
+    const firstLoad = useAcpStore.getState().loadMessages('thread-1');
+    expect(useAcpStore.getState().messagesLoadingByThread['thread-1']).toBe(true);
+    rejectMessages(new Error('database unavailable'));
+    await firstLoad;
+    expect(useAcpStore.getState().messagesLoadingByThread['thread-1']).toBe(false);
+    expect(useAcpStore.getState().messagesErrorByThread['thread-1'])
+      .toContain('database unavailable');
+
+    await useAcpStore.getState().loadMessages('thread-1');
+    expect(useAcpStore.getState().messagesLoadingByThread['thread-1']).toBe(false);
+    expect(useAcpStore.getState().messagesErrorByThread['thread-1']).toBeUndefined();
+    expect(useAcpStore.getState().messages).toEqual([
+      expect.objectContaining({ id: 'user-loaded', content: 'Persisted history' }),
+    ]);
   });
 
   it('keeps the flat Recent conversation order stable when selecting a thread', async () => {
@@ -211,6 +680,87 @@ describe('acpStore lifecycle', () => {
       firstRecent.id,
       secondRecent.id,
     ]);
+  });
+
+  it('never shows the previous project threads while the next project loads', async () => {
+    const nextThread: AcpThread = {
+      ...existingThread,
+      id: 'thread-2',
+      project_id: 'project-2',
+      title: 'Next project thread',
+    };
+    let resolveThreads!: (threads: AcpThread[]) => void;
+    const pendingThreads = new Promise<AcpThread[]>((resolve) => {
+      resolveThreads = resolve;
+    });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_list_threads') return pendingThreads;
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      activeProjectId: 'project-1',
+      threads: [existingThread],
+      allThreads: [existingThread, nextThread],
+    });
+
+    const selecting = useAcpStore.getState().selectProject('project-2');
+
+    expect(useAcpStore.getState().activeProjectId).toBe('project-2');
+    expect(useAcpStore.getState().threads).toEqual([nextThread]);
+    resolveThreads([nextThread]);
+    await selecting;
+  });
+
+  it('does not restore an old thread after the user navigates to another project', async () => {
+    const project = (id: string): AcpProject => ({
+      id,
+      name: id,
+      root_path: `/tmp/${id}`,
+      kind: 'project',
+      sort_order: 0,
+      created_at: '2026-08-08T00:00:00Z',
+      updated_at: '2026-08-08T00:00:00Z',
+    });
+    const nextThread: AcpThread = {
+      ...existingThread,
+      id: 'thread-2',
+      project_id: 'project-2',
+      title: 'Next project thread',
+    };
+    let resolveOldThreads!: (threads: AcpThread[]) => void;
+    const oldThreads = new Promise<AcpThread[]>((resolve) => {
+      resolveOldThreads = resolve;
+    });
+    invokeMock.mockImplementation(async (command: string, args?: { projectId?: string }) => {
+      if (command === 'acp_list_threads' && args?.projectId === 'project-1') return oldThreads;
+      if (command === 'acp_list_threads' && args?.projectId === 'project-2') return [nextThread];
+      if (command === 'acp_list_messages') return [];
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      projects: [project('project-1'), project('project-2')],
+      activeProjectId: 'project-1',
+      activeThreadId: 'thread-1',
+      threads: [existingThread],
+      allThreads: [existingThread, nextThread],
+      messages: [],
+    });
+
+    const restoring = useAcpStore.getState().restoreLastSession();
+    await useAcpStore.getState().selectProject('project-2');
+    resolveOldThreads([existingThread]);
+    await restoring;
+
+    expect(useAcpStore.getState()).toMatchObject({
+      activeProjectId: 'project-2',
+      activeThreadId: null,
+      threads: [nextThread],
+      messages: [],
+    });
   });
 
   it('coalesces Recent draft creation without overriding a newer selection', async () => {

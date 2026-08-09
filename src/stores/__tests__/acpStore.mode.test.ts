@@ -159,6 +159,114 @@ describe('acpStore session mode', () => {
     expect(useAcpStore.getState().spawnReasoningByThread['thread-1']).toBeUndefined();
   });
 
+  it('serializes live config changes so an older response cannot replace the latest choice', async () => {
+    const snapshot = (value: string): AcpSessionSnapshot => ({
+      sessionId: 'session-1',
+      configOptions: [{
+        id: 'reasoning_effort',
+        name: 'Reasoning effort',
+        category: 'thought_level',
+        type: 'select',
+        currentValue: value,
+        options: [
+          { value: 'low', name: 'Low' },
+          { value: 'high', name: 'High' },
+        ],
+      }],
+      agentCapabilities: {},
+    });
+    let resolveFirst!: (value: AcpSessionSnapshot) => void;
+    const firstResponse = new Promise<AcpSessionSnapshot>((resolve) => {
+      resolveFirst = resolve;
+    });
+    invokeMock
+      .mockImplementationOnce(async () => firstResponse)
+      .mockResolvedValueOnce(snapshot('high'));
+
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      sessionByThread: { 'thread-1': snapshot('low') },
+    });
+
+    const first = useAcpStore.getState().setConfigOption(
+      'thread-1',
+      'reasoning_effort',
+      'low',
+    );
+    const second = useAcpStore.getState().setConfigOption(
+      'thread-1',
+      'reasoning_effort',
+      'high',
+    );
+
+    await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(1));
+    resolveFirst(snapshot('low'));
+    await Promise.all([first, second]);
+
+    expect(invokeMock.mock.calls).toEqual([
+      ['acp_set_config_option', {
+        threadId: 'thread-1',
+        configId: 'reasoning_effort',
+        value: 'low',
+      }],
+      ['acp_set_config_option', {
+        threadId: 'thread-1',
+        configId: 'reasoning_effort',
+        value: 'high',
+      }],
+    ]);
+    expect(useAcpStore.getState().sessionByThread['thread-1'].configOptions[0].currentValue)
+      .toBe('high');
+  });
+
+  it.each(['config', 'mode'] as const)(
+    'does not surface a late %s failure after its thread is deleted',
+    async (kind) => {
+      const threadId = `thread-superseded-${kind}`;
+      let rejectMutation!: (error: Error) => void;
+      const mutation = new Promise<never>((_, reject) => {
+        rejectMutation = reject;
+      });
+      invokeMock.mockImplementation(async (command: string) => {
+        if (command === 'acp_set_config_option' || command === 'acp_set_mode') return mutation;
+        if (command === 'acp_delete_thread') return undefined;
+        if (command === 'acp_list_threads' || command === 'acp_list_all_threads') return [];
+        throw new Error(`Unexpected invoke: ${command}`);
+      });
+
+      const { useAcpStore } = await import('../acpStore');
+      const activeThread = thread(threadId, 'default');
+      useAcpStore.setState({
+        activeProjectId: activeThread.project_id,
+        activeThreadId: threadId,
+        threads: [activeThread],
+        allThreads: [activeThread],
+        sessionByThread: {
+          [threadId]: {
+            sessionId: 'session-superseded',
+            configOptions: [],
+            agentCapabilities: {},
+          },
+        },
+      });
+
+      const updating = kind === 'config'
+        ? useAcpStore.getState().setConfigOption(threadId, 'model', 'model-a')
+        : useAcpStore.getState().setSessionMode(threadId, 'plan');
+      await vi.waitFor(() => {
+        expect(invokeMock).toHaveBeenCalledWith(
+          kind === 'config' ? 'acp_set_config_option' : 'acp_set_mode',
+          expect.anything(),
+        );
+      });
+      await useAcpStore.getState().deleteThread(threadId);
+      rejectMutation(new Error('thread was deleted'));
+
+      await expect(updating).resolves.toBeUndefined();
+      expect(useAcpStore.getState().sessionByThread[threadId]).toBeUndefined();
+    },
+  );
+
   it('reloads managed Agent launches after a live Registry refresh', async () => {
     const registry: RegistryFile = {
       version: '1',

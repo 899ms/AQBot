@@ -156,6 +156,130 @@ describe('acpStore prompt ordering', () => {
     expect(useAcpStore.getState().pendingPermissions['permission-2']).toBeUndefined();
   });
 
+  it('re-surfaces a remembered permission when automatic approval fails', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    invokeMock.mockRejectedValueOnce(new Error('agent disconnected'));
+    const { useAcpStore } = await import('../acpStore');
+    await useAcpStore.getState().bindEvents();
+    useAcpStore.setState({
+      alwaysAllowedToolsByThread: { 'thread-1': ['execute'] },
+      pendingPermissions: {},
+    });
+
+    eventHandlers.get('acp-permission-request')?.({
+      payload: {
+        threadId: 'thread-1',
+        messageId: 'assistant-1',
+        requestId: 'permission-failed-auto-approval',
+        interactionKind: 'permission',
+        raw: {
+          toolCall: {
+            toolCallId: 'tool-1',
+            kind: 'execute',
+            title: 'Run command',
+            rawInput: { command: 'pwd' },
+          },
+        },
+        options: [
+          { optionId: 'allow-once', name: 'Allow once', kind: 'AllowOnce' },
+          { optionId: 'reject-once', name: 'Reject', kind: 'RejectOnce' },
+        ],
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        useAcpStore.getState().pendingPermissions['permission-failed-auto-approval'],
+      ).toMatchObject({
+        threadId: 'thread-1',
+        requestId: 'permission-failed-auto-approval',
+        toolName: 'execute',
+        status: 'pending',
+      });
+    });
+    errorSpy.mockRestore();
+  });
+
+  it('does not re-surface automatic approval failures after a terminal event or deletion', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const rejectByRequest = new Map<string, (error: Error) => void>();
+    invokeMock.mockImplementation(async (command: string, args?: { requestId?: string }) => {
+      if (command === 'acp_respond_permission' && args?.requestId) {
+        return new Promise<never>((_, reject) => {
+          rejectByRequest.set(args.requestId!, reject);
+        });
+      }
+      if (command === 'acp_delete_thread') return undefined;
+      if (command === 'acp_list_all_threads') return [];
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+    const { useAcpStore } = await import('../acpStore');
+    await useAcpStore.getState().bindEvents();
+    useAcpStore.setState({
+      activeProjectId: null,
+      activeThreadId: null,
+      threads: [],
+      allThreads: [],
+      messages: [],
+      alwaysAllowedToolsByThread: { 'thread-1': ['execute'] },
+      pendingPermissions: {},
+    });
+
+    const requestPermission = async (requestId: string) => {
+      eventHandlers.get('acp-permission-request')?.({
+        payload: {
+          threadId: 'thread-1',
+          messageId: 'assistant-1',
+          requestId,
+          interactionKind: 'permission',
+          raw: {
+            toolCall: {
+              toolCallId: `tool-${requestId}`,
+              kind: 'execute',
+              title: 'Run command',
+            },
+          },
+          options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'AllowOnce' }],
+        },
+      });
+      await vi.waitFor(() => expect(rejectByRequest.has(requestId)).toBe(true));
+    };
+    const rejectAndExpectHidden = async (requestId: string, expectedErrors: number) => {
+      rejectByRequest.get(requestId)?.(new Error('late transport failure'));
+      await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledTimes(expectedErrors));
+      expect(useAcpStore.getState().pendingPermissions[requestId]).toBeUndefined();
+    };
+
+    await requestPermission('permission-closed');
+    eventHandlers.get('acp-interaction-closed')?.({
+      payload: {
+        threadId: 'thread-1',
+        messageId: 'assistant-1',
+        requestId: 'permission-closed',
+        interactionKind: 'permission',
+        reason: 'cancelled',
+      },
+    });
+    await rejectAndExpectHidden('permission-closed', 1);
+
+    await requestPermission('permission-done');
+    eventHandlers.get('acp-done')?.({
+      payload: { threadId: 'thread-1', messageId: 'assistant-1', text: '' },
+    });
+    await rejectAndExpectHidden('permission-done', 2);
+
+    await requestPermission('permission-error');
+    eventHandlers.get('acp-error')?.({
+      payload: { threadId: 'thread-1', messageId: 'assistant-1', message: 'turn failed' },
+    });
+    await rejectAndExpectHidden('permission-error', 3);
+
+    await requestPermission('permission-deleted');
+    await useAcpStore.getState().deleteThread('thread-1');
+    await rejectAndExpectHidden('permission-deleted', 4);
+    errorSpy.mockRestore();
+  });
+
   it('ignores plan-review documents when updating session plan progress', async () => {
     const { useAcpStore } = await import('../acpStore');
     await useAcpStore.getState().bindEvents();
@@ -326,6 +450,42 @@ describe('acpStore prompt ordering', () => {
       id: 'plan-1',
       status: 'approved',
       content: '## Plan\n1. Inspect\n2. Ship',
+    });
+  });
+
+  it('keeps a cancelled plan review distinct from an expired request', async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const { useAcpStore } = await import('../acpStore');
+    await useAcpStore.getState().bindEvents();
+
+    eventHandlers.get('acp-permission-request')?.({
+      payload: {
+        threadId: 'thread-1',
+        messageId: 'assistant-1',
+        requestId: 'plan-cancelled',
+        interactionKind: 'plan_review',
+        raw: {
+          kind: 'plan_review',
+          title: 'Plan review',
+          planContent: '## Plan\n1. Keep planning',
+        },
+        options: [],
+      },
+    });
+
+    eventHandlers.get('acp-interaction-closed')?.({
+      payload: {
+        threadId: 'thread-1',
+        messageId: 'assistant-1',
+        requestId: 'plan-cancelled',
+        interactionKind: 'plan_review',
+        reason: 'cancelled',
+      },
+    });
+
+    expect(useAcpStore.getState().planDocumentsByThread['thread-1']?.[0]).toMatchObject({
+      id: 'plan-cancelled',
+      status: 'cancelled',
     });
   });
 
@@ -691,6 +851,229 @@ describe('acpStore prompt ordering', () => {
         status: 'success',
         output: 'Agent-recorded result',
       });
+  });
+
+  it('preserves a cancelled status from the initial tool-call event', async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({ toolCalls: {} });
+    await useAcpStore.getState().bindEvents();
+
+    eventHandlers.get('acp-tool-call')?.({
+      payload: {
+        threadId: 'thread-1',
+        messageId: 'assistant-1',
+        toolCallId: 'tool-cancelled',
+        title: 'Run command',
+        status: 'cancelled',
+        raw: {},
+      },
+    });
+
+    expect(useAcpStore.getState().toolCalls['thread-1:assistant-1:tool-cancelled'])
+      .toMatchObject({ status: 'cancelled' });
+  });
+
+  it('stops a running tool when its ACP turn is cancelled', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_list_messages') return [];
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      activeThreadId: 'thread-1',
+      toolCalls: {
+        'thread-1:assistant-1:tool-running': {
+          threadId: 'thread-1',
+          messageId: 'assistant-1',
+          toolCallId: 'tool-running',
+          toolName: 'execute',
+          status: 'running',
+        },
+      },
+    });
+    await useAcpStore.getState().bindEvents();
+
+    eventHandlers.get('acp-done')?.({
+      payload: {
+        threadId: 'thread-1',
+        messageId: 'assistant-1',
+        stopReason: 'cancelled',
+        text: '',
+      },
+    });
+
+    expect(useAcpStore.getState().toolCalls['thread-1:assistant-1:tool-running'])
+      .toMatchObject({ status: 'cancelled' });
+  });
+
+  it('marks an unfinished tool as failed when the ACP turn errors', async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      activeThreadId: 'thread-1',
+      toolCalls: {
+        'thread-1:assistant-1:tool-running': {
+          threadId: 'thread-1',
+          messageId: 'assistant-1',
+          toolCallId: 'tool-running',
+          toolName: 'execute',
+          status: 'running',
+        },
+      },
+    });
+    await useAcpStore.getState().bindEvents();
+
+    eventHandlers.get('acp-error')?.({
+      payload: {
+        threadId: 'thread-1',
+        messageId: 'assistant-1',
+        message: 'agent disconnected',
+      },
+    });
+
+    expect(useAcpStore.getState().toolCalls['thread-1:assistant-1:tool-running'])
+      .toMatchObject({ status: 'error' });
+  });
+
+  it('keeps a terminal error when an older message load resolves afterward', async () => {
+    let resolveMessages!: (messages: AcpMessage[]) => void;
+    const pendingMessages = new Promise<AcpMessage[]>((resolve) => {
+      resolveMessages = resolve;
+    });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_list_messages') return pendingMessages;
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+    const { useAcpStore } = await import('../acpStore');
+    await useAcpStore.getState().bindEvents();
+    useAcpStore.setState({
+      activeThreadId: 'thread-1',
+      messages: [message('assistant-1', 'assistant', 'partial', 'streaming')],
+      runningByThread: { 'thread-1': true },
+      messagesLoadingByThread: {},
+      messagesErrorByThread: {},
+      toolCalls: {
+        'thread-1:assistant-1:tool-running': {
+          threadId: 'thread-1',
+          messageId: 'assistant-1',
+          toolCallId: 'tool-running',
+          toolName: 'execute',
+          status: 'running',
+        },
+      },
+    });
+
+    const loading = useAcpStore.getState().loadMessages('thread-1');
+    eventHandlers.get('acp-error')?.({
+      payload: {
+        threadId: 'thread-1',
+        messageId: 'assistant-1',
+        message: 'agent disconnected',
+        text: 'partial\n\nError: agent disconnected',
+      },
+    });
+    resolveMessages([{
+      ...message('assistant-1', 'assistant', 'partial', 'streaming'),
+      meta_json: JSON.stringify({
+        toolCalls: [{
+          toolCallId: 'tool-running',
+          toolName: 'execute',
+          status: 'running',
+        }],
+      }),
+    }]);
+    await loading;
+
+    const state = useAcpStore.getState();
+    expect(state.messages[0]).toMatchObject({
+      id: 'assistant-1',
+      status: 'error',
+      content: 'partial\n\nError: agent disconnected',
+    });
+    expect(state.toolCalls['thread-1:assistant-1:tool-running'])
+      .toMatchObject({ status: 'error' });
+    expect(state.runningByThread['thread-1']).toBe(false);
+    expect(state.messagesLoadingByThread['thread-1']).toBe(false);
+  });
+
+  it('restores the prior turn status when cancellation fails', async () => {
+    invokeMock.mockRejectedValueOnce(new Error('agent disconnected'));
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      runningByThread: { 'thread-1': true },
+      cancellingByThread: {},
+      statusByThread: { 'thread-1': 'Working' },
+      turnActivityByThread: { 'thread-1': false },
+    });
+
+    await expect(useAcpStore.getState().cancelPrompt('thread-1'))
+      .rejects.toThrow('agent disconnected');
+
+    expect(useAcpStore.getState()).toMatchObject({
+      runningByThread: { 'thread-1': true },
+      cancellingByThread: { 'thread-1': false },
+      statusByThread: { 'thread-1': 'Working' },
+      turnActivityByThread: { 'thread-1': false },
+    });
+  });
+
+  it('finishes the local turn when cancellation succeeds but history refresh fails', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_cancel') return true;
+      if (command === 'acp_list_messages') throw new Error('database unavailable');
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      activeThreadId: 'thread-1',
+      messages: [message('assistant-1', 'assistant', 'partial', 'streaming')],
+      streamingText: { 'assistant-1': 'partial' },
+      runningByThread: { 'thread-1': true },
+      cancellingByThread: {},
+      statusByThread: { 'thread-1': 'Working' },
+      turnActivityByThread: { 'thread-1': false },
+      planByThread: {
+        'thread-1': { entries: [{ content: 'Inspect', status: 'pending' }], completed: 0, total: 1 },
+      },
+      pendingPermissions: {
+        'permission-cancelled': {
+          threadId: 'thread-1',
+          requestId: 'permission-cancelled',
+          toolName: 'execute',
+          input: {},
+          options: [],
+          status: 'pending',
+        },
+      },
+      toolCalls: {
+        'thread-1:assistant-1:tool-running': {
+          threadId: 'thread-1',
+          messageId: 'assistant-1',
+          toolCallId: 'tool-running',
+          toolName: 'execute',
+          status: 'running',
+        },
+      },
+      messagesLoadingByThread: {},
+      messagesErrorByThread: {},
+    });
+
+    await expect(useAcpStore.getState().cancelPrompt('thread-1')).resolves.toBeUndefined();
+
+    const state = useAcpStore.getState();
+    expect(state.runningByThread['thread-1']).toBe(false);
+    expect(state.cancellingByThread['thread-1']).toBe(false);
+    expect(state.statusByThread['thread-1']).toBe('');
+    expect(state.turnActivityByThread['thread-1']).toBe(true);
+    expect(state.messages[0]).toMatchObject({ status: 'done', content: 'partial' });
+    expect(state.streamingText['assistant-1']).toBeUndefined();
+    expect(state.planByThread['thread-1']).toEqual({ entries: [], completed: 0, total: 0 });
+    expect(state.pendingPermissions['permission-cancelled']).toBeUndefined();
+    expect(state.toolCalls['thread-1:assistant-1:tool-running'])
+      .toMatchObject({ status: 'cancelled' });
+    expect(state.messagesLoadingByThread['thread-1']).toBe(false);
+    expect(state.messagesErrorByThread['thread-1']).toContain('database unavailable');
   });
 
   it('shows an optimistic user row and preserves an error that arrives before the receipt', async () => {

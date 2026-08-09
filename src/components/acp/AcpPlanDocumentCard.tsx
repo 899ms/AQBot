@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { Button, ConfigProvider, Typography, theme } from 'antd';
+import { useMemo, useRef, useState } from 'react';
+import { Button, ConfigProvider, Modal, Typography, theme } from 'antd';
 import {
   Check,
   Copy,
@@ -213,6 +213,8 @@ export function AcpPlanDocumentCard({
   const { token } = theme.useToken();
   const { copy: copyText, isCopiedFor } = useCopyToClipboard();
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const expandButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreFocusRef = useRef(false);
   const title = document.title?.trim()
     || t('agentPage.interactionPlanReviewTitle');
   const outcome = hideOutcome ? null : outcomeLabel(
@@ -221,41 +223,27 @@ export function AcpPlanDocumentCard({
   );
   const copied = isCopiedFor(document.content);
 
-  return (
-    <ConfigProvider button={{ autoInsertSpace: false }}>
-      {expanded ? (
-        <div
-          role="presentation"
-          onClick={() => setExpanded(false)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 1099,
-            background: 'rgba(0, 0, 0, 0.45)',
-          }}
-        />
-      ) : null}
+  const closeFullscreen = () => {
+    restoreFocusRef.current = true;
+    setExpanded(false);
+  };
+  const restoreTriggerFocus = () => {
+    if (!restoreFocusRef.current) return;
+    restoreFocusRef.current = false;
+    window.requestAnimationFrame(() => expandButtonRef.current?.focus());
+  };
+
+  const planCard = (
       <div
         style={{
           display: 'flex',
           minWidth: 0,
-          width: expanded ? 'auto' : '100%',
+          width: '100%',
+          height: expanded ? '100%' : undefined,
           flexDirection: 'column',
           gap: 8,
           ...(expanded
-            ? {
-                position: 'fixed',
-                inset: 16,
-                zIndex: 1100,
-                padding: 16,
-                borderRadius: 16,
-                background: token.colorBgElevated,
-                border: `1px solid ${token.colorBorderSecondary}`,
-                boxShadow: token.boxShadowSecondary,
-                maxHeight: PLAN_DOCUMENT_EXPANDED_MAX_HEIGHT,
-                height: PLAN_DOCUMENT_EXPANDED_MAX_HEIGHT,
-                boxSizing: 'border-box' as const,
-              }
+            ? {}
             : {
                 padding: 10,
                 borderRadius: token.borderRadiusLG,
@@ -283,8 +271,12 @@ export function AcpPlanDocumentCard({
               gap: 8,
             }}
           >
-            <ListTodo size={14} style={{ color: token.colorPrimary, flexShrink: 0 }} />
-            <Text strong style={{ overflowWrap: 'anywhere' }}>{title}</Text>
+            {!expanded ? (
+              <>
+                <ListTodo size={14} style={{ color: token.colorPrimary, flexShrink: 0 }} />
+                <Text strong style={{ overflowWrap: 'anywhere' }}>{title}</Text>
+              </>
+            ) : null}
             {outcome ? (
               <Text
                 style={{
@@ -319,6 +311,7 @@ export function AcpPlanDocumentCard({
               />
             ) : null}
             <Button
+              ref={expanded ? undefined : expandButtonRef}
               type="text"
               size="small"
               icon={expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
@@ -326,7 +319,10 @@ export function AcpPlanDocumentCard({
                 ? t('agentPage.interactionPlanExitFullscreen')
                 : t('agentPage.interactionPlanFullscreen')}
               aria-pressed={expanded}
-              onClick={() => setExpanded((value) => !value)}
+              onClick={() => {
+                if (expanded) closeFullscreen();
+                else setExpanded(true);
+              }}
             />
           </div>
         </div>
@@ -349,6 +345,48 @@ export function AcpPlanDocumentCard({
           </Text>
         ) : null}
       </div>
+  );
+
+  return (
+    <ConfigProvider button={{ autoInsertSpace: false }}>
+      {!expanded ? planCard : null}
+      <Modal
+        open={expanded}
+        title={title}
+        footer={null}
+        closable={false}
+        keyboard
+        mask={{ enabled: true, blur: true, closable: true }}
+        onCancel={closeFullscreen}
+        afterClose={restoreTriggerFocus}
+        width="calc(100vw - 32px)"
+        zIndex={1100}
+        style={{ top: 16, maxWidth: 'calc(100vw - 32px)', paddingBottom: 0 }}
+        styles={{
+          wrapper: { position: 'fixed' },
+          container: {
+            display: 'flex',
+            height: PLAN_DOCUMENT_EXPANDED_MAX_HEIGHT,
+            maxHeight: PLAN_DOCUMENT_EXPANDED_MAX_HEIGHT,
+            flexDirection: 'column',
+            boxSizing: 'border-box',
+          },
+          header: { flexShrink: 0 },
+          body: {
+            display: 'flex',
+            minHeight: 0,
+            flex: 1,
+            overflow: 'hidden',
+            overscrollBehavior: 'contain',
+          },
+        }}
+        focusable={{ trap: true, focusTriggerAfterClose: false }}
+        transitionName=""
+        maskTransitionName=""
+        destroyOnHidden
+      >
+        {expanded ? planCard : null}
+      </Modal>
     </ConfigProvider>
   );
 }
