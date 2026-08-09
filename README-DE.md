@@ -37,11 +37,13 @@ AQBot ist ein lokal ausgerichteter KI-Arbeitsbereich für den Desktop, der Chats
 
 ### AI Agent
 
-- **ACP-Agent-Arbeitsbereich** — Führe kompatible Coding-Agents über das [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) in einer Oberfläche aus und verfolge Antworten, Schlussfolgerungen und Werkzeugaufrufe als Stream.
-- **Agent Registry und eigene Integrationen** — Füge Codex, Claude Agent, Gemini CLI, Cline, OpenCode, Grok Build und weitere Agents aus der Registry hinzu oder konfiguriere eigene Befehle, Argumente, Umgebungsvariablen und Symbole; Agents lassen sich frei aktivieren und sortieren.
-- **Projekte und direkte Chats** — Organisiere Threads nach Projekt, hefte wichtige Sitzungen an und stelle den letzten Arbeitsstand automatisch wieder her, oder starte ohne Projektauswahl in einem isolierten Arbeitsverzeichnis.
-- **Vollständige Sitzungsinteraktion** — Wechsle Modelle, Modi und Optionen des jeweiligen Agents und nutze Anhänge, Fragebögen, Planprüfungen, Fortschrittsanzeigen sowie die Wiederherstellung des Zustands nach dem Neuladen.
-- **Transparente Berechtigungsprüfung** — Prüfe Werkzeuganfragen in Echtzeit, erlaube sie einmalig oder immer für die aktuelle Sitzung und konfiguriere Standardrichtlinie, Leerlaufzeitlimit und maximale Anzahl gleichzeitiger Prozesse.
+- **Zwei Arten, Agents zu nutzen** — AQBot bietet sowohl einen in den Chat integrierten Agent als auch einen separaten ACP-Agent-Arbeitsbereich. Der erste nutzt deine konfigurierten Anbieter-APIs, der zweite verbindet sich mit externen ACP-kompatiblen Agent-Prozessen – passend zu Modell und Workflow.
+- **Chat-Agent (Anbieter-API)** — Schalte eine normale Unterhaltung in den Agent-Modus und nutze die konfigurierte Anbieter- und Modell-API direkt, um in einem isolierten Arbeitsverzeichnis Dateien zu lesen oder zu bearbeiten, Befehle auszuführen und Code zu analysieren.
+- **Steuerung des Chat-Agents** — Wähle Berechtigungsmodi wie jedes Mal fragen, Änderungen akzeptieren oder Vollzugriff, prüfe Werkzeugaufrufe und Freigaben in Echtzeit und verfolge Tokens und Kosten jeder Ausführung.
+- **ACP-Agent-Arbeitsbereich** — Führe kompatible Coding-Agents über das [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) in einem eigenen Arbeitsbereich aus und verfolge Antworten, Schlussfolgerungen und Werkzeugaufrufe als Stream.
+- **ACP Registry und eigene Integrationen** — Füge Codex, Claude Agent, Gemini CLI, Cline, OpenCode, Grok Build und weitere Agents aus der Registry hinzu oder konfiguriere eigene Befehle, Argumente, Umgebungsvariablen und Symbole; Agents lassen sich frei aktivieren und sortieren.
+- **ACP-Projekte und direkte Chats** — Organisiere Threads nach Projekt, hefte wichtige Sitzungen an und stelle den letzten Arbeitsstand automatisch wieder her, oder starte ohne Projektauswahl in einem isolierten Arbeitsverzeichnis.
+- **Vollständige ACP-Sitzungsinteraktion** — Wechsle Modelle, Modi und Optionen des jeweiligen Agents und nutze Anhänge, Fragebögen, Planprüfungen, Fortschrittsanzeigen sowie die Wiederherstellung des Zustands nach dem Neuladen; Werkzeuganfragen lassen sich einmalig oder immer für die aktuelle Sitzung erlauben.
 
 ### Rollen
 

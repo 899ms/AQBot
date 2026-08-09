@@ -37,11 +37,13 @@ AQBot 是一款本機優先的桌面 AI 工作台，整合多服務商對話、A
 
 ### AI Agent
 
-- **ACP Agent 工作台** — 透過 [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) 在統一介面中執行相容的程式設計 Agent，串流查看回覆、思考過程與工具呼叫。
-- **Agent Registry 與自訂整合** — 可從 Registry 加入 Codex、Claude Agent、Gemini CLI、Cline、OpenCode、Grok Build 等 Agent，也能設定自訂命令、參數、環境變數與圖示，並自由啟停及排序。
-- **專案與自由對話** — 依專案整理執行緒、釘選常用工作階段並自動還原上次工作現場；也可不選專案，直接在隔離的工作目錄中開始對話。
-- **完整工作階段互動** — 支援切換 Agent 提供的模型、模式與設定，以及附件、問卷、計畫審核、計畫進度和重新載入後的狀態還原。
-- **透明權限審批** — 即時審核工具請求，可單次允許或在目前工作階段中「始終允許」，並設定預設審批策略、閒置逾時與最大平行處理程序數。
+- **兩種 Agent 使用方式** — AQBot 同時提供對話模組內建 Agent 與獨立 ACP Agent 工作台；前者使用使用者設定的服務商 API，後者連接 ACP 相容的外部 Agent 程序，可依模型來源與工作流程自由選擇。
+- **對話 Agent（服務商 API）** — 在一般對話中切換至 Agent 模式，直接使用已設定服務商與模型的 API，讓模型在隔離的工作目錄中讀取/編輯檔案、執行命令並分析程式碼。
+- **對話 Agent 管控** — 支援每次詢問、自動接受編輯與完整存取等權限模式，即時顯示工具呼叫與審批，並記錄單次任務的 token 和成本。
+- **ACP Agent 工作台** — 透過 [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) 在獨立工作台中執行相容的程式設計 Agent，串流查看回覆、思考過程與工具呼叫。
+- **ACP Registry 與自訂整合** — 可從 Registry 加入 Codex、Claude Agent、Gemini CLI、Cline、OpenCode、Grok Build 等 Agent，也能設定自訂命令、參數、環境變數與圖示，並自由啟停及排序。
+- **ACP 專案與自由對話** — 依專案整理執行緒、釘選常用工作階段並自動還原上次工作現場；也可不選專案，直接在隔離的工作目錄中開始對話。
+- **完整 ACP 工作階段互動** — 支援切換 Agent 提供的模型、模式與設定，以及附件、問卷、計畫審核、計畫進度和重新載入後的狀態還原；工具請求可單次允許或在目前工作階段中「始終允許」。
 
 ### 角色
 

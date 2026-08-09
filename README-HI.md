@@ -37,11 +37,13 @@ AQBot एक local-first desktop AI workspace है जो multi-provider chat,
 
 ### AI Agent
 
-- **ACP Agent workbench** — [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) के ज़रिए compatible coding agents को एक interface में चलाएँ और responses, reasoning तथा tool calls को stream होते देखें।
-- **Agent Registry और custom integrations** — Registry से Codex, Claude Agent, Gemini CLI, Cline, OpenCode और Grok Build जैसे agents जोड़ें, या custom command, arguments, environment variables और icon configure करें; agents को enable और reorder भी किया जा सकता है।
-- **Projects और direct chats** — Threads को project के अनुसार व्यवस्थित करें, महत्वपूर्ण sessions pin करें और पिछला workspace अपने आप restore करें, या project चुने बिना isolated working directory में direct chat शुरू करें।
-- **पूरी session interaction** — हर agent द्वारा उपलब्ध models, modes और options बदलें तथा attachments, questionnaires, plan review, plan progress और reload के बाद persisted state के साथ काम करें।
-- **पारदर्शी permission review** — Tool requests को real time में review करें, एक बार अनुमति दें या मौजूदा session में “Always Allow” चुनें, और default policy, idle timeout तथा maximum concurrent processes configure करें।
+- **Agents इस्तेमाल करने के दो तरीके** — AQBot chat में built-in agent और अलग ACP Agent workbench दोनों देता है। पहला आपके configure किए गए provider APIs का उपयोग करता है, जबकि दूसरा ACP-compatible external agent processes से जुड़ता है, ताकि model और workflow के अनुसार सही तरीका चुना जा सके।
+- **Chat agent (provider API)** — सामान्य conversation को Agent mode में बदलें और configure किए गए provider तथा model API से isolated working directory में files पढ़ें या edit करें, commands चलाएँ और code analyze करें।
+- **Chat agent controls** — हर बार पूछने, edits स्वीकार करने या full access जैसे permission modes चुनें, tool calls और approvals real time में review करें तथा हर run के token और cost track करें।
+- **ACP Agent workbench** — [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) के ज़रिए compatible coding agents को dedicated workbench में चलाएँ और responses, reasoning तथा tool calls को stream होते देखें।
+- **ACP Registry और custom integrations** — Registry से Codex, Claude Agent, Gemini CLI, Cline, OpenCode और Grok Build जैसे agents जोड़ें, या custom command, arguments, environment variables और icon configure करें; agents को enable और reorder भी किया जा सकता है।
+- **ACP projects और direct chats** — Threads को project के अनुसार व्यवस्थित करें, महत्वपूर्ण sessions pin करें और पिछला workspace अपने आप restore करें, या project चुने बिना isolated working directory में direct chat शुरू करें।
+- **पूरी ACP session interaction** — हर agent द्वारा उपलब्ध models, modes और options बदलें तथा attachments, questionnaires, plan review, plan progress और reload के बाद persisted state के साथ काम करें; tool requests को एक बार या मौजूदा session में “Always Allow” किया जा सकता है।
 
 ### Roles
 
