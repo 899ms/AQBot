@@ -1430,6 +1430,24 @@
       "refreshTooltip": "Fetch the latest list from the official Registry",
       "refreshTooltipWithDate": "Updated: {{date}}",
       "emptyHint": "No agents yet — add a custom agent, or add from the Registry"
+    },
+    "clearShortcut": "Clear shortcut (disabled until reassigned)",
+    "shortcutDisabled": "Not set",
+    "groupTitlebarIcons": "Title Bar",
+    "titlebarIconsHint": "Click an icon to show or hide it. Theme color means visible; gray means hidden. Settings cannot be hidden.",
+    "titlebarIconsShowAll": "Show all",
+    "titlebarIconVisible": "Visible",
+    "titlebarIconHidden": "Hidden",
+    "titlebarIconSettingsLocked": "Settings is always visible and cannot be hidden",
+    "titlebarIcon": {
+      "pin": "Always on top",
+      "theme": "Theme",
+      "language": "Language",
+      "backup": "Quick backup",
+      "github": "GitHub",
+      "update": "Check for updates",
+      "reload": "Reload page",
+      "settings": "Settings"
     }
   },
   "backup": {

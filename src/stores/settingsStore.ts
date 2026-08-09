@@ -134,6 +134,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   agent_workspace_datetime_format: DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT,
   agent_bash_path: null,
   selection_toolbar: createDefaultSelectionToolbarSettings(),
+  titlebar_icon_visibility: {},
   // WebDAV sync settings — must be present so stale saves never omit them
   webdav_host: null,
   webdav_username: null,

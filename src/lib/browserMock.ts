@@ -485,6 +485,7 @@ const DEFAULT_SETTINGS = {
   global_shortcuts_enabled: true,
   shortcut_registration_logs_enabled: false,
   shortcut_trigger_toast_enabled: false,
+  titlebar_icon_visibility: {},
   proxy_enabled: false,
   proxy_url: '',
   auto_backup: false,

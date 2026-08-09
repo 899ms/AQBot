@@ -20,6 +20,20 @@ vi.mock('react-i18next', () => ({
         'settings.themeLight': '浅色',
         'settings.themeDark': '深色',
         'settings.primaryColor': '主题色',
+        'settings.groupTitlebarIcons': '顶部导航栏',
+        'settings.titlebarIconsHint': '点击图标切换显示/隐藏',
+        'settings.titlebarIconsShowAll': '全部显示',
+        'settings.titlebarIconVisible': '显示中',
+        'settings.titlebarIconHidden': '已隐藏',
+        'settings.titlebarIconSettingsLocked': '设置入口始终显示，无法关闭',
+        'settings.titlebarIcon.pin': '窗口置顶',
+        'settings.titlebarIcon.theme': '主题切换',
+        'settings.titlebarIcon.language': '语言切换',
+        'settings.titlebarIcon.backup': '快速备份',
+        'settings.titlebarIcon.github': 'GitHub',
+        'settings.titlebarIcon.update': '检查更新',
+        'settings.titlebarIcon.reload': '刷新页面',
+        'settings.titlebarIcon.settings': '设置',
         'settings.groupFontRadius': '字体与圆角',
         'settings.fontSize': '界面字号',
         'settings.settingsSidebarDensity': '设置页侧栏密度',
@@ -42,6 +56,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('antd', () => ({
   ColorPicker: () => null,
   Divider: () => <hr />,
+  Tooltip: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
   Segmented: ({
     value,
     onChange,
@@ -74,6 +89,12 @@ vi.mock('antd', () => ({
       token: {
         colorTextDescription: '#666666',
         fontSizeSM: 12,
+        colorBorderSecondary: '#eeeeee',
+        colorFillQuaternary: '#fafafa',
+        colorFillSecondary: '#f5f5f5',
+        colorPrimary: '#17A93D',
+        colorTextQuaternary: '#bbbbbb',
+        borderRadius: 6,
       },
     }),
   },
@@ -100,7 +121,21 @@ vi.mock('@/constants/codeThemes', () => ({
 }));
 
 vi.mock('../SettingsGroup', () => ({
-  SettingsGroup: ({ children }: { children: React.ReactNode }) => <section>{children}</section>,
+  SettingsGroup: ({
+    title,
+    extra,
+    children,
+  }: {
+    title?: React.ReactNode;
+    extra?: React.ReactNode;
+    children: React.ReactNode;
+  }) => (
+    <section>
+      {title ? <header>{title}</header> : null}
+      {extra}
+      {children}
+    </section>
+  ),
 }));
 
 vi.mock('../SettingsSelect', () => ({
@@ -141,6 +176,44 @@ describe('DisplaySettings sidebar density', () => {
 
     expect(mocks.saveSettings).toHaveBeenCalledWith({
       settings_sidebar_density: 'spacious',
+    });
+  });
+
+  it('places title bar icons section before font settings and toggles visibility', () => {
+    render(<DisplaySettings />);
+
+    const titlebarHeading = screen.getByText('顶部导航栏');
+    const fontHeading = screen.getByText('字体与圆角');
+    expect(
+      titlebarHeading.compareDocumentPosition(fontHeading)
+        & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByTestId('titlebar-icon-toggle-backup'));
+
+    expect(mocks.saveSettings).toHaveBeenCalledWith({
+      titlebar_icon_visibility: {
+        backup: false,
+      },
+    });
+
+    const settingsToggle = screen.getByTestId('titlebar-icon-toggle-settings');
+    expect(settingsToggle).toBeDisabled();
+    fireEvent.click(settingsToggle);
+    expect(mocks.saveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets all title bar icons to visible', () => {
+    settings = {
+      ...settings,
+      titlebar_icon_visibility: { pin: false, backup: false },
+    };
+    render(<DisplaySettings />);
+
+    fireEvent.click(screen.getByText('全部显示'));
+
+    expect(mocks.saveSettings).toHaveBeenCalledWith({
+      titlebar_icon_visibility: {},
     });
   });
 });

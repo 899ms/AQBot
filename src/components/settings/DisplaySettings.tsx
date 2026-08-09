@@ -1,13 +1,41 @@
-import { ColorPicker, Divider, Segmented, Slider, theme } from 'antd';
-import { Sun, Moon, Monitor } from 'lucide-react';
+import { ColorPicker, Divider, Segmented, Slider, Tooltip, theme } from 'antd';
+import {
+  ArrowDownCircle,
+  CloudUpload,
+  Github,
+  Globe,
+  Moon,
+  Monitor,
+  Pin,
+  RotateCcw,
+  Settings,
+  Sun,
+} from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useMemo } from 'react';
 import { useSettingsStore } from '@/stores';
-import type { SettingsSidebarDensity } from '@/types';
+import type { SettingsSidebarDensity, TitlebarIconId, TitlebarToggleableIconId } from '@/types';
 import { SHIKI_LIGHT_THEMES, SHIKI_DARK_THEMES, formatThemeName } from '@/constants/codeThemes';
 import { useSystemFonts } from '@/hooks/useSystemFonts';
+import {
+  TITLEBAR_ICON_IDS,
+  TITLEBAR_ICON_LABEL_KEYS,
+  isTitlebarIconVisible,
+} from '@/lib/titlebarIcons';
 import { SettingsGroup } from './SettingsGroup';
 import { SettingsSelect } from './SettingsSelect';
+
+const TITLEBAR_PREVIEW_ICONS: Record<TitlebarIconId, ReactNode> = {
+  pin: <Pin size={14} />,
+  theme: <Monitor size={14} />,
+  language: <Globe size={14} />,
+  backup: <CloudUpload size={14} />,
+  github: <Github size={14} />,
+  update: <ArrowDownCircle size={14} />,
+  reload: <RotateCcw size={14} />,
+  settings: <Settings size={14} />,
+};
 
 export function DisplaySettings() {
   const { t } = useTranslation();
@@ -26,6 +54,20 @@ export function DisplaySettings() {
     () => SHIKI_DARK_THEMES.map((id) => ({ label: formatThemeName(id), value: id })),
     [],
   );
+
+  const toggleTitlebarIcon = (id: TitlebarToggleableIconId) => {
+    const nextVisible = !isTitlebarIconVisible(settings, id);
+    saveSettings({
+      titlebar_icon_visibility: {
+        ...settings.titlebar_icon_visibility,
+        [id]: nextVisible,
+      },
+    });
+  };
+
+  const showAllTitlebarIcons = () => {
+    saveSettings({ titlebar_icon_visibility: {} });
+  };
 
   return (
     <div className="p-6 pb-12">
@@ -80,6 +122,88 @@ export function DisplaySettings() {
           </div>
         </div>
       </SettingsGroup>
+
+      {/* Title bar icons — above font & radius */}
+      <SettingsGroup
+        title={t('settings.groupTitlebarIcons')}
+        extra={
+          <button
+            type="button"
+            onClick={showAllTitlebarIcons}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: token.colorPrimary,
+              cursor: 'pointer',
+              fontSize: 12,
+              padding: 0,
+            }}
+          >
+            {t('settings.titlebarIconsShowAll')}
+          </button>
+        }
+      >
+        <div style={{ color: 'var(--ant-color-text-secondary)', fontSize: 12, marginBottom: 10 }}>
+          {t('settings.titlebarIconsHint')}
+        </div>
+        <div
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '8px 12px',
+            borderRadius: 999,
+            border: `1px solid ${token.colorBorderSecondary}`,
+            backgroundColor: token.colorFillQuaternary,
+          }}
+        >
+          {TITLEBAR_ICON_IDS.map((id) => {
+            const locked = id === 'settings';
+            const visible = locked || isTitlebarIconVisible(settings, id);
+            const label = t(TITLEBAR_ICON_LABEL_KEYS[id]);
+            const tip = locked
+              ? t('settings.titlebarIconSettingsLocked')
+              : `${label} · ${visible ? t('settings.titlebarIconVisible') : t('settings.titlebarIconHidden')}`;
+            return (
+              <Tooltip key={id} title={tip}>
+                <button
+                  type="button"
+                  data-testid={`titlebar-icon-toggle-${id}`}
+                  aria-label={label}
+                  aria-pressed={visible}
+                  disabled={locked}
+                  onClick={() => {
+                    if (!locked) toggleTitlebarIcon(id);
+                  }}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: token.borderRadius,
+                    border: 'none',
+                    backgroundColor: 'transparent',
+                    color: visible ? token.colorPrimary : token.colorTextQuaternary,
+                    cursor: locked ? 'not-allowed' : 'pointer',
+                    transition: 'color 0.15s ease, background-color 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (locked) return;
+                    e.currentTarget.style.backgroundColor = token.colorFillSecondary;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                >
+                  {TITLEBAR_PREVIEW_ICONS[id]}
+                </button>
+              </Tooltip>
+            );
+          })}
+        </div>
+      </SettingsGroup>
+
       <SettingsGroup title={t('settings.groupFontRadius')}>
         <div style={{ padding: '4px 0' }}>
           <span>{t('settings.fontSize')}</span>

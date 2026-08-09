@@ -1430,6 +1430,24 @@
       "refreshTooltip": "從官方 Registry 拉取最新列表",
       "refreshTooltipWithDate": "更新日期：{{date}}",
       "emptyHint": "Agents 列表為空，可自訂新增，或從 Registry 新增"
+    },
+    "clearShortcut": "清除快捷鍵（關閉後不再生效）",
+    "shortcutDisabled": "未設定",
+    "groupTitlebarIcons": "頂部導航欄",
+    "titlebarIconsHint": "點擊圖示切換顯示/隱藏；主題色表示顯示，灰色表示隱藏。設定入口不可關閉。",
+    "titlebarIconsShowAll": "全部顯示",
+    "titlebarIconVisible": "顯示中",
+    "titlebarIconHidden": "已隱藏",
+    "titlebarIconSettingsLocked": "設定入口始終顯示，無法關閉",
+    "titlebarIcon": {
+      "pin": "視窗置頂",
+      "theme": "主題切換",
+      "language": "語言切換",
+      "backup": "快速備份",
+      "github": "GitHub",
+      "update": "檢查更新",
+      "reload": "重新整理",
+      "settings": "設定"
     }
   },
   "backup": {

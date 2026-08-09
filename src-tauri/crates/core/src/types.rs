@@ -1822,6 +1822,10 @@ pub struct AppSettings {
     pub agent_bash_path: Option<String>,
     /// Cross-application text-selection toolbar.
     pub selection_toolbar: SelectionToolbarSettings,
+    /// Title bar action icon visibility. Missing keys default to visible.
+    /// The settings icon cannot be hidden and is not stored here.
+    #[serde(default)]
+    pub titlebar_icon_visibility: std::collections::HashMap<String, bool>,
 }
 
 impl Default for AppSettings {
@@ -1962,6 +1966,7 @@ impl Default for AppSettings {
             agent_workspace_datetime_format: Some("YYYY-MM-DD-HH-mm-ss".to_string()),
             agent_bash_path: None,
             selection_toolbar: SelectionToolbarSettings::default(),
+            titlebar_icon_visibility: std::collections::HashMap::new(),
         }
     }
 }

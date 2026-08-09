@@ -671,6 +671,22 @@ export type AgentWorkspaceNameStrategy =
 export type ChatMessageAreaStyle = 'none' | 'background' | 'border';
 export type SettingsSidebarDensity = 'compact' | 'standard' | 'spacious';
 
+/** Toggleable title bar action icons (settings is always visible). */
+export type TitlebarIconId =
+  | 'pin'
+  | 'theme'
+  | 'language'
+  | 'backup'
+  | 'github'
+  | 'update'
+  | 'reload'
+  | 'settings';
+
+export type TitlebarToggleableIconId = Exclude<TitlebarIconId, 'settings'>;
+
+/** Per-icon visibility; missing key or true = visible, false = hidden. */
+export type TitlebarIconVisibility = Partial<Record<TitlebarToggleableIconId, boolean>>;
+
 export interface AppSettings {
   language: string;
   theme_mode: string;
@@ -827,6 +843,11 @@ export interface AppSettings {
   agent_bash_path?: string | null;
   /** Cross-application text-selection toolbar. */
   selection_toolbar: SelectionToolbarSettings;
+  /**
+   * Title bar action icon visibility. Missing keys default to visible.
+   * The settings icon cannot be hidden and is not stored here.
+   */
+  titlebar_icon_visibility?: TitlebarIconVisibility;
 }
 
 // === Streaming ===

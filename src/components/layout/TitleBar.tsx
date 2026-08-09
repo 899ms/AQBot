@@ -7,6 +7,7 @@ import { useUIStore, useSettingsStore } from '@/stores';
 import { useBackupStore } from '@/stores/backupStore';
 import { isTauri, invoke } from '@/lib/invoke';
 import { getShortcutBinding, formatShortcutForDisplay } from '@/lib/shortcuts';
+import { isTitlebarIconVisible } from '@/lib/titlebarIcons';
 import { useUpdateChecker } from '@/hooks/useUpdateChecker';
 import appLogo from '@/assets/image/logo.png';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -416,6 +417,7 @@ export function TitleBar() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
       <div className="title-bar-nodrag" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         {/* Pin Toggle */}
+        {isTitlebarIconVisible(settings, 'pin') && (
         <Tooltip title={t('desktop.alwaysOnTop')}>
           <button
             onClick={handlePinToggle}
@@ -441,8 +443,10 @@ export function TitleBar() {
             {pinned ? <Pin size={14} /> : <PinOff size={14} />}
           </button>
         </Tooltip>
+        )}
 
         {/* Theme Dropdown */}
+        {isTitlebarIconVisible(settings, 'theme') && (
         <Dropdown
           menu={{ items: themeMenuItems, onClick: handleThemeChange, selectedKeys: [themeMode] }}
           trigger={['click']}
@@ -456,8 +460,10 @@ export function TitleBar() {
             {THEME_ICONS[themeMode] ?? <Monitor size={14} />}
           </button>
         </Dropdown>
+        )}
 
         {/* Language Dropdown */}
+        {isTitlebarIconVisible(settings, 'language') && (
         <Dropdown
           menu={{ items: langMenuItems, onClick: handleLangChange, selectedKeys: [i18n.language] }}
           trigger={['click']}
@@ -471,8 +477,10 @@ export function TitleBar() {
             <Globe size={14} />
           </button>
         </Dropdown>
+        )}
 
         {/* Quick Backup */}
+        {isTitlebarIconVisible(settings, 'backup') && (
         <Popover
           open={backupPopoverOpen}
           onOpenChange={setBackupPopoverOpen}
@@ -584,8 +592,10 @@ export function TitleBar() {
             </button>
           </Tooltip>
         </Popover>
+        )}
 
         {/* GitHub */}
+        {isTitlebarIconVisible(settings, 'github') && (
         <Dropdown
           menu={{ items: githubMenuItems, onClick: handleGithubClick }}
           trigger={['click']}
@@ -599,9 +609,10 @@ export function TitleBar() {
             <Github size={14} />
           </button>
         </Dropdown>
+        )}
 
         {/* Check Update */}
-        {isTauri() && (
+        {isTitlebarIconVisible(settings, 'update') && isTauri() && (
           <Tooltip title={t('settings.checkUpdate')}>
             <button
               onClick={handleCheckUpdate}
@@ -615,6 +626,7 @@ export function TitleBar() {
         )}
 
         {/* Reload Page */}
+        {isTitlebarIconVisible(settings, 'reload') && (
         <Tooltip title={t('desktop.reloadPage')}>
           <button
             onClick={handleReload}
@@ -624,9 +636,14 @@ export function TitleBar() {
             <RotateCcw size={14} />
           </button>
         </Tooltip>
+        )}
 
-        {/* Settings Toggle */}
-        <Tooltip title={`${isInSettings ? t('settings.closeSettings') : t('settings.openSettings')} (${formatShortcutForDisplay(getShortcutBinding(settings, 'openSettings'))})`}>
+        {/* Settings Toggle — always visible */}
+        <Tooltip title={(() => {
+          const label = isInSettings ? t('settings.closeSettings') : t('settings.openSettings');
+          const binding = getShortcutBinding(settings, 'openSettings');
+          return binding ? `${label} (${formatShortcutForDisplay(binding)})` : label;
+        })()}>
         <button
           data-testid="settings-toggle"
           onClick={(e) => {
