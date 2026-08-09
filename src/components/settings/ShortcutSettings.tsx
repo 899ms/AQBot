@@ -1,7 +1,7 @@
 import { Button, Divider, Input, Space, Switch, Tooltip, theme } from 'antd';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle, RotateCcw } from 'lucide-react';
+import { AlertTriangle, Ban, RotateCcw } from 'lucide-react';
 import { useSettingsStore } from '@/stores';
 import { SettingsGroup } from './SettingsGroup';
 import {
@@ -35,7 +35,9 @@ export function ShortcutSettings() {
   const effectiveBindings = useMemo(() => {
     const result: Partial<Record<ShortcutAction, string>> = {};
     for (const action of SHORTCUT_SETTING_ACTIONS) {
-      result[action] = draftBindings[action] || getShortcutBindingByKey(settings, SHORTCUT_SETTING_KEYS[action]);
+      result[action] = draftBindings[action] !== undefined
+        ? draftBindings[action]
+        : getShortcutBindingByKey(settings, SHORTCUT_SETTING_KEYS[action]);
     }
     return result;
   }, [draftBindings, settings]);
@@ -53,8 +55,9 @@ export function ShortcutSettings() {
   }, [globalShortcutStatus.failed]);
 
   const valueForAction = useCallback((action: ShortcutAction): string => {
-    const draft = draftBindings[action];
-    if (draft) return draft;
+    if (Object.prototype.hasOwnProperty.call(draftBindings, action)) {
+      return draftBindings[action] ?? '';
+    }
     return getShortcutBindingByKey(settings, SHORTCUT_SETTING_KEYS[action]);
   }, [draftBindings, settings]);
 
@@ -81,10 +84,25 @@ export function ShortcutSettings() {
     if (action === 'toggleCurrentWindow') {
       update.global_shortcut = value;
     }
+    setDraftBindings((prev) => {
+      const next = { ...prev };
+      delete next[action];
+      return next;
+    });
+    setRecordingAction((prev) => (prev === action ? null : prev));
+    await saveSettings(update);
+  }, [saveSettings]);
+
+  const clearSingleShortcut = useCallback(async (action: ShortcutAction) => {
+    const key = SHORTCUT_SETTING_KEYS[action];
+    const update: ShortcutSettingsUpdate = { [key]: '' };
+    if (action === 'toggleCurrentWindow') {
+      update.global_shortcut = '';
+    }
     setDraftBindings((prev) => ({ ...prev, [action]: '' }));
     setRecordingAction((prev) => (prev === action ? null : prev));
     await saveSettings(update);
-  }, [saveSettings, settings]);
+  }, [saveSettings]);
 
   const onCaptureKeyDown = useCallback(
     async (action: ShortcutAction, e: React.KeyboardEvent) => {
@@ -219,15 +237,18 @@ export function ShortcutSettings() {
             const externalConflict = descriptor.supportsGlobal
               ? findExternalConflict(accelerator)
               : undefined;
+            const isDisabled = !binding && recordingAction !== action;
             const displayValue = recordingAction === action
               ? t('settings.pressShortcut')
-              : formatShortcutForDisplay(binding);
+              : binding
+                ? formatShortcutForDisplay(binding)
+                : t('settings.shortcutDisabled');
             return (
               <div key={action}>
                 {index > 0 && <Divider style={{ margin: '4px 0' }} />}
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex flex-col">
-                    <span>{t(descriptor.labelKey)}</span>
+                    <span style={{ opacity: isDisabled ? 0.65 : 1 }}>{t(descriptor.labelKey)}</span>
                     {descriptor.supportsGlobal ? (
                       <span style={{ fontSize: 12, color: token.colorTextDescription }}>
                         {t('settings.shortcutGlobalAndLocal')}
@@ -257,7 +278,10 @@ export function ShortcutSettings() {
                       onKeyDown={(event) => {
                         void onCaptureKeyDown(action, event);
                       }}
-                      style={{ width: 260 }}
+                      style={{
+                        width: 260,
+                        color: isDisabled ? token.colorTextQuaternary : undefined,
+                      }}
                     />
                     <Button
                       type={recordingAction === action ? 'primary' : 'default'}
@@ -271,6 +295,17 @@ export function ShortcutSettings() {
                         size="small"
                         icon={<RotateCcw size={14} />}
                         onClick={() => { void resetSingleShortcut(action); }}
+                      />
+                    </Tooltip>
+                    <Tooltip title={t('settings.clearShortcut')}>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<Ban size={14} />}
+                        disabled={isDisabled && recordingAction !== action}
+                        onClick={() => { void clearSingleShortcut(action); }}
+                        aria-label={t('settings.clearShortcut')}
+                        style={{ color: isDisabled ? token.colorTextQuaternary : token.colorTextSecondary }}
                       />
                     </Tooltip>
                   </Space>

@@ -139,7 +139,25 @@ export function useGlobalShortcutManager() {
 
         for (const registration of registrations) {
           const { action, binding, execute } = registration;
+          if (!binding.trim()) {
+            pushDiagnostic({
+              phase: 'register',
+              level: 'info',
+              action,
+              message: 'Skipping global shortcut registration (cleared/disabled).',
+            });
+            continue;
+          }
           const accelerator = toTauriAccelerator(binding);
+          if (!accelerator.trim()) {
+            pushDiagnostic({
+              phase: 'register',
+              level: 'info',
+              action,
+              message: 'Skipping global shortcut registration (empty accelerator).',
+            });
+            continue;
+          }
           pushDiagnostic({
             phase: 'register',
             level: 'info',

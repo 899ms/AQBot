@@ -184,11 +184,23 @@ function tokenize(binding: string): string[] {
     .map((token) => normalizeKeyToken(normalizeModifierToken(token)));
 }
 
+/**
+ * Resolve the binding for an action.
+ * - Missing / null / undefined field → factory default
+ * - Explicit empty string `""` → disabled (user cleared the shortcut)
+ * - Non-empty string → use as-is
+ */
 export function getShortcutBinding(settings: AppSettings, action: ShortcutAction): string {
   const key = SHORTCUT_SETTING_KEYS[action];
-  const raw = String(settings[key] ?? '').trim();
-  if (raw) return raw;
-  return DEFAULT_SHORTCUT_BINDINGS[action];
+  const value = settings[key];
+  if (value == null) {
+    return DEFAULT_SHORTCUT_BINDINGS[action];
+  }
+  return String(value).trim();
+}
+
+export function isShortcutEnabled(settings: AppSettings, action: ShortcutAction): boolean {
+  return getShortcutBinding(settings, action).length > 0;
 }
 
 export function getShortcutBindingByKey(settings: AppSettings, key: ShortcutSettingKey): string {

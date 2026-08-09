@@ -5,6 +5,7 @@ import {
   SHORTCUT_ACTIONS,
   SHORTCUT_SETTING_ACTIONS,
   getShortcutBinding,
+  isShortcutEnabled,
   matchesShortcutEvent,
 } from '../shortcuts';
 
@@ -26,5 +27,17 @@ describe('shortcuts', () => {
 
     expect(matchesShortcutEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }), customBinding)).toBe(true);
     expect(matchesShortcutEvent(new KeyboardEvent('keydown', { key: 'Enter' }), customBinding)).toBe(false);
+  });
+
+  it('uses defaults when the binding field is missing', () => {
+    const settings = {} as AppSettings;
+    expect(getShortcutBinding(settings, 'newConversation')).toBe(DEFAULT_SHORTCUT_BINDINGS.newConversation);
+    expect(isShortcutEnabled(settings, 'newConversation')).toBe(true);
+  });
+
+  it('treats an explicit empty string as disabled', () => {
+    const settings = { shortcut_new_conversation: '' } as AppSettings;
+    expect(getShortcutBinding(settings, 'newConversation')).toBe('');
+    expect(isShortcutEnabled(settings, 'newConversation')).toBe(false);
   });
 });
