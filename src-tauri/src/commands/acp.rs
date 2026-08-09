@@ -531,6 +531,25 @@ mod tool_transcript_tests {
     }
 
     #[test]
+    fn plan_review_status_distinguishes_native_cancel_from_requested_changes() {
+        assert_eq!(
+            plan_review_status_from_outcome(AcpInteractionOutcome::Cancelled, None),
+            "abandoned"
+        );
+        assert_eq!(
+            plan_review_status_from_outcome(AcpInteractionOutcome::Selected, Some("revise_plan"),),
+            "cancelled"
+        );
+        assert_eq!(
+            plan_review_status_from_outcome(
+                AcpInteractionOutcome::Selected,
+                Some("implement_plan"),
+            ),
+            "approved"
+        );
+    }
+
+    #[test]
     fn extract_plan_content_prefers_plan_content_field() {
         let raw = serde_json::json!({
             "title": "short",
@@ -2799,6 +2818,15 @@ pub async fn acp_respond_permission(
 }
 
 #[tauri::command]
+pub async fn acp_cancel_interaction(request_id: String) -> Result<(), String> {
+    if runtime().cancel_interaction(&request_id).await {
+        Ok(())
+    } else {
+        Err("interaction not found or already resolved".into())
+    }
+}
+
+#[tauri::command]
 pub async fn acp_respond_questionnaire(
     request_id: String,
     outcome: AcpQuestionnaireOutcome,
@@ -2866,15 +2894,15 @@ fn plan_review_status_from_outcome(
             .map(|c| c.to_ascii_lowercase())
             .collect();
         match normalized.as_str() {
-            "approved" | "approve" => Some("approved"),
-            "cancelled" | "cancel" => Some("cancelled"),
+            "approved" | "approve" | "implementplan" => Some("approved"),
+            "cancelled" | "cancel" | "reviseplan" | "plan" => Some("cancelled"),
             "abandoned" | "abandon" => Some("abandoned"),
             _ => None,
         }
     });
     match outcome {
         AcpInteractionOutcome::Expired => "expired",
-        AcpInteractionOutcome::Cancelled => option_status.unwrap_or("cancelled"),
+        AcpInteractionOutcome::Cancelled => option_status.unwrap_or("abandoned"),
         AcpInteractionOutcome::Selected => option_status.unwrap_or("approved"),
     }
 }

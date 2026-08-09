@@ -1813,7 +1813,7 @@ describe('AcpConversationPane', () => {
     });
   });
 
-  it('removes a pending image when the session loses image capability', async () => {
+  it('keeps a pending image when capability changes and blocks sending until supported', async () => {
     const imageSnapshot: AcpSessionSnapshot = {
       ...sessionSnapshot,
       agentCapabilities: {
@@ -1854,8 +1854,11 @@ describe('AcpConversationPane', () => {
       });
     });
 
-    await waitFor(() => expect(screen.queryByText('pending.png')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('pending.png')).toBeInTheDocument());
+    fireEvent.click(container.querySelector('.lucide-arrow-up')!.closest('button')!);
     expect(await screen.findByText('当前 Agent 不支持图片输入')).toBeInTheDocument();
+    expect(screen.getByText('pending.png')).toBeInTheDocument();
+    expect(invokeMock).not.toHaveBeenCalledWith('acp_prompt', expect.anything());
   });
 
   it('collapses a long paste and expands it into the ACP prompt', async () => {
@@ -2465,6 +2468,119 @@ describe('AcpConversationPane', () => {
     expect(ensureCalls).toBe(2);
   });
 
+  it('merges active plan follow-up recovery into the composer without losing draft content', async () => {
+    useAcpStore.setState({ runningByThread: { 'thread-1': false } });
+    const view = render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+    const textarea = screen.getByPlaceholderText('做点什么…') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'new user note' } });
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    const longText = 'preserved pasted context '.repeat(120);
+    fireEvent(textarea, createEvent.paste(textarea, {
+      clipboardData: {
+        items: [],
+        getData: (type: string) => (type === 'text/plain' ? longText : ''),
+      },
+    }));
+    fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"]')!, {
+      target: { files: [new File(['draft'], 'recovery-draft.txt')] },
+    });
+    expect(await screen.findByText('recovery-draft.txt')).toBeInTheDocument();
+
+    act(() => {
+      useAcpStore.setState((state) => ({
+        composerDraftsByScope: {
+          ...state.composerDraftsByScope,
+          'project-1:thread-1': {
+            value: '',
+            snippets: [],
+            files: [],
+            recovery: {
+              id: 'codex-plan-review',
+              text: 'Keep the data path unchanged',
+              error: 'Error: follow-up unavailable',
+            },
+          },
+        },
+      }));
+    });
+
+    await waitFor(() => {
+      expect(textarea.value).toContain('new user note');
+      expect(textarea.value).toContain('[[paste:#1]]');
+      expect(textarea.value).toContain('Keep the data path unchanged');
+    });
+    expect(screen.getByText('recovery-draft.txt')).toBeInTheDocument();
+    expect(await screen.findByText('Error: follow-up unavailable')).toBeInTheDocument();
+    expect(useAcpStore.getState().composerDraftsByScope['project-1:thread-1']?.recovery)
+      .toBeUndefined();
+
+    view.unmount();
+    const savedDraft = useAcpStore.getState().composerDraftsByScope['project-1:thread-1'];
+    expect(savedDraft?.snippets).toEqual([
+      expect.objectContaining({ content: longText, index: 1 }),
+    ]);
+    expect(savedDraft?.files.map((file) => file.name)).toEqual(['recovery-draft.txt']);
+  });
+
+  it('restores plan follow-up recovery when its inactive thread is opened', async () => {
+    const otherThread = {
+      ...useAcpStore.getState().threads[0],
+      id: 'thread-2',
+      title: 'Other task',
+      runtime_status: 'idle',
+    };
+    const inactiveSnippet = {
+      id: 'paste-inactive',
+      content: 'inactive pasted context',
+      lineCount: 1,
+      index: 1,
+    };
+    const inactiveFile = new File(['inactive'], 'inactive-recovery.txt');
+    useAcpStore.setState((state) => ({
+      threads: [...state.threads, otherThread],
+      allThreads: [...state.threads, otherThread],
+      runningByThread: { 'thread-1': false, 'thread-2': false },
+      sessionByThread: {
+        'thread-1': sessionSnapshot,
+        'thread-2': sessionSnapshot,
+      },
+      composerDraftsByScope: {
+        'project-1:thread-2': {
+          value: 'inactive note [[paste:#1]]',
+          snippets: [inactiveSnippet],
+          files: [inactiveFile],
+          recovery: {
+            id: 'codex-plan-review-thread-2',
+            text: 'Revise the inactive plan',
+            error: 'Error: inactive follow-up unavailable',
+          },
+        },
+      },
+    }));
+    render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+    const textarea = screen.getByPlaceholderText('做点什么…') as HTMLTextAreaElement;
+    expect(textarea).toHaveValue('');
+
+    act(() => {
+      useAcpStore.setState({ activeThreadId: 'thread-2', messages: [] });
+    });
+
+    await waitFor(() => {
+      expect(textarea.value).toContain('inactive note [[paste:#1]]');
+      expect(textarea.value).toContain('Revise the inactive plan');
+    });
+    expect(await screen.findByText('inactive-recovery.txt')).toBeInTheDocument();
+    expect(await screen.findByText('Error: inactive follow-up unavailable')).toBeInTheDocument();
+  });
+
   it('does not restore a failed turn into a different thread composer', async () => {
     let rejectPrompt!: (reason: Error) => void;
     const otherThread = {
@@ -2562,6 +2678,120 @@ describe('AcpConversationPane', () => {
     });
     await waitFor(() => expect(textarea).toHaveValue('thread one draft'));
     expect(await screen.findByText('thread-one.bin')).toBeInTheDocument();
+  });
+
+  it('keeps the current project draft when changing the Agent before the first turn', async () => {
+    const imageCapableSnapshot: AcpSessionSnapshot = {
+      ...sessionSnapshot,
+      agentCapabilities: {
+        ...sessionSnapshot.agentCapabilities,
+        promptCapabilities: { image: true },
+      },
+    };
+    useAcpStore.setState((state) => ({
+      config: {
+        ...state.config!,
+        agents: [
+          ...state.config!.agents,
+          {
+            id: 'grok-build',
+            name: 'Grok Build',
+            enabled: true,
+            source: 'builtin',
+            command: 'grok',
+            args: ['acp'],
+            sort: 1,
+          },
+        ],
+      },
+      activeThreadId: null,
+      threads: [],
+      messages: [],
+      runningByThread: {},
+      sessionByThread: {
+        'draft:project-1:codex': imageCapableSnapshot,
+        'draft:project-1:grok-build': imageCapableSnapshot,
+      },
+    }));
+    const user = userEvent.setup();
+    const { container } = render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+    const textarea = screen.getByPlaceholderText('做点什么…');
+    fireEvent.change(textarea, { target: { value: 'keep this project draft' } });
+    fireEvent.change(container.querySelector<HTMLInputElement>('input[type="file"]')!, {
+      target: {
+        files: [
+          new File(['image'], 'draft-image.png', { type: 'image/png' }),
+          new File(['notes'], 'draft-notes.md', { type: 'text/markdown' }),
+        ],
+      },
+    });
+    expect(await screen.findByText('draft-image.png')).toBeInTheDocument();
+    expect(screen.getByText('draft-notes.md')).toBeInTheDocument();
+
+    const codexButton = await waitFor(() => {
+      const button = within(container).getAllByRole('button').find(
+        (candidate) => candidate.textContent?.trim() === 'Codex',
+      );
+      expect(button).toBeDefined();
+      return button!;
+    });
+    await user.click(codexButton);
+    await user.click(await screen.findByRole('menuitem', { name: /Grok Build/i }));
+
+    await waitFor(() => expect(textarea).toHaveValue('keep this project draft'));
+    expect(screen.getByText('draft-image.png')).toBeInTheDocument();
+    expect(screen.getByText('draft-notes.md')).toBeInTheDocument();
+  });
+
+  it('restores the active conversation draft after leaving and reopening Agent', async () => {
+    const imageCapableSnapshot: AcpSessionSnapshot = {
+      ...sessionSnapshot,
+      agentCapabilities: {
+        ...sessionSnapshot.agentCapabilities,
+        promptCapabilities: { image: true },
+      },
+    };
+    useAcpStore.setState({
+      runningByThread: { 'thread-1': false },
+      sessionByThread: { 'thread-1': imageCapableSnapshot },
+    });
+    const firstVisit = render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+    fireEvent.change(screen.getByPlaceholderText('做点什么…'), {
+      target: { value: 'draft survives module navigation' },
+    });
+    fireEvent.change(
+      firstVisit.container.querySelector<HTMLInputElement>('input[type="file"]')!,
+      {
+        target: {
+          files: [
+            new File(['image'], 'module-image.png', { type: 'image/png' }),
+            new File(['file'], 'module-file.txt', { type: 'text/plain' }),
+          ],
+        },
+      },
+    );
+    expect(await screen.findByText('module-image.png')).toBeInTheDocument();
+    expect(screen.getByText('module-file.txt')).toBeInTheDocument();
+
+    firstVisit.unmount();
+    render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+
+    await waitFor(() => expect(screen.getByPlaceholderText('做点什么…'))
+      .toHaveValue('draft survives module navigation'));
+    expect(screen.getByText('module-image.png')).toBeInTheDocument();
+    expect(screen.getByText('module-file.txt')).toBeInTheDocument();
   });
 
   it('renders persisted user attachment names in message history', async () => {

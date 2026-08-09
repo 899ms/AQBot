@@ -391,8 +391,16 @@ describe('acpStore prompt ordering', () => {
     });
   });
 
-  it('surfaces the real Codex plan review even when the legacy bridge labels it permission', async () => {
-    invokeMock.mockResolvedValue(undefined);
+  it('continues Codex plan revision feedback as the next turn', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_prompt') {
+        return {
+          userMessage: message('user-revision', 'user', 'Keep the data path unchanged', 'done'),
+          assistantMessage: message('assistant-revision', 'assistant', '', 'streaming'),
+        } satisfies AcpPromptAccepted;
+      }
+      return undefined;
+    });
     const { useAcpStore } = await import('../acpStore');
     await useAcpStore.getState().bindEvents();
 
@@ -411,6 +419,8 @@ describe('acpStore prompt ordering', () => {
             status: 'pending',
             rawInput: { plan: '## Codex plan\n1. Inspect\n2. Ship' },
           },
+          supportsFeedback: true,
+          feedbackDelivery: 'follow_up_prompt',
           _meta: { codex: { kind: 'plan_review', planItemId: 'item-1' } },
         },
         options: [
@@ -434,7 +444,8 @@ describe('acpStore prompt ordering', () => {
       toolName: 'switch_mode',
       input: {
         plan: '## Codex plan\n1. Inspect\n2. Ship',
-        supportsFeedback: false,
+        supportsFeedback: true,
+        feedbackDelivery: 'follow_up_prompt',
       },
     });
     expect(state.planDocumentsByThread['thread-1']).toEqual([
@@ -445,17 +456,266 @@ describe('acpStore prompt ordering', () => {
       }),
     ]);
 
-    await useAcpStore.getState().respondPermission('codex-plan-review', 'revise_plan');
+    await useAcpStore.getState().respondPermission(
+      'codex-plan-review',
+      'revise_plan',
+      'Keep the data path unchanged',
+    );
 
     expect(invokeMock).toHaveBeenCalledWith('acp_respond_permission', {
       requestId: 'codex-plan-review',
       optionId: 'revise_plan',
-      feedback: null,
+      feedback: 'Keep the data path unchanged',
     });
     expect(useAcpStore.getState().planDocumentsByThread['thread-1']?.[0]).toMatchObject({
       status: 'cancelled',
       content: '## Codex plan\n1. Inspect\n2. Ship',
     });
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      'acp_prompt',
+      expect.objectContaining({ prompt: 'Keep the data path unchanged' }),
+    );
+
+    eventHandlers.get('acp-done')?.({
+      payload: {
+        threadId: 'thread-1',
+        messageId: 'assistant-codex-plan',
+        text: '',
+        stopReason: 'end_turn',
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('acp_prompt', expect.objectContaining({
+        threadId: 'thread-1',
+        prompt: 'Keep the data path unchanged',
+      }));
+    });
+    expect(useAcpStore.getState().planFollowUpByThread['thread-1']).toBeUndefined();
+  });
+
+  it('recovers rejected plan revision feedback into its composer draft without losing content', async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_respond_permission') return undefined;
+      if (command === 'acp_prompt') throw new Error('follow-up unavailable');
+      return undefined;
+    });
+    const { useAcpStore } = await import('../acpStore');
+    await useAcpStore.getState().bindEvents();
+    const existingSnippet = {
+      id: 'paste-1',
+      content: 'existing pasted content',
+      lineCount: 1,
+      index: 1,
+    };
+    const existingFile = new File(['existing'], 'existing.txt', { type: 'text/plain' });
+    useAcpStore.setState({
+      projects: [{
+        id: 'project-1',
+        name: 'AQBot',
+        root_path: '/tmp/aqbot',
+        kind: 'project',
+        sort_order: 0,
+        created_at: '2026-08-08T00:00:00Z',
+        updated_at: '2026-08-08T00:00:00Z',
+      }],
+      threads: [{
+        id: 'thread-1',
+        project_id: 'project-1',
+        agent_id: 'codex',
+        title: 'Plan task',
+        runtime_status: 'running',
+        is_pinned: 0,
+        sort_order: 0,
+        created_at: '2026-08-08T00:00:00Z',
+        updated_at: '2026-08-08T00:00:00Z',
+      }],
+      activeProjectId: 'project-1',
+      activeThreadId: 'thread-1',
+      pendingPermissions: {
+        'codex-plan-review': {
+          threadId: 'thread-1',
+          messageId: 'assistant-codex-plan',
+          requestId: 'codex-plan-review',
+          kind: 'plan_review',
+          toolName: 'switch_mode',
+          input: { feedbackDelivery: 'follow_up_prompt' },
+          options: [{ id: 'revise_plan', label: 'Revise', kind: 'RejectOnce' }],
+          status: 'pending',
+        },
+      },
+      composerDraftsByScope: {
+        'project-1:thread-1': {
+          value: 'existing composer text',
+          snippets: [existingSnippet],
+          files: [existingFile],
+        },
+      },
+    });
+
+    await useAcpStore.getState().respondPermission(
+      'codex-plan-review',
+      'revise_plan',
+      'Keep the data path unchanged',
+    );
+    eventHandlers.get('acp-done')?.({
+      payload: {
+        threadId: 'thread-1',
+        messageId: 'assistant-codex-plan',
+        text: '',
+        stopReason: 'end_turn',
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(useAcpStore.getState().composerDraftsByScope['project-1:thread-1'])
+        .toEqual({
+          value: 'existing composer text',
+          snippets: [existingSnippet],
+          files: [existingFile],
+          recovery: {
+            id: 'codex-plan-review',
+            text: 'Keep the data path unchanged',
+            error: 'Error: follow-up unavailable',
+          },
+        });
+    });
+    expect(useAcpStore.getState().planFollowUpByThread['thread-1']).toBeUndefined();
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'acp_prompt')).toHaveLength(1);
+  });
+
+  it('keeps unconsumed plan recovery through an empty composer layout snapshot', async () => {
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      projects: [{
+        id: 'project-1',
+        name: 'AQBot',
+        root_path: '/tmp/aqbot',
+        kind: 'project',
+        sort_order: 0,
+        created_at: '2026-08-08T00:00:00Z',
+        updated_at: '2026-08-08T00:00:00Z',
+      }],
+      threads: [{
+        id: 'thread-1',
+        project_id: 'project-1',
+        agent_id: 'codex',
+        title: 'Plan task',
+        runtime_status: 'idle',
+        is_pinned: 0,
+        sort_order: 0,
+        created_at: '2026-08-08T00:00:00Z',
+        updated_at: '2026-08-08T00:00:00Z',
+      }],
+      composerDraftsByScope: {
+        'project-1:thread-1': {
+          value: '',
+          snippets: [],
+          files: [],
+          recovery: {
+            id: 'codex-plan-review',
+            text: 'Keep the data path unchanged',
+            error: 'Error: follow-up unavailable',
+          },
+        },
+      },
+    });
+
+    useAcpStore.getState().saveComposerDraft('project-1:thread-1', {
+      value: '',
+      snippets: [],
+      files: [],
+    });
+
+    expect(useAcpStore.getState().composerDraftsByScope['project-1:thread-1']?.recovery)
+      .toEqual({
+        id: 'codex-plan-review',
+        text: 'Keep the data path unchanged',
+        error: 'Error: follow-up unavailable',
+      });
+  });
+
+  it('cancels a Codex plan review through the ACP cancellation outcome', async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const { useAcpStore } = await import('../acpStore');
+    await useAcpStore.getState().bindEvents();
+    useAcpStore.setState({
+      pendingPermissions: {
+        'codex-plan-review': {
+          threadId: 'thread-1',
+          messageId: 'assistant-codex-plan',
+          requestId: 'codex-plan-review',
+          kind: 'plan_review',
+          toolName: 'switch_mode',
+          input: { plan: '## Codex plan' },
+          options: [
+            { id: 'implement_plan', label: 'Implement', kind: 'AllowOnce' },
+            { id: 'revise_plan', label: 'Revise', kind: 'RejectOnce' },
+          ],
+          status: 'pending',
+        },
+      },
+      planDocumentsByThread: {
+        'thread-1': [{
+          id: 'codex-plan-review',
+          threadId: 'thread-1',
+          messageId: 'assistant-codex-plan',
+          content: '## Codex plan',
+          status: 'pending',
+          sequence: 1,
+          createdAt: '2026-08-08T00:00:00Z',
+        }],
+      },
+    });
+
+    await useAcpStore.getState().cancelInteraction('codex-plan-review');
+
+    expect(invokeMock).toHaveBeenCalledWith('acp_cancel_interaction', {
+      requestId: 'codex-plan-review',
+    });
+    expect(useAcpStore.getState().pendingPermissions['codex-plan-review']).toBeUndefined();
+    expect(useAcpStore.getState().planDocumentsByThread['thread-1']?.[0].status)
+      .toBe('abandoned');
+
+    eventHandlers.get('acp-interaction-closed')?.({
+      payload: {
+        threadId: 'thread-1',
+        messageId: 'assistant-codex-plan',
+        requestId: 'codex-plan-review',
+        interactionKind: 'plan_review',
+        reason: 'cancelled',
+      },
+    });
+
+    expect(useAcpStore.getState().planDocumentsByThread['thread-1']?.[0].status)
+      .toBe('abandoned');
+  });
+
+  it('does not continue plan feedback when the revision decision fails', async () => {
+    invokeMock.mockRejectedValue(new Error('agent disconnected'));
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      pendingPermissions: {
+        'codex-plan-review': {
+          threadId: 'thread-1',
+          requestId: 'codex-plan-review',
+          kind: 'plan_review',
+          toolName: 'switch_mode',
+          input: { feedbackDelivery: 'follow_up_prompt' },
+          options: [{ id: 'revise_plan', label: 'Revise', kind: 'RejectOnce' }],
+          status: 'pending',
+        },
+      },
+    });
+
+    await expect(useAcpStore.getState().respondPermission(
+      'codex-plan-review',
+      'revise_plan',
+      'Keep the data path unchanged',
+    )).rejects.toThrow('agent disconnected');
+
+    expect(useAcpStore.getState().planFollowUpByThread['thread-1']).toBeUndefined();
+    expect(useAcpStore.getState().pendingPermissions['codex-plan-review']).toBeDefined();
   });
 
   it('recognizes a metadata-free Claude switch-mode plan and cancels it by option kind', async () => {
@@ -509,7 +769,7 @@ describe('acpStore prompt ordering', () => {
     });
   });
 
-  it('keeps a cancelled plan review distinct from an expired request', async () => {
+  it('keeps a natively cancelled plan review distinct from requested changes', async () => {
     invokeMock.mockResolvedValue(undefined);
     const { useAcpStore } = await import('../acpStore');
     await useAcpStore.getState().bindEvents();
@@ -541,7 +801,7 @@ describe('acpStore prompt ordering', () => {
 
     expect(useAcpStore.getState().planDocumentsByThread['thread-1']?.[0]).toMatchObject({
       id: 'plan-cancelled',
-      status: 'cancelled',
+      status: 'abandoned',
     });
   });
 

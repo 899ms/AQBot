@@ -509,6 +509,7 @@ export function AcpQuestionnaireComposer({
     ? OTHER_VALUE
     : draft.selectedOptionIndexes[0] ?? undefined;
   const OtherAnswerInput = question.secret ? Input.Password : Input;
+  const optionFocusInset = token.lineWidthFocus + 1;
 
   return (
     <ConfigProvider button={{ autoInsertSpace: false }}>
@@ -662,6 +663,7 @@ export function AcpQuestionnaireComposer({
           <div
             style={{
               display: 'flex',
+              boxSizing: 'border-box',
               minWidth: 0,
               minHeight: 0,
               flex: 1,
@@ -669,6 +671,7 @@ export function AcpQuestionnaireComposer({
               gap: 10,
               maxHeight: QUESTION_CONTENT_MAX_HEIGHT,
               overflowY: 'auto',
+              padding: optionFocusInset,
             }}
           >
             {!SUPPORTED_INPUT_TYPES.has(question.inputType) ? (

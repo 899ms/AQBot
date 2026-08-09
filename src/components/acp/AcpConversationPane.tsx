@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -73,9 +74,9 @@ import { ChatImageNode } from '@/components/chat/ChatImageNode';
 import { ChatMessageRenderBoundary } from '@/components/chat/ChatMessageRenderBoundary';
 import {
   AttachmentChips,
+  createComposerAttachment,
   isImageFile,
   revokeComposerAttachments,
-  type ComposerAttachment,
 } from '@/components/chat/AttachmentChips';
 import { MessageAttachmentPreview } from '@/components/chat/MessageAttachmentPreview';
 import {
@@ -148,12 +149,17 @@ const ACP_STATUS_TRANSLATIONS: Readonly<Record<string, string>> = {
 function composerScopeKey(
   project: Pick<AcpProject, 'id' | 'kind'> | null,
   threadId: string | null,
-  agentId: string | null,
 ): string {
   const projectScope = !threadId && (!project || project.kind !== 'project')
     ? 'recent'
     : (project?.id ?? '');
-  return `${projectScope}:${threadId ?? 'draft'}:${agentId ?? ''}`;
+  return `${projectScope}:${threadId ?? 'draft'}`;
+}
+
+function mergeComposerRecoveryText(current: string, recovered: string): string {
+  if (!recovered || current.includes(recovered)) return current;
+  if (!current) return recovered;
+  return `${current}${current.endsWith('\n') ? '\n' : '\n\n'}${recovered}`;
 }
 
 export function localizeAcpStatus(
@@ -553,8 +559,13 @@ export function AcpConversationPane() {
   const setSessionMode = useAcpStore((s) => s.setSessionMode);
   const cancelPrompt = useAcpStore((s) => s.cancelPrompt);
   const respondPermission = useAcpStore((s) => s.respondPermission);
+  const cancelInteraction = useAcpStore((s) => s.cancelInteraction);
   const respondQuestionnaire = useAcpStore((s) => s.respondQuestionnaire);
   const enabledAgents = useAcpStore((s) => s.enabledAgents);
+  const saveComposerDraft = useAcpStore((s) => s.saveComposerDraft);
+  const takeComposerDraft = useAcpStore((s) => s.takeComposerDraft);
+  const takeComposerRecovery = useAcpStore((s) => s.takeComposerRecovery);
+  const clearComposerDraft = useAcpStore((s) => s.clearComposerDraft);
 
   const settings = useSettingsStore((s) => s.settings);
   /** Follow conversation settings (modern / compact / minimal), same as ChatView. */
@@ -733,6 +744,7 @@ export function AcpConversationPane() {
   }, [messageApi, t]);
   const {
     attachments: attachedFiles,
+    attachmentsRef,
     fileInputRef,
     isDragging,
     removeAttachment,
@@ -750,8 +762,19 @@ export function AcpConversationPane() {
     onReadError: handleAttachmentReadError,
   });
 
+  const currentComposerScopeKey = composerScopeKey(activeProject, activeThreadId);
+  const composerRecoveryId = useAcpStore(
+    (s) => s.composerDraftsByScope[currentComposerScopeKey]?.recovery?.id,
+  );
+  const composerScopeRef = useRef(currentComposerScopeKey);
+  composerScopeRef.current = currentComposerScopeKey;
+  const previousComposerScopeRef = useRef<string | null>(null);
+
   useEffect(() => {
     const resetDraft = () => {
+      clearComposerDraft(composerScopeRef.current);
+      valueRef.current = '';
+      pastedSnippetsRef.current = [];
       setValue('');
       setPastedSnippets([]);
       pastedSnippetSeqRef.current = 0;
@@ -760,27 +783,15 @@ export function AcpConversationPane() {
     };
     window.addEventListener('aqbot:reset-agent-draft', resetDraft);
     return () => window.removeEventListener('aqbot:reset-agent-draft', resetDraft);
-  }, [resetAttachments]);
-  const currentComposerScopeKey = composerScopeKey(
-    activeProject,
-    activeThreadId,
-    effectiveAgentId,
-  );
-  const composerScopeRef = useRef(currentComposerScopeKey);
-  composerScopeRef.current = currentComposerScopeKey;
-  const previousComposerScopeRef = useRef(currentComposerScopeKey);
-  const draftsByScopeRef = useRef(new Map<string, {
-    value: string;
-    snippets: PastedSnippet[];
-    attachments: ComposerAttachment[];
-  }>());
+  }, [clearComposerDraft, resetAttachments]);
 
-  useEffect(() => () => {
-    for (const draft of draftsByScopeRef.current.values()) {
-      revokeComposerAttachments(draft.attachments);
-    }
-    draftsByScopeRef.current.clear();
-  }, []);
+  useLayoutEffect(() => () => {
+    saveComposerDraft(composerScopeRef.current, {
+      value: valueRef.current,
+      snippets: pastedSnippetsRef.current,
+      files: attachmentsRef.current.map(({ file }) => file),
+    });
+  }, [attachmentsRef, saveComposerDraft]);
 
   useEffect(() => {
     if (!composerAgentId && agents[0]?.id) {
@@ -796,65 +807,44 @@ export function AcpConversationPane() {
   }, [activeThread?.agent_id]);
 
   useEffect(() => {
-    const scopeChanged = previousComposerScopeRef.current !== currentComposerScopeKey;
-    if (scopeChanged) {
-      const previousScope = previousComposerScopeRef.current;
-      const previousDraft = {
+    const previousScope = previousComposerScopeRef.current;
+    if (previousScope === currentComposerScopeKey) return;
+    if (previousScope) {
+      const previousAttachments = detachAttachments();
+      saveComposerDraft(previousScope, {
         value: valueRef.current,
         snippets: pastedSnippetsRef.current,
-        attachments: detachAttachments(),
-      };
-      if (
-        previousDraft.value
-        || previousDraft.snippets.length > 0
-        || previousDraft.attachments.length > 0
-      ) {
-        draftsByScopeRef.current.set(previousScope, previousDraft);
-      } else {
-        draftsByScopeRef.current.delete(previousScope);
-      }
-
-      const nextDraft = draftsByScopeRef.current.get(currentComposerScopeKey);
-      draftsByScopeRef.current.delete(currentComposerScopeKey);
-      const nextValue = nextDraft?.value ?? '';
-      const nextSnippets = nextDraft?.snippets ?? [];
-      valueRef.current = nextValue;
-      pastedSnippetsRef.current = nextSnippets;
-      setValue(nextValue);
-      setPastedSnippets(nextSnippets);
-      pastedSnippetSeqRef.current = nextSnippets.reduce(
-        (maximum, snippet) => Math.max(maximum, snippet.index),
-        0,
-      );
-      const restorableAttachments = (nextDraft?.attachments ?? []).filter(
-        ({ file }) => supportsImageAttachments || !isImageFile(file),
-      );
-      const incompatibleAttachments = (nextDraft?.attachments ?? []).filter(
-        ({ file }) => !supportsImageAttachments && isImageFile(file),
-      );
-      if (restorableAttachments.length > 0) restoreAttachments(restorableAttachments);
-      if (incompatibleAttachments.length > 0) {
-        revokeComposerAttachments(incompatibleAttachments);
-        messageApi.warning(t('agentPage.imageAttachmentUnsupported'));
-      }
-      previousComposerScopeRef.current = currentComposerScopeKey;
-      return;
+        files: previousAttachments.map(({ file }) => file),
+      });
+      revokeComposerAttachments(previousAttachments);
     }
-    if (supportsImageAttachments) return;
-    const incompatible = attachedFiles.filter(({ file }) => isImageFile(file));
-    if (incompatible.length === 0) return;
-    for (const attachment of incompatible) removeAttachment(attachment.id);
-    messageApi.warning(t('agentPage.imageAttachmentUnsupported'));
+
+    const nextDraft = takeComposerDraft(currentComposerScopeKey);
+    const nextValue = mergeComposerRecoveryText(
+      nextDraft?.value ?? '',
+      nextDraft?.recovery?.text ?? '',
+    );
+    const nextSnippets = nextDraft?.snippets ?? [];
+    valueRef.current = nextValue;
+    pastedSnippetsRef.current = nextSnippets;
+    setValue(nextValue);
+    setPastedSnippets(nextSnippets);
+    pastedSnippetSeqRef.current = nextSnippets.reduce(
+      (maximum, snippet) => Math.max(maximum, snippet.index),
+      0,
+    );
+    if (nextDraft?.files.length) {
+      restoreAttachments(nextDraft.files.map((file) => createComposerAttachment(file)));
+    }
+    if (nextDraft?.recovery) messageApi.error(nextDraft.recovery.error);
+    previousComposerScopeRef.current = currentComposerScopeKey;
   }, [
-    attachedFiles,
     currentComposerScopeKey,
     detachAttachments,
     messageApi,
-    pastedSnippets,
-    removeAttachment,
     restoreAttachments,
-    supportsImageAttachments,
-    t,
+    saveComposerDraft,
+    takeComposerDraft,
   ]);
 
   const prepareRecentWorkspace = useCallback(async () => {
@@ -1729,6 +1719,23 @@ export function AcpConversationPane() {
     });
   }, []);
 
+  useEffect(() => {
+    if (!composerRecoveryId) return;
+    const recovery = takeComposerRecovery(currentComposerScopeKey);
+    if (!recovery) return;
+    const nextValue = mergeComposerRecoveryText(valueRef.current, recovery.text);
+    valueRef.current = nextValue;
+    setValue(nextValue);
+    resizeTextareaToContent();
+    messageApi.error(recovery.error);
+  }, [
+    composerRecoveryId,
+    currentComposerScopeKey,
+    messageApi,
+    resizeTextareaToContent,
+    takeComposerRecovery,
+  ]);
+
   const removeSnippet = useCallback((id: string) => {
     setPastedSnippets((previous) => {
       const target = previous.find((snippet) => snippet.id === id);
@@ -1786,10 +1793,16 @@ export function AcpConversationPane() {
       messageApi.warning(t('agentPage.noAgents'));
       return;
     }
+    if (!supportsImageAttachments && attachedFiles.some(({ file }) => isImageFile(file))) {
+      messageApi.warning(t('agentPage.imageAttachmentUnsupported'));
+      return;
+    }
 
     const submittedAttachments = detachAttachments();
     setSending(true);
     useAcpStore.setState({ composerSubmitting: true });
+    valueRef.current = '';
+    pastedSnippetsRef.current = [];
     setValue('');
     setPastedSnippets([]);
     pastedSnippetSeqRef.current = 0;
@@ -1831,7 +1844,7 @@ export function AcpConversationPane() {
           titleSeed.slice(0, 48),
         );
         threadId = thread.id;
-        recoveryScopeKey = `${projectId}:${thread.id}:${effectiveAgentId}`;
+        recoveryScopeKey = `${projectId}:${thread.id}`;
         // Draft adoption is the one scope transition that belongs to this send.
         // Mark it consumed so a delayed effect cannot erase a failed-send restore.
         previousComposerScopeRef.current = recoveryScopeKey;
@@ -1841,15 +1854,12 @@ export function AcpConversationPane() {
     } catch (e) {
       const currentScopeKey = composerScopeRef.current;
       const currentStore = useAcpStore.getState();
-      const currentThread = [...currentStore.threads, ...currentStore.allThreads]
-        .find((thread) => thread.id === currentStore.activeThreadId);
       const currentProject = currentStore.projects.find(
         (project) => project.id === currentStore.activeProjectId,
       ) ?? null;
       const currentStoreScopeKey = composerScopeKey(
         currentProject,
         currentStore.activeThreadId,
-        currentThread?.agent_id ?? effectiveAgentId,
       );
       const belongsToSubmission = (scopeKey: string) => scopeKey === submittedScopeKey
         || scopeKey === recoveryScopeKey;
@@ -2424,6 +2434,8 @@ export function AcpConversationPane() {
                               submission.optionId,
                               submission.feedback,
                             )
+                          : 'outcome' in submission
+                            ? cancelInteraction(interaction.requestId)
                           : respondQuestionnaire(
                               interaction.requestId,
                               submission.questionnaire,
@@ -2625,7 +2637,6 @@ export function AcpConversationPane() {
               selectedKeys: effectiveAgentId ? [effectiveAgentId] : [],
               onClick: ({ key }) => {
                 if (!activeThreadId) {
-                  composerScopeRef.current = composerScopeKey(activeProject, null, key);
                   setComposerAgentId(key);
                 }
               },

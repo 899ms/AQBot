@@ -3,9 +3,9 @@ use aqbot_acp_client::proxy::{
     configured_agent_with_proxy, ProcessProxySettings, ProxyEnvironment,
 };
 use aqbot_acp_client::runtime::{
-    AcpEvent, AcpInteractionKind, AcpQuestionnaireAnswer, AcpQuestionnaireOutcome,
-    AcpQuestionnaireSubmission, AcpRuntime, RuntimeLimits, ACP_STATUS_GROK_RETRY_PREFIX,
-    ACP_STATUS_SENDING_PROMPT,
+    AcpEvent, AcpInteractionKind, AcpInteractionOutcome, AcpQuestionnaireAnswer,
+    AcpQuestionnaireOutcome, AcpQuestionnaireSubmission, AcpRuntime, RuntimeLimits,
+    ACP_STATUS_GROK_RETRY_PREFIX, ACP_STATUS_SENDING_PROMPT,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -2647,6 +2647,8 @@ async fn codex_plan_review_is_never_auto_approved_and_uses_plan_review_interacti
                     assert_eq!(interaction_kind, AcpInteractionKind::PlanReview);
                     assert_eq!(raw["kind"], "plan_review");
                     assert_eq!(raw["plan"], "# Test Plan\n\n- Step one");
+                    assert_eq!(raw["supportsFeedback"], true);
+                    assert_eq!(raw["feedbackDelivery"], "follow_up_prompt");
                     assert_eq!(
                         options
                             .iter()
@@ -2685,6 +2687,83 @@ async fn codex_plan_review_is_never_auto_approved_and_uses_plan_review_interacti
         .find(|line| line.starts_with("plan-review/response\t"))
         .expect("plan review response log");
     assert!(response.contains("implement_plan"), "{log}");
+
+    std::fs::remove_file(log_path).expect("remove fake agent log");
+}
+
+#[tokio::test]
+async fn codex_plan_review_can_be_cancelled_without_selecting_an_unknown_option() {
+    let log_path = unique_log_path("codex-plan-cancel");
+    let runtime = AcpRuntime::new();
+    let agent = fake_agent(&log_path);
+    let limits = RuntimeLimits::new(60, 8);
+    let cwd = std::env::current_dir().expect("current directory");
+    let (event_tx, mut received) = mpsc::unbounded_channel();
+    let snapshot = runtime
+        .prepare(
+            "thread-codex-plan-cancel",
+            &agent,
+            cwd.clone(),
+            None,
+            false,
+            limits,
+            events(),
+        )
+        .await
+        .expect("prepare Codex plan session");
+    let handle = runtime
+        .schedule_prompt(
+            "thread-codex-plan-cancel",
+            &agent,
+            cwd,
+            prompt("codex-plan-review"),
+            Some(snapshot.session_id),
+            false,
+            limits,
+            event_tx,
+        )
+        .await
+        .expect("schedule Codex plan prompt");
+
+    let request_id = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(AcpEvent::PermissionRequest { request_id, .. }) = received.recv().await {
+                break request_id;
+            }
+        }
+    })
+    .await
+    .expect("receive Codex plan review");
+
+    assert!(runtime.cancel_interaction(&request_id).await);
+    let (outcome, selected_option_id) = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some(AcpEvent::InteractionClosed {
+                outcome,
+                selected_option_id,
+                ..
+            }) = received.recv().await
+            {
+                break (outcome, selected_option_id);
+            }
+        }
+    })
+    .await
+    .expect("receive cancelled plan terminal event");
+    assert_eq!(outcome, AcpInteractionOutcome::Cancelled);
+    assert_eq!(selected_option_id, None);
+    handle
+        .wait()
+        .await
+        .expect("cancelled review completes prompt");
+
+    let log = std::fs::read_to_string(&log_path).expect("fake agent log");
+    let response = log
+        .lines()
+        .find(|line| line.starts_with("plan-review/response\t"))
+        .expect("plan review response log");
+    assert!(response.contains(r#""outcome": "cancelled""#), "{log}");
+    assert!(!response.contains("abandoned"), "{log}");
 
     std::fs::remove_file(log_path).expect("remove fake agent log");
 }

@@ -278,6 +278,9 @@ describe('acpStore lifecycle', () => {
       planByThread: {
         'thread-1': { entries: [{ content: 'Inspect', status: 'pending' }], completed: 0, total: 1 },
       },
+      composerDraftsByScope: {
+        'project-1:thread-1': { value: 'deleted draft', snippets: [], files: [] },
+      },
     });
 
     const preparing = useAcpStore.getState().prepareSession('thread-1')
@@ -297,11 +300,20 @@ describe('acpStore lifecycle', () => {
     expect(state.turnActivityByThread['thread-1']).toBeUndefined();
     expect(state.cancellingByThread['thread-1']).toBeUndefined();
     expect(state.planByThread['thread-1']).toBeUndefined();
+    expect(state.composerDraftsByScope['project-1:thread-1']).toBeUndefined();
     expect(state.activeThreadId).toBeNull();
     expect(state.threads).toEqual([]);
     expect(state.allThreads).toEqual([]);
     expect(state.messages).toEqual([]);
     expect(state.streamingText['assistant-deleted']).toBeUndefined();
+
+    useAcpStore.getState().saveComposerDraft('project-1:thread-1', {
+      value: 'late deleted thread draft',
+      snippets: [],
+      files: [],
+    });
+    expect(useAcpStore.getState().composerDraftsByScope['project-1:thread-1'])
+      .toBeUndefined();
   });
 
   it('ignores every late thread event after the thread is deleted', async () => {
@@ -479,6 +491,11 @@ describe('acpStore lifecycle', () => {
         [threadId]: { entries: [{ content: 'Inspect', status: 'pending' }], completed: 0, total: 1 },
       },
       planDocumentsByThread: { [threadId]: [] },
+      composerDraftsByScope: {
+        [`${projectId}:draft`]: { value: 'project draft', snippets: [], files: [] },
+        [`${projectId}:${threadId}`]: { value: 'thread draft', snippets: [], files: [] },
+        'recent:draft': { value: 'unrelated draft', snippets: [], files: [] },
+      },
       spawnModelByThread: { [threadId]: 'model-a', [draftKey]: 'model-a' },
       spawnReasoningByThread: { [threadId]: 'high', [draftKey]: 'high' },
       messagesLoadingByThread: { [threadId]: true },
@@ -536,11 +553,70 @@ describe('acpStore lifecycle', () => {
     expect(state.cancellingByThread[threadId]).toBeUndefined();
     expect(state.planByThread[threadId]).toBeUndefined();
     expect(state.planDocumentsByThread[threadId]).toBeUndefined();
+    expect(state.composerDraftsByScope[`${projectId}:draft`]).toBeUndefined();
+    expect(state.composerDraftsByScope[`${projectId}:${threadId}`]).toBeUndefined();
+    expect(state.composerDraftsByScope['recent:draft']?.value).toBe('unrelated draft');
     expect(state.messagesLoadingByThread[threadId]).toBeUndefined();
     expect(state.messagesErrorByThread[threadId]).toBeUndefined();
     expect(state.pendingPermissions['permission-project-deleted']).toBeUndefined();
     expect(state.toolCalls[`${threadId}:assistant-project-deleted:tool-1`]).toBeUndefined();
     expect(state.error).toBeNull();
+
+    useAcpStore.getState().saveComposerDraft(`${projectId}:draft`, {
+      value: 'late deleted project draft',
+      snippets: [],
+      files: [],
+    });
+    expect(useAcpStore.getState().composerDraftsByScope[`${projectId}:draft`])
+      .toBeUndefined();
+  });
+
+  it('accepts unsent drafts for live project, thread, and Recent scopes', async () => {
+    const liveProject: AcpProject = {
+      id: 'project-live',
+      name: 'Live project',
+      root_path: '/tmp/project-live',
+      kind: 'project',
+      sort_order: 0,
+      created_at: '2026-08-08T00:00:00Z',
+      updated_at: '2026-08-08T00:00:00Z',
+    };
+    const liveThread: AcpThread = {
+      ...existingThread,
+      id: 'thread-live',
+      project_id: liveProject.id,
+    };
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      projects: [liveProject],
+      threads: [liveThread],
+      allThreads: [liveThread],
+      activeProjectId: liveProject.id,
+      activeThreadId: liveThread.id,
+      composerDraftsByScope: {},
+    });
+
+    useAcpStore.getState().saveComposerDraft(`${liveProject.id}:draft`, {
+      value: 'project draft',
+      snippets: [],
+      files: [],
+    });
+    useAcpStore.getState().saveComposerDraft(`${liveProject.id}:${liveThread.id}`, {
+      value: 'thread draft',
+      snippets: [],
+      files: [],
+    });
+    useAcpStore.getState().saveComposerDraft('recent:draft', {
+      value: 'Recent draft',
+      snippets: [],
+      files: [],
+    });
+
+    expect(useAcpStore.getState().composerDraftsByScope).toMatchObject({
+      [`${liveProject.id}:draft`]: { value: 'project draft' },
+      [`${liveProject.id}:${liveThread.id}`]: { value: 'thread draft' },
+      'recent:draft': { value: 'Recent draft' },
+    });
   });
 
   it('does not restore a late configuration snapshot after thread deletion', async () => {

@@ -827,6 +827,34 @@ impl AcpRuntime {
         true
     }
 
+    /// Resolve an outstanding interaction through ACP's native cancelled
+    /// outcome without inventing an option id that the agent did not offer.
+    pub async fn cancel_interaction(&self, request_id: &str) -> bool {
+        let pending = self.permissions.lock().await.remove(request_id);
+        let Some(pending) = pending else {
+            return false;
+        };
+        let PendingPermission {
+            interaction_kind,
+            tool_call_id,
+            event_tx,
+            sender,
+            ..
+        } = pending;
+        // Closing the pending response channel makes the protocol-specific
+        // handler return its native cancelled response to the agent.
+        drop(sender);
+        emit_interaction_closed(
+            &event_tx,
+            request_id,
+            interaction_kind,
+            tool_call_id,
+            AcpInteractionOutcome::Cancelled,
+            None,
+        );
+        true
+    }
+
     pub async fn resolve_questionnaire(
         &self,
         request_id: &str,
@@ -6024,14 +6052,30 @@ fn standard_plan_review(raw: &serde_json::Value) -> Option<&str> {
     (codex_plan || switch_mode).then_some(plan)
 }
 
+fn is_codex_plan_review(raw: &serde_json::Value) -> bool {
+    raw.pointer("/_meta/codex/kind")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("plan_review"))
+}
+
 fn normalized_standard_plan_review(mut raw: serde_json::Value, plan: &str) -> serde_json::Value {
+    let supports_follow_up_feedback = is_codex_plan_review(&raw);
     if let Some(object) = raw.as_object_mut() {
         object.insert(
             "kind".into(),
             serde_json::Value::String("plan_review".into()),
         );
         object.insert("plan".into(), serde_json::Value::String(plan.into()));
-        object.insert("supportsFeedback".into(), serde_json::Value::Bool(false));
+        object.insert(
+            "supportsFeedback".into(),
+            serde_json::Value::Bool(supports_follow_up_feedback),
+        );
+        if supports_follow_up_feedback {
+            object.insert(
+                "feedbackDelivery".into(),
+                serde_json::Value::String("follow_up_prompt".into()),
+            );
+        }
     }
     raw
 }
@@ -7301,6 +7345,9 @@ mod tests {
         assert_eq!(standard_plan_review(&codex), Some("Codex plan"));
         assert_eq!(standard_plan_review(&claude), Some("Claude plan"));
         assert_eq!(standard_plan_review(&ordinary), None);
+        let normalized_codex = normalized_standard_plan_review(codex, "Codex plan");
+        assert_eq!(normalized_codex["supportsFeedback"], true);
+        assert_eq!(normalized_codex["feedbackDelivery"], "follow_up_prompt");
         assert_eq!(
             normalized_standard_plan_review(claude, "Claude plan")["supportsFeedback"],
             false

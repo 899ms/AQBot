@@ -14,6 +14,7 @@ import type {
 } from '@/types/acp';
 import type { PermissionOptionButton } from '@/components/chat/PermissionCard';
 import type { AttachmentInput } from '@/types';
+import type { PastedSnippet } from '@/lib/pastedText';
 
 // Generation counter prevents StrictMode / remount races from stacking
 // multiple acp-stream-text listeners (which doubles every streamed character).
@@ -230,10 +231,10 @@ function planDocumentStatusFromResolution(
   optionKind?: string,
 ): AcpPlanDocument['status'] {
   if (reason === 'expired') return 'expired';
-  if (reason === 'cancelled') return 'cancelled';
   const id = String(optionId ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
   const kind = String(optionKind ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
   if (id === 'abandoned' || id === 'abandon') return 'abandoned';
+  if (reason === 'cancelled') return 'abandoned';
   if (kind.includes('reject') || kind.includes('deny')) return 'cancelled';
   if (kind.includes('allow')) return 'approved';
   if (id === 'approved' || id === 'approve' || id === 'implementplan') return 'approved';
@@ -609,6 +610,24 @@ function resolvedInteractionState(
   };
 }
 
+export interface AcpComposerRecovery {
+  id: string;
+  text: string;
+  error: string;
+}
+
+export interface AcpComposerDraft {
+  value: string;
+  snippets: PastedSnippet[];
+  files: File[];
+  recovery?: AcpComposerRecovery;
+}
+
+interface AcpPlanFollowUp {
+  requestId: string;
+  prompt: string;
+}
+
 interface AcpStore {
   config: AcpAgentsFile | null;
   registry: RegistryFile | null;
@@ -633,9 +652,13 @@ interface AcpStore {
   planByThread: Record<string, AcpPlanState>;
   /** Full plan-review documents kept for timeline re-reading after exit. */
   planDocumentsByThread: Record<string, AcpPlanDocument[]>;
+  /** Revision feedback waiting for the current plan turn to reach its drain boundary. */
+  planFollowUpByThread: Record<string, AcpPlanFollowUp>;
   spawnModelByThread: Record<string, string>;
   spawnReasoningByThread: Record<string, string>;
   permissionMode: string;
+  /** In-memory only: unsent composer content survives Agent page unmounts. */
+  composerDraftsByScope: Record<string, AcpComposerDraft>;
   composerSubmitting: boolean;
   creatingThread: boolean;
   loading: boolean;
@@ -662,6 +685,10 @@ interface AcpStore {
   removeAgent: (agentId: string) => Promise<void>;
   reorderAgents: (agentIds: string[]) => Promise<void>;
   setPermissionMode: (mode: string) => Promise<void>;
+  saveComposerDraft: (scopeKey: string, draft: AcpComposerDraft) => void;
+  takeComposerDraft: (scopeKey: string) => AcpComposerDraft | undefined;
+  takeComposerRecovery: (scopeKey: string) => AcpComposerRecovery | undefined;
+  clearComposerDraft: (scopeKey: string) => void;
 
   loadProjects: () => Promise<void>;
   /** Optimistic local reorder (like category store onDragOver). */
@@ -708,6 +735,7 @@ interface AcpStore {
     optionId: string,
     feedback?: string,
   ) => Promise<void>;
+  cancelInteraction: (requestId: string) => Promise<void>;
   respondQuestionnaire: (
     requestId: string,
     submission: AcpQuestionnaireSubmission,
@@ -827,6 +855,52 @@ function omitSessionKeys<T>(
   );
 }
 
+function omitComposerDrafts(
+  drafts: Record<string, AcpComposerDraft>,
+  shouldRemove: (scopeKey: string) => boolean,
+): Record<string, AcpComposerDraft> {
+  return Object.fromEntries(
+    Object.entries(drafts).filter(([scopeKey]) => !shouldRemove(scopeKey)),
+  );
+}
+
+function isLiveComposerDraftScope(
+  state: Pick<
+    AcpStore,
+    'projects' | 'threads' | 'allThreads' | 'activeProjectId' | 'activeThreadId'
+  >,
+  scopeKey: string,
+): boolean {
+  if (scopeKey === 'recent:draft') return true;
+  if (state.projects.some(
+    (project) => project.kind === 'project' && scopeKey === `${project.id}:draft`,
+  )) return true;
+  if (
+    state.activeProjectId
+    && !state.projects.some((project) => project.id === state.activeProjectId)
+    && scopeKey === `${state.activeProjectId}:draft`
+  ) return true;
+  if ([...state.threads, ...state.allThreads].some(
+    (thread) => scopeKey === `${thread.project_id}:${thread.id}`,
+  )) return true;
+  return !!(
+    state.activeProjectId
+    && state.activeThreadId
+    && scopeKey === `${state.activeProjectId}:${state.activeThreadId}`
+  );
+}
+
+function composerScopeForThread(state: Pick<
+  AcpStore,
+  'threads' | 'allThreads' | 'activeProjectId' | 'activeThreadId'
+>, threadId: string): string | undefined {
+  const thread = [...state.threads, ...state.allThreads]
+    .find((candidate) => candidate.id === threadId);
+  const projectId = thread?.project_id
+    ?? (state.activeThreadId === threadId ? state.activeProjectId : null);
+  return projectId ? `${projectId}:${threadId}` : undefined;
+}
+
 function removeSessionEntries<T extends { threadId: string }>(
   entries: Record<string, T>,
   sessionKeys: ReadonlySet<string>,
@@ -864,6 +938,7 @@ function clearAcpSessionState(
     cancellingByThread: omitSessionKeys(state.cancellingByThread, sessionKeys),
     planByThread: omitSessionKeys(state.planByThread, sessionKeys),
     planDocumentsByThread: omitSessionKeys(state.planDocumentsByThread, sessionKeys),
+    planFollowUpByThread: omitSessionKeys(state.planFollowUpByThread, sessionKeys),
     spawnModelByThread: omitSessionKeys(state.spawnModelByThread, sessionKeys),
     spawnReasoningByThread: omitSessionKeys(state.spawnReasoningByThread, sessionKeys),
     ...(state.activeThreadId && sessionKeys.has(state.activeThreadId)
@@ -1081,9 +1156,11 @@ export const useAcpStore = create<AcpStore>()(
   cancellingByThread: {},
   planByThread: {},
   planDocumentsByThread: {},
+  planFollowUpByThread: {},
   spawnModelByThread: {},
   spawnReasoningByThread: {},
   permissionMode: 'default',
+  composerDraftsByScope: {},
   composerSubmitting: false,
   creatingThread: false,
   loading: false,
@@ -1098,6 +1175,58 @@ export const useAcpStore = create<AcpStore>()(
       .filter((a) => a.enabled)
       .slice()
       .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name)),
+
+  saveComposerDraft: (scopeKey, draft) => {
+    const hasContent = !!draft.value || draft.snippets.length > 0 || draft.files.length > 0;
+    set((state) => {
+      const next = { ...state.composerDraftsByScope };
+      const recovery = draft.recovery ?? next[scopeKey]?.recovery;
+      if ((hasContent || recovery) && isLiveComposerDraftScope(state, scopeKey)) {
+        next[scopeKey] = { ...draft, ...(recovery ? { recovery } : {}) };
+      } else {
+        delete next[scopeKey];
+      }
+      return { composerDraftsByScope: next };
+    });
+  },
+
+  takeComposerDraft: (scopeKey) => {
+    const draft = get().composerDraftsByScope[scopeKey];
+    if (!draft) return undefined;
+    set((state) => {
+      const next = { ...state.composerDraftsByScope };
+      delete next[scopeKey];
+      return { composerDraftsByScope: next };
+    });
+    return draft;
+  },
+
+  takeComposerRecovery: (scopeKey) => {
+    const recovery = get().composerDraftsByScope[scopeKey]?.recovery;
+    if (!recovery) return undefined;
+    set((state) => {
+      const current = state.composerDraftsByScope[scopeKey];
+      if (current?.recovery?.id !== recovery.id) return state;
+      const next = { ...state.composerDraftsByScope };
+      const { recovery: _consumed, ...draft } = current;
+      if (draft.value || draft.snippets.length > 0 || draft.files.length > 0) {
+        next[scopeKey] = draft;
+      } else {
+        delete next[scopeKey];
+      }
+      return { composerDraftsByScope: next };
+    });
+    return recovery;
+  },
+
+  clearComposerDraft: (scopeKey) => {
+    set((state) => {
+      if (!(scopeKey in state.composerDraftsByScope)) return state;
+      const next = { ...state.composerDraftsByScope };
+      delete next[scopeKey];
+      return { composerDraftsByScope: next };
+    });
+  },
 
   permissionsForThread: (threadId) =>
     Object.values(get().pendingPermissions)
@@ -1355,7 +1484,11 @@ export const useAcpStore = create<AcpStore>()(
   },
 
   deleteProject: async (projectId) => {
-    const sessionKeys = projectSessionKeys(get(), projectId);
+    const stateBeforeDelete = get();
+    const sessionKeys = projectSessionKeys(stateBeforeDelete, projectId);
+    const clearsRecentDraft = stateBeforeDelete.projects.some(
+      (project) => project.id === projectId && project.kind !== 'project',
+    );
     await invoke('acp_delete_project', { projectId });
     _acpThreadListLoadVersion.set(
       projectId,
@@ -1368,6 +1501,11 @@ export const useAcpStore = create<AcpStore>()(
       projects: state.projects.filter((project) => project.id !== projectId),
       threads: state.threads.filter((thread) => thread.project_id !== projectId),
       allThreads: state.allThreads.filter((thread) => thread.project_id !== projectId),
+      composerDraftsByScope: omitComposerDrafts(
+        state.composerDraftsByScope,
+        (scopeKey) => scopeKey.startsWith(`${projectId}:`)
+          || (clearsRecentDraft && scopeKey === 'recent:draft'),
+      ),
       ...(state.activeProjectId === projectId ? { activeProjectId: null } : {}),
     }));
     await Promise.all([get().loadProjects(), get().loadAllThreads()]);
@@ -1556,6 +1694,9 @@ export const useAcpStore = create<AcpStore>()(
     const stateBeforeDelete = get();
     const threadBeforeDelete = [...stateBeforeDelete.threads, ...stateBeforeDelete.allThreads]
       .find((thread) => thread.id === threadId);
+    const deletedComposerScope = threadBeforeDelete
+      ? `${threadBeforeDelete.project_id}:${threadId}`
+      : null;
     const recentProjectId = stateBeforeDelete.projects.find(
       (project) => project.id === threadBeforeDelete?.project_id && project.kind === 'recent',
     )?.id;
@@ -1568,6 +1709,10 @@ export const useAcpStore = create<AcpStore>()(
       ...clearAcpSessionState(state, deletedKeys, streamingMessageIds),
       threads: state.threads.filter((thread) => thread.id !== threadId),
       allThreads: state.allThreads.filter((thread) => thread.id !== threadId),
+      composerDraftsByScope: omitComposerDrafts(
+        state.composerDraftsByScope,
+        (scopeKey) => scopeKey === deletedComposerScope,
+      ),
       ...(recentProjectId
         ? { projects: state.projects.filter((project) => project.id !== recentProjectId) }
         : {}),
@@ -2048,11 +2193,16 @@ export const useAcpStore = create<AcpStore>()(
     clearFirstOutputTimer(threadId);
     const previousStatus = get().statusByThread[threadId] ?? '';
     const previousTurnActivity = get().turnActivityByThread[threadId] ?? false;
-    set((s) => ({
-      cancellingByThread: { ...s.cancellingByThread, [threadId]: true },
-      turnActivityByThread: { ...s.turnActivityByThread, [threadId]: true },
-      statusByThread: { ...s.statusByThread, [threadId]: ACP_STATUS_CANCELLING },
-    }));
+    set((s) => {
+      const nextFollowUps = { ...s.planFollowUpByThread };
+      delete nextFollowUps[threadId];
+      return {
+        cancellingByThread: { ...s.cancellingByThread, [threadId]: true },
+        turnActivityByThread: { ...s.turnActivityByThread, [threadId]: true },
+        statusByThread: { ...s.statusByThread, [threadId]: ACP_STATUS_CANCELLING },
+        planFollowUpByThread: nextFollowUps,
+      };
+    });
     try {
       const cancelled = await invoke<boolean>('acp_cancel', { threadId });
       if (!cancelled) throw new Error('No active ACP turn to cancel');
@@ -2256,12 +2406,38 @@ export const useAcpStore = create<AcpStore>()(
   respondPermission: async (requestId, optionId, feedback) => {
     const trimmedFeedback = feedback?.trim();
     const existing = get().pendingPermissions[requestId];
+    const followUp = existing?.kind === 'plan_review'
+      && existing.input.feedbackDelivery === 'follow_up_prompt'
+      && trimmedFeedback
+      ? { requestId, prompt: trimmedFeedback }
+      : undefined;
 
-    await invoke('acp_respond_permission', {
-      requestId,
-      optionId,
-      feedback: trimmedFeedback || null,
-    });
+    if (followUp && existing) {
+      set((s) => ({
+        planFollowUpByThread: {
+          ...s.planFollowUpByThread,
+          [existing.threadId]: followUp,
+        },
+      }));
+    }
+
+    try {
+      await invoke('acp_respond_permission', {
+        requestId,
+        optionId,
+        feedback: trimmedFeedback || null,
+      });
+    } catch (error) {
+      if (followUp && existing) {
+        set((s) => {
+          if (s.planFollowUpByThread[existing.threadId]?.requestId !== requestId) return s;
+          const nextFollowUps = { ...s.planFollowUpByThread };
+          delete nextFollowUps[existing.threadId];
+          return { planFollowUpByThread: nextFollowUps };
+        });
+      }
+      throw error;
+    }
     set((s) => {
       const current = s.pendingPermissions[requestId] ?? existing;
       if (!current) return s;
@@ -2284,6 +2460,27 @@ export const useAcpStore = create<AcpStore>()(
           ),
           messageId: current.messageId,
           feedback: trimmedFeedback || undefined,
+        }),
+      };
+    });
+  },
+
+  cancelInteraction: async (requestId) => {
+    const existing = get().pendingPermissions[requestId];
+    await invoke('acp_cancel_interaction', { requestId });
+    set((s) => {
+      const current = s.pendingPermissions[requestId] ?? existing;
+      if (!current) return s;
+      const next = resolvedInteractionState(s.pendingPermissions, s.toolCalls, {
+        requestId,
+        reason: 'cancelled',
+      });
+      if (current.kind !== 'plan_review') return next;
+      return {
+        ...next,
+        planDocumentsByThread: resolvePlanDocument(s.planDocumentsByThread, requestId, {
+          status: 'abandoned',
+          messageId: current.messageId,
         }),
       };
     });
@@ -2508,11 +2705,17 @@ export const useAcpStore = create<AcpStore>()(
             : kind === 'plan_review'
               ? false
               : undefined;
+        const feedbackDelivery = typeof raw.feedbackDelivery === 'string'
+          ? raw.feedbackDelivery
+          : typeof baseInput.feedbackDelivery === 'string'
+            ? baseInput.feedbackDelivery
+            : undefined;
         const input = kind === 'plan_review'
           ? {
               ...baseInput,
               ...(typeof plan === 'string' ? { plan } : {}),
               ...(typeof supportsFeedback === 'boolean' ? { supportsFeedback } : {}),
+              ...(feedbackDelivery ? { feedbackDelivery } : {}),
             }
           : baseInput;
         const mappedOptions = mapAcpOptions(options ?? []);
@@ -2583,9 +2786,7 @@ export const useAcpStore = create<AcpStore>()(
             messageId: payload.messageId,
             kind: payload.interactionKind,
             toolCallId: payload.toolCallId ?? undefined,
-            optionId: payload.reason === 'selected'
-              ? payload.selectedOptionId ?? undefined
-              : undefined,
+            optionId: payload.selectedOptionId ?? undefined,
             optionKind: payload.selectedOptionKind ?? undefined,
             optionLabel: payload.selectedOptionName ?? undefined,
           };
@@ -2700,6 +2901,7 @@ export const useAcpStore = create<AcpStore>()(
         (event) => {
           if (!isThreadEventLive(event.payload.threadId)) return;
           const { threadId, messageId, text, stopReason, durationMs } = event.payload;
+          const followUp = get().planFollowUpByThread[threadId];
           markTurnActivity(threadId);
           streamBatch.delete(messageId);
           _acpStreamingMessageThreads.delete(messageId);
@@ -2739,6 +2941,10 @@ export const useAcpStore = create<AcpStore>()(
                     },
                   ]
                 : s.messages;
+            const nextFollowUps = { ...s.planFollowUpByThread };
+            if (nextFollowUps[threadId]?.requestId === followUp?.requestId) {
+              delete nextFollowUps[threadId];
+            }
             return {
               streamingText: nextStreaming,
               statusByThread: { ...s.statusByThread, [threadId]: '' },
@@ -2750,6 +2956,7 @@ export const useAcpStore = create<AcpStore>()(
                 s.planDocumentsByThread,
                 threadId,
               ),
+              planFollowUpByThread: nextFollowUps,
               pendingPermissions: removeThreadEntries(s.pendingPermissions, threadId),
               toolCalls: finalizeUnfinishedToolCalls(
                 s.toolCalls,
@@ -2759,8 +2966,36 @@ export const useAcpStore = create<AcpStore>()(
               messages,
             };
           });
-          // DB is already status=done when this event fires — safe to resync.
-          if (get().activeThreadId === threadId) {
+          // DB is already status=done and runtime prompt state is idle at this
+          // drain boundary, so Codex revision feedback can safely start a turn.
+          if (followUp) {
+            void get().sendPrompt(threadId, followUp.prompt).catch((error) => {
+              const errorMessage = String(error);
+              set((state) => {
+                const scopeKey = composerScopeForThread(state, threadId);
+                if (!scopeKey || !isLiveComposerDraftScope(state, scopeKey)) return state;
+                const draft = state.composerDraftsByScope[scopeKey] ?? {
+                  value: '',
+                  snippets: [],
+                  files: [],
+                };
+                return {
+                  composerDraftsByScope: {
+                    ...state.composerDraftsByScope,
+                    [scopeKey]: {
+                      ...draft,
+                      recovery: {
+                        id: followUp.requestId,
+                        text: followUp.prompt,
+                        error: errorMessage,
+                      },
+                    },
+                  },
+                };
+              });
+              console.error('[acpStore] failed to continue plan revision feedback', error);
+            });
+          } else if (get().activeThreadId === threadId) {
             void get().loadMessages(threadId);
           }
         },
@@ -2821,6 +3056,9 @@ export const useAcpStore = create<AcpStore>()(
               planDocumentsByThread: finalizePendingPlanDocuments(
                 s.planDocumentsByThread,
                 threadId,
+              ),
+              planFollowUpByThread: Object.fromEntries(
+                Object.entries(s.planFollowUpByThread).filter(([key]) => key !== threadId),
               ),
               pendingPermissions: removeThreadEntries(s.pendingPermissions, threadId),
               toolCalls: finalizeUnfinishedToolCalls(s.toolCalls, threadId, 'error'),

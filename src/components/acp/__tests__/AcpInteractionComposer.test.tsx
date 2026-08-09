@@ -193,12 +193,17 @@ describe('AcpInteractionComposer', () => {
     expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument();
   });
 
-  it('renders the real Codex plan review body and only its advertised actions', () => {
+  it('renders Codex plan review with a native cancel action', async () => {
+    const onSubmit = vi.fn(async () => undefined);
     renderComposer({
       ...baseRequest,
       kind: 'plan_review',
       title: 'Implement this plan?',
-      input: { plan: '## Codex plan\n1. Inspect\n2. Ship' },
+      input: {
+        plan: '## Codex plan\n1. Inspect\n2. Ship',
+        supportsFeedback: true,
+        feedbackDelivery: 'follow_up_prompt',
+      },
       options: [
         { id: 'implement_plan', label: 'Yes, implement this plan', kind: 'AllowOnce' },
         {
@@ -207,13 +212,17 @@ describe('AcpInteractionComposer', () => {
           kind: 'RejectOnce',
         },
       ],
-    });
+    }, onSubmit);
 
     expect(screen.getByText('Codex plan')).toBeInTheDocument();
     const execute = screen.getByRole('button', { name: '立即执行' });
     expect(execute).toBeEnabled();
     expect(screen.getByRole('button', { name: '进行改变' })).toBeEnabled();
-    expect(screen.queryByRole('button', { name: '取消' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith({ outcome: 'cancelled' });
+    });
   });
 
   it('lets plan review request changes with feedback', async () => {
@@ -245,14 +254,15 @@ describe('AcpInteractionComposer', () => {
     });
   });
 
-  it('submits a Codex plan revision directly when the protocol cannot carry feedback', async () => {
+  it('keeps the Codex plan dialog open while collecting revision feedback', async () => {
     const onSubmit = vi.fn(async () => undefined);
     renderComposer({
       ...baseRequest,
       kind: 'plan_review',
       input: {
         plan: 'Ship the rename plan.',
-        supportsFeedback: false,
+        supportsFeedback: true,
+        feedbackDelivery: 'follow_up_prompt',
       },
       options: [
         { id: 'implement_plan', label: 'Yes, implement this plan' },
@@ -262,10 +272,8 @@ describe('AcpInteractionComposer', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '进行改变' }));
 
-    await waitFor(() => {
-      expect(onSubmit).toHaveBeenCalledWith({ optionId: 'revise_plan' });
-    });
-    expect(screen.queryByPlaceholderText('描述希望如何调整计划…')).not.toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByPlaceholderText('描述希望如何调整计划…')).toBeInTheDocument();
   });
 
   it('maps Claude plan option kinds without hiding advertised execution modes', async () => {

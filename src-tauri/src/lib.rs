@@ -568,6 +568,7 @@ pub fn run() {
         commands::acp::acp_cancel,
         commands::acp::acp_prompt,
         commands::acp::acp_respond_permission,
+        commands::acp::acp_cancel_interaction,
         commands::acp::acp_respond_questionnaire,
         commands::acp::acp_registry_source,
         commands::acp::acp_git_info,

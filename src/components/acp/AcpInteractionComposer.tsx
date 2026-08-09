@@ -35,6 +35,7 @@ export interface AcpInteractionComposerProps {
 }
 export type AcpInteractionSubmission =
   | { optionId: string; feedback?: string }
+  | { outcome: 'cancelled' }
   | { questionnaire: AcpQuestionnaireSubmission };
 type Translate = (key: string) => string;
 
@@ -245,6 +246,23 @@ export function AcpInteractionComposer({
     }
   };
 
+  const cancelInteraction = async () => {
+    const requestId = request.requestId;
+    setLoadingOptionId('cancelled');
+    setSubmissionError(null);
+    try {
+      await onSubmit({ outcome: 'cancelled' });
+    } catch (error) {
+      if (mountedRef.current && activeRequestIdRef.current === requestId) {
+        setSubmissionError(errorMessage(error));
+      }
+    } finally {
+      if (mountedRef.current && activeRequestIdRef.current === requestId) {
+        setLoadingOptionId(null);
+      }
+    }
+  };
+
   // ── Plan review: content in composer with max height + responsive actions ──
   if (kind === 'plan_review') {
     const {
@@ -255,10 +273,13 @@ export function AcpInteractionComposer({
     } = planOptions(request.options);
     const planBody = prompt ?? '';
     const supportsPlanFeedback = request.input?.supportsFeedback === true;
+    const supportsNativeCancel = request.input?.feedbackDelivery === 'follow_up_prompt';
+    const cancelActionId = cancelOption?.id ?? (supportsNativeCancel ? 'cancelled' : undefined);
     const firstPlanOptionId = approveOption?.id
       ?? changeOption?.id
       ?? cancelOption?.id
-      ?? additionalPlanOptions[0]?.id;
+      ?? additionalPlanOptions[0]?.id
+      ?? cancelActionId;
     const submitPlanFeedback = () => {
       if (!changeOption) return;
       const text = planFeedback.trim();
@@ -445,14 +466,19 @@ export function AcpInteractionComposer({
                   {t('agentPage.interactionPlanRequestChanges')}
                 </Button>
               ) : null}
-              {cancelOption ? (
+              {cancelActionId ? (
                 <Button
-                  ref={!expanded && firstPlanOptionId === cancelOption.id ? firstOptionRef : undefined}
+                  ref={!expanded && firstPlanOptionId === cancelActionId
+                    ? firstOptionRef
+                    : undefined}
                   className="aqbot-acp-interaction-option"
                   danger
                   disabled={submitting}
-                  loading={loadingOptionId === cancelOption.id}
-                  onClick={() => void submitOption(cancelOption.id)}
+                  loading={loadingOptionId === cancelActionId}
+                  onClick={() => {
+                    if (cancelOption) void submitOption(cancelOption.id);
+                    else void cancelInteraction();
+                  }}
                   aria-label={t('agentPage.interactionPlanCancel')}
                   style={{ height: 'auto', paddingBlock: 8, whiteSpace: 'normal' }}
                 >

@@ -98,6 +98,28 @@ describe('AcpQuestionnaireComposer', () => {
     expect(screen.getByText('Which store?')).toBeInTheDocument();
   });
 
+  it('keeps radio and checkbox focus outlines inside the clipped option viewport', () => {
+    renderQuestionnaire();
+
+    const radio = screen.getByRole('radio', { name: /SQLite/i });
+    const radioViewport = radio.closest('.ant-radio-group')?.parentElement;
+    expect(radioViewport).toHaveStyle({
+      boxSizing: 'border-box',
+      overflowY: 'auto',
+      padding: '4px',
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '下一题' }));
+
+    const checkbox = screen.getByRole('checkbox', { name: 'Frontend' });
+    const checkboxViewport = checkbox.closest('.ant-checkbox-group')?.parentElement;
+    expect(checkboxViewport).toHaveStyle({
+      boxSizing: 'border-box',
+      overflowY: 'auto',
+      padding: '4px',
+    });
+  });
+
   it('renders a normalized Codex enum without inventing an Other answer', async () => {
     const onSubmit = vi.fn(async () => undefined);
     renderQuestionnaire({
