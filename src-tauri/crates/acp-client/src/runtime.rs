@@ -2077,8 +2077,60 @@ async fn wait_until_ready(mut ready: watch::Receiver<ReadyState>) -> anyhow::Res
     .map_err(|_| anyhow::anyhow!("agent initialize timed out"))?
 }
 
+fn nested_agent_error_data(raw: &str) -> Option<String> {
+    fn strip_dependency_wrappers(value: serde_json::Value) -> (serde_json::Value, bool) {
+        match value {
+            serde_json::Value::Object(mut object)
+                if object
+                    .get("spawned_at")
+                    .is_some_and(|value| value.is_string())
+                    && object.contains_key("data") =>
+            {
+                let data = object.remove("data").expect("checked data field");
+                let (data, _) = strip_dependency_wrappers(data);
+                (data, true)
+            }
+            serde_json::Value::Object(object) => {
+                let mut found_wrapper = false;
+                let mut sanitized = serde_json::Map::new();
+                for (key, value) in object {
+                    let (value, found) = strip_dependency_wrappers(value);
+                    found_wrapper |= found;
+                    sanitized.insert(key, value);
+                }
+                (serde_json::Value::Object(sanitized), found_wrapper)
+            }
+            serde_json::Value::Array(values) => {
+                let mut found_wrapper = false;
+                let values = values
+                    .into_iter()
+                    .map(|value| {
+                        let (value, found) = strip_dependency_wrappers(value);
+                        found_wrapper |= found;
+                        value
+                    })
+                    .collect();
+                (serde_json::Value::Array(values), found_wrapper)
+            }
+            value => (value, false),
+        }
+    }
+
+    let value = serde_json::from_str::<serde_json::Value>(&raw[raw.find('{')?..]).ok()?;
+    let (value, found_wrapper) = strip_dependency_wrappers(value);
+    if !found_wrapper {
+        return None;
+    }
+    match value {
+        serde_json::Value::String(data) => Some(data),
+        value => serde_json::to_string(&value).ok(),
+    }
+}
+
 /// Pull a human-readable reason out of agent-client-protocol / npm spawn errors.
-fn summarize_agent_spawn_error(raw: &str) -> String {
+fn summarize_agent_spawn_error(raw: &str, command: &str) -> String {
+    let nested = nested_agent_error_data(raw);
+    let raw = nested.as_deref().unwrap_or(raw);
     // Prefer the nested "data": "Process exited … npm error …" payload when present.
     if let Some(idx) = raw.find("npm error") {
         let slice = &raw[idx..];
@@ -2098,13 +2150,41 @@ fn summarize_agent_spawn_error(raw: &str) -> String {
         return raw[idx..].chars().take(400).collect();
     }
     let trimmed = raw.trim();
-    if trimmed.len() > 400 {
-        format!("{}…", &trimmed[..400])
+    let lowercase = trimmed.to_ascii_lowercase();
+    if lowercase.contains("os error 2")
+        || lowercase.contains("no such file or directory")
+        || lowercase.contains("cannot find the file specified")
+    {
+        return format!("failed to start `{command}`: {trimmed}");
+    }
+    if trimmed.chars().count() > 400 {
+        format!("{}…", trimmed.chars().take(400).collect::<String>())
     } else if trimmed.is_empty() {
         "unknown error".into()
     } else {
         trimmed.to_string()
     }
+}
+
+fn configured_agent_for_process_with_path(
+    agent: &ConfiguredAgent,
+    shell_path: &str,
+) -> ConfiguredAgent {
+    let mut configured = agent.clone();
+    crate::shell_path::inject_shell_path(&mut configured.env, shell_path);
+    configured
+}
+
+fn configured_agent_for_process(agent: &ConfiguredAgent) -> ConfiguredAgent {
+    configured_agent_for_process_with_path(agent, crate::shell_path::get_shell_path())
+}
+
+fn build_acp_agent(agent: &ConfiguredAgent) -> AcpAgent {
+    AcpAgent::new(
+        AcpAgentConfig::new(&agent.command)
+            .args(agent.args.clone())
+            .envs(agent.env.clone()),
+    )
 }
 
 fn spawn_process_anchor(
@@ -2113,18 +2193,16 @@ fn spawn_process_anchor(
     limits: RuntimeLimits,
     permissions: PermissionMap,
 ) -> anyhow::Result<LiveSession> {
-    let acp_agent = AcpAgent::new(
-        AcpAgentConfig::new(&agent.command)
-            .args(agent.args.clone())
-            .envs(agent.env.clone()),
-    );
+    let process_agent = configured_agent_for_process(agent);
+    let acp_agent = build_acp_agent(&process_agent);
 
     let (keepalive_tx, mut keepalive_rx) = mpsc::unbounded_channel::<PromptJob>();
     let (ready_tx, ready_rx) = watch::channel(ReadyState::Starting);
     let (discovery_tx, discovery_rx) = watch::channel(false);
     let agent_id = agent.id.clone();
     let agent_name = agent.name.clone();
-    let agent_for_discovery = agent.clone();
+    let agent_command = agent.command.clone();
+    let agent_for_discovery = process_agent;
     let event_slot: EventTxSlot = Arc::new(Mutex::new(None));
     let connection: ConnectionSlot = Arc::new(Mutex::new(None));
     let metadata: Arc<Mutex<Option<AgentMetadata>>> = Arc::new(Mutex::new(None));
@@ -2426,7 +2504,7 @@ fn spawn_process_anchor(
 
         process_shutdown_worker.store(true, Ordering::Release);
         if let Err(e) = connect_result {
-            let detail = summarize_agent_spawn_error(&e.to_string());
+            let detail = summarize_agent_spawn_error(&e.to_string(), &agent_command);
             tracing::warn!(
                 error = %e,
                 agent = %agent_name,
@@ -5500,6 +5578,127 @@ mod tests {
         assert_eq!(value["outcome"], "selected");
         assert_eq!(value["selectedOptionId"], "allow-once");
         assert!(value.get("raw").is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn login_shell_path_reaches_a_bare_acp_process_command() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory =
+            std::env::temp_dir().join(format!("aqbot-acp-shell-path-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).expect("create fake Agent bin directory");
+        let command = format!("aqbot-path-agent-{}", uuid::Uuid::new_v4());
+        let executable = directory.join(&command);
+        std::fs::write(&executable, "#!/bin/sh\nexit 0\n").expect("write fake Agent");
+        let mut permissions = std::fs::metadata(&executable)
+            .expect("read fake Agent permissions")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).expect("make fake Agent executable");
+        let agent = ConfiguredAgent {
+            id: "path-agent".into(),
+            name: "PATH Agent".into(),
+            enabled: true,
+            source: "custom".into(),
+            command,
+            args: Vec::new(),
+            env: HashMap::new(),
+            icon: None,
+            sort: 0,
+        };
+        let process_agent =
+            configured_agent_for_process_with_path(&agent, directory.to_string_lossy().as_ref());
+
+        let (_, _, _, mut child) = build_acp_agent(&process_agent)
+            .spawn_process()
+            .expect("login-shell PATH must resolve the bare Agent command");
+        let status = child.status().await.expect("wait for fake Agent");
+
+        std::fs::remove_dir_all(&directory).expect("remove fake Agent directory");
+        assert!(status.success());
+        assert!(agent.env.is_empty(), "runtime PATH must not be persisted");
+    }
+
+    #[test]
+    fn structured_dependency_errors_are_sanitized_without_unwrapping_business_data() {
+        let raw = concat!(
+            "Internal error: ",
+            r#"{"spawned_at":"/Users/runner/.cargo/registry/src/agent-client-protocol/src/jsonrpc.rs:1732:39","data":{"kind":"spawn","data":"missing runtime"}}"#
+        );
+
+        let error = summarize_agent_spawn_error(raw, "npx");
+
+        assert!(
+            error.contains(r#""kind":"spawn""#),
+            "missing structured data: {error}"
+        );
+        assert!(
+            error.contains(r#""data":"missing runtime""#),
+            "ordinary data field was unwrapped: {error}"
+        );
+        assert!(
+            !error.contains("spawned_at")
+                && !error.contains("/Users/runner")
+                && !error.contains("jsonrpc.rs"),
+            "dependency build path leaked into the user-facing error: {error}"
+        );
+    }
+
+    #[test]
+    fn null_dependency_error_data_does_not_leak_its_spawn_location() {
+        let raw = concat!(
+            "Internal error: ",
+            r#"{"spawned_at":"/Users/runner/.cargo/registry/src/agent-client-protocol/src/jsonrpc.rs:1732:39","data":null}"#
+        );
+
+        let error = summarize_agent_spawn_error(raw, "npx");
+
+        assert_eq!(error, "null");
+        assert!(!error.contains("spawned_at") && !error.contains("/Users/runner"));
+    }
+
+    #[test]
+    fn ordinary_json_data_is_not_treated_as_a_dependency_wrapper() {
+        let raw = r#"Internal error: {"data":"business reason","code":42}"#;
+
+        let error = summarize_agent_spawn_error(raw, "npx");
+
+        assert!(error.contains(r#""data":"business reason""#));
+        assert!(error.contains(r#""code":42"#));
+    }
+
+    #[tokio::test]
+    async fn missing_agent_executable_reports_the_command_without_dependency_source_paths() {
+        let runtime = AcpRuntime::new();
+        let command = format!("aqbot-missing-acp-agent-{}", uuid::Uuid::new_v4());
+        let agent = ConfiguredAgent {
+            id: "missing-agent".into(),
+            name: "Missing Agent".into(),
+            enabled: true,
+            source: "custom".into(),
+            command: command.clone(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            icon: None,
+            sort: 0,
+        };
+
+        let error = runtime
+            .prewarm_agent(&agent, false, RuntimeLimits::new(60, 1))
+            .await
+            .expect_err("a missing ACP executable must fail startup")
+            .to_string();
+
+        assert!(error.contains(&command), "missing launch command: {error}");
+        assert!(
+            error.to_ascii_lowercase().contains("os error 2"),
+            "missing operating-system reason: {error}"
+        );
+        assert!(
+            !error.contains("agent-client-protocol") && !error.contains("jsonrpc.rs"),
+            "dependency build path leaked into the user-facing error: {error}"
+        );
     }
 
     #[tokio::test]

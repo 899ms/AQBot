@@ -9,6 +9,7 @@ pub mod paths;
 pub mod proxy;
 pub mod registry;
 pub mod runtime;
+mod shell_path;
 pub mod types;
 
 pub use config::{AcpAgentsFile, AcpGeneralConfig, ConfiguredAgent};

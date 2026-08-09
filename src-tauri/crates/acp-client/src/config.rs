@@ -442,10 +442,13 @@ pub fn remove_agent(file: &mut AcpAgentsFile, agent_id: &str) -> bool {
 /// Lightweight availability probe (does not start full ACP session).
 pub fn probe_agent(agent: &ConfiguredAgent) -> AgentProbeResult {
     let cmd_display = format!("{} {}", agent.command, agent.args.join(" "));
-    // Check command exists on PATH
+    let mut process_env = agent.env.clone();
+    crate::shell_path::inject_shell_path(&mut process_env, crate::shell_path::get_shell_path());
+    // Check the command against the same runtime PATH used for ACP processes.
     let which = if cfg!(windows) { "where" } else { "which" };
     let available = Command::new(which)
         .arg(&agent.command)
+        .envs(process_env)
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false);
