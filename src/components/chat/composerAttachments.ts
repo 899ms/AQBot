@@ -157,6 +157,18 @@ export function useComposerAttachments({
       return unique.length > 0 ? [...previous, ...unique] : previous;
     });
   }, [acceptFile, enabled, onRejected]);
+  const nativeDropCallbacksRef = useRef({
+    acceptFile,
+    addFiles,
+    onReadError,
+    onRejected,
+  });
+  nativeDropCallbacksRef.current = {
+    acceptFile,
+    addFiles,
+    onReadError,
+    onRejected,
+  };
 
   const removeAttachment = useCallback((id: string) => {
     setAttachments((previous) => {
@@ -230,47 +242,56 @@ export function useComposerAttachments({
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     void import('@tauri-apps/api/webview')
-      .then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent(async (event) => {
-        if (cancelled) return;
-        if (event.payload.type === 'enter') {
-          setIsDragging(true);
-          return;
-        }
-        if (event.payload.type === 'leave') {
+      .then(({ getCurrentWebview }) => {
+        if (cancelled) return undefined;
+        return getCurrentWebview().onDragDropEvent(async (event) => {
+          if (cancelled) return;
+          if (event.payload.type === 'enter') {
+            setIsDragging(true);
+            return;
+          }
+          if (event.payload.type === 'leave') {
+            htmlDragDepthRef.current = 0;
+            setIsDragging(false);
+            return;
+          }
+          if (event.payload.type !== 'drop') return;
           htmlDragDepthRef.current = 0;
           setIsDragging(false);
-          return;
-        }
-        if (event.payload.type !== 'drop') return;
-        htmlDragDepthRef.current = 0;
-        setIsDragging(false);
-        const files: File[] = [];
-        const rejected: File[] = [];
-        for (const filePath of event.payload.paths) {
-          const descriptor = nativePathFileDescriptor(filePath);
-          if (!acceptFile(descriptor)) {
-            rejected.push(descriptor);
-            continue;
+          const files: File[] = [];
+          const rejected: File[] = [];
+          for (const filePath of event.payload.paths) {
+            const descriptor = nativePathFileDescriptor(filePath);
+            if (!nativeDropCallbacksRef.current.acceptFile(descriptor)) {
+              rejected.push(descriptor);
+              continue;
+            }
+            try {
+              files.push(await nativePathToFile(filePath, descriptor));
+            } catch (error) {
+              if (!cancelled) nativeDropCallbacksRef.current.onReadError?.(filePath, error);
+            }
           }
-          try {
-            files.push(await nativePathToFile(filePath, descriptor));
-          } catch (error) {
-            onReadError?.(filePath, error);
-          }
-        }
-        if (rejected.length > 0) onRejected?.(rejected);
-        if (!cancelled) addFiles(files);
-      }))
+          if (cancelled) return;
+          if (rejected.length > 0) nativeDropCallbacksRef.current.onRejected?.(rejected);
+          nativeDropCallbacksRef.current.addFiles(files);
+        });
+      })
       .then((nextUnlisten) => {
+        if (!nextUnlisten) return;
         if (cancelled) nextUnlisten();
         else unlisten = nextUnlisten;
       })
-      .catch((error) => onReadError?.('', error));
+      .catch((error) => {
+        if (!cancelled) {
+          console.error('[composer attachments] Failed to register native drag-and-drop listener:', error);
+        }
+      });
     return () => {
       cancelled = true;
       unlisten?.();
     };
-  }, [addFiles, enabled, onReadError]);
+  }, [enabled]);
 
   const handleDragEnter = useCallback((event: DragEvent) => {
     if (!enabled || !event.dataTransfer.types.includes('Files')) return;

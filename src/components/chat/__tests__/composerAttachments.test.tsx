@@ -276,6 +276,144 @@ describe('composerAttachments', () => {
     Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
   });
 
+  it('does not report native listener setup failures as attachment read failures', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let rejectSetup: ((error: Error) => void) | undefined;
+    tauriMocks.onDragDropEvent.mockImplementation(() => new Promise((_, reject) => {
+      rejectSetup = reject;
+    }));
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {},
+    });
+    const onReadError = vi.fn();
+    const { unmount } = renderHook(() => useComposerAttachments({
+      acceptFile: () => true,
+      onReadError,
+    }));
+
+    await waitFor(() => expect(rejectSetup).toBeDefined());
+    const setupError = new Error('native listener setup failed');
+    await act(async () => {
+      rejectSetup?.(setupError);
+      await Promise.resolve();
+    });
+
+    expect(onReadError).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(
+      '[composer attachments] Failed to register native drag-and-drop listener:',
+      setupError,
+    );
+    unmount();
+    consoleError.mockRestore();
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
+  });
+
+  it('does not register a native listener after setup is superseded', async () => {
+    const unlisten = vi.fn();
+    tauriMocks.onDragDropEvent.mockResolvedValue(unlisten);
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {},
+    });
+    const { rerender, unmount } = renderHook(
+      ({ enabled }) => useComposerAttachments({
+        acceptFile: () => true,
+        enabled,
+      }),
+      { initialProps: { enabled: true } },
+    );
+    rerender({ enabled: false });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(tauriMocks.onDragDropEvent).not.toHaveBeenCalled();
+    unmount();
+    expect(unlisten).not.toHaveBeenCalled();
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
+  });
+
+  it('reports native file read failures with the concrete path', async () => {
+    let listener: ((event: { payload: { type: string; paths: string[] } }) => Promise<void>)
+      | undefined;
+    tauriMocks.onDragDropEvent.mockImplementation(async (nextListener) => {
+      listener = nextListener;
+      return vi.fn();
+    });
+    const readError = new Error('native file read failed');
+    tauriMocks.readFile.mockRejectedValue(readError);
+    tauriMocks.stat.mockResolvedValue({ mtime: null, size: 0 });
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {},
+    });
+    const onReadError = vi.fn();
+    const { unmount } = renderHook(() => useComposerAttachments({
+      acceptFile: () => true,
+      onReadError,
+    }));
+
+    await waitFor(() => expect(listener).toBeDefined());
+    await act(async () => {
+      await listener?.({ payload: { type: 'drop', paths: ['/tmp/broken.md'] } });
+    });
+
+    expect(onReadError).toHaveBeenCalledWith('/tmp/broken.md', readError);
+    unmount();
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
+  });
+
+  it('keeps one native listener when attachment policy callbacks change', async () => {
+    let listener: ((event: { payload: { type: string; paths: string[] } }) => Promise<void>)
+      | undefined;
+    const unlisten = vi.fn();
+    tauriMocks.onDragDropEvent.mockImplementation(async (nextListener) => {
+      listener = nextListener;
+      return unlisten;
+    });
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {},
+    });
+    const initialOnRejected = vi.fn();
+    const latestOnRejected = vi.fn();
+    const { rerender, unmount } = renderHook(
+      ({ acceptFile, onReadError, onRejected }) => useComposerAttachments({
+        acceptFile,
+        onReadError,
+        onRejected,
+      }),
+      {
+        initialProps: {
+          acceptFile: (_file: File) => true,
+          onReadError: (_filePath: string, _error: unknown) => undefined,
+          onRejected: initialOnRejected,
+        },
+      },
+    );
+
+    await waitFor(() => expect(listener).toBeDefined());
+    rerender({
+      acceptFile: (_file: File) => false,
+      onReadError: (_filePath: string, _error: unknown) => undefined,
+      onRejected: latestOnRejected,
+    });
+    await act(async () => {
+      await listener?.({ payload: { type: 'drop', paths: ['/tmp/rejected.txt'] } });
+    });
+
+    expect(unlisten).not.toHaveBeenCalled();
+    expect(tauriMocks.onDragDropEvent).toHaveBeenCalledOnce();
+    expect(initialOnRejected).not.toHaveBeenCalled();
+    expect(latestOnRejected).toHaveBeenCalledOnce();
+    expect(tauriMocks.readFile).not.toHaveBeenCalled();
+    unmount();
+    expect(unlisten).toHaveBeenCalledOnce();
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
+  });
+
   it('rejects a native image path before reading it when image input is unavailable', async () => {
     let listener: ((event: { payload: { type: string; paths: string[] } }) => Promise<void>)
       | undefined;
