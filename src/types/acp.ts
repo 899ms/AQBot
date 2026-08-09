@@ -47,6 +47,7 @@ export interface AcpProject {
   id: string;
   name: string;
   root_path: string;
+  kind: 'project' | 'recent';
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -67,6 +68,11 @@ export interface AcpThread {
   sort_order: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface AcpRecentThreadReceipt {
+  project: AcpProject;
+  thread: AcpThread;
 }
 
 export interface AcpMessage {

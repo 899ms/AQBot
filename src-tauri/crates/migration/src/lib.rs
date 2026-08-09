@@ -47,6 +47,7 @@ mod m20260809_000001_add_model_aliases_and_auto_route;
 mod m20260810_000001_add_acp_tables;
 mod m20260811_000001_acp_project_sort_order;
 mod m20260812_000001_acp_thread_pin_sort;
+mod m20260813_000001_acp_project_kind;
 
 pub struct Migrator;
 
@@ -101,6 +102,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260810_000001_add_acp_tables::Migration),
             Box::new(m20260811_000001_acp_project_sort_order::Migration),
             Box::new(m20260812_000001_acp_thread_pin_sort::Migration),
+            Box::new(m20260813_000001_acp_project_kind::Migration),
         ]
     }
 }

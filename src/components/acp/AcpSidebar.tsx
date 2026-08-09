@@ -12,6 +12,8 @@ import {
 import Conversations from '@ant-design/x/es/conversations';
 import type { ConversationItemType } from '@ant-design/x/es/conversations/interface';
 import {
+  ChevronDown,
+  ChevronRight,
   Copy,
   FolderOpen,
   FolderPlus,
@@ -21,6 +23,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Plus,
   Search,
   Settings,
   Trash2,
@@ -393,6 +396,10 @@ export function AcpSidebar() {
   const [searchOpen, setSearchOpen] = useState(false);
   /** expandedKeys use `proj:{id}` like chat uses `cat:{id}` */
   const [expandedKeys, setExpandedKeys] = useState<string[]>([]);
+  const [expandedSections, setExpandedSections] = useState({
+    projects: true,
+    recent: true,
+  });
   const [settingsProject, setSettingsProject] = useState<AcpProject | null>(null);
   const [rightClickedThreadId, setRightClickedThreadId] = useState<string | null>(null);
   const menuActionRef = useRef(false);
@@ -450,10 +457,20 @@ export function AcpSidebar() {
     [activeProjectId, threads, allThreads],
   );
 
+  const projectById = useMemo(
+    () => new Map(projects.map((p) => [p.id, p])),
+    [projects],
+  );
+
+  const userProjects = useMemo(
+    () => projects.filter((project) => project.kind !== 'recent'),
+    [projects],
+  );
+
   const filteredProjects = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return projects;
-    return projects.filter((p) => {
+    if (!q) return userProjects;
+    return userProjects.filter((p) => {
       if (p.name.toLowerCase().includes(q) || p.root_path.toLowerCase().includes(q)) return true;
       return threadsForProject(p.id).some(
         (th) =>
@@ -462,12 +479,21 @@ export function AcpSidebar() {
           || agentName(th.agent_id).toLowerCase().includes(q),
       );
     });
-  }, [projects, query, threadsForProject, agentName]);
+  }, [userProjects, query, threadsForProject, agentName]);
 
-  const projectById = useMemo(
-    () => new Map(projects.map((p) => [p.id, p])),
-    [projects],
-  );
+  const filteredRecentThreads = useMemo(() => {
+    const recentProjectIds = new Set(
+      projects.filter((project) => project.kind === 'recent').map((project) => project.id),
+    );
+    const q = query.trim().toLowerCase();
+    return allThreads.filter((thread) => {
+      if (!recentProjectIds.has(thread.project_id)) return false;
+      if (!q) return true;
+      return thread.title.toLowerCase().includes(q)
+        || thread.agent_id.toLowerCase().includes(q)
+        || agentName(thread.agent_id).toLowerCase().includes(q);
+    });
+  }, [projects, allThreads, query, agentName]);
 
   const parseDragId = useCallback((raw: string | number) => {
     const id = String(raw);
@@ -483,7 +509,7 @@ export function AcpSidebar() {
       if (parsed.type === 'project') {
         setActiveDragProjectId(parsed.id);
         setActiveDragThread(null);
-        dragInitialProjectOrderRef.current = projects.map((p) => p.id);
+        dragInitialProjectOrderRef.current = userProjects.map((p) => p.id);
         dragInitialThreadOrderRef.current = null;
         return;
       }
@@ -499,7 +525,7 @@ export function AcpSidebar() {
       }
       dragInitialProjectOrderRef.current = [];
     },
-    [projects, allThreads, threads, threadsForProject, parseDragId],
+    [userProjects, allThreads, threads, threadsForProject, parseDragId],
   );
 
   const handleSidebarDragOver = useCallback(
@@ -511,21 +537,23 @@ export function AcpSidebar() {
       if (activeParsed.type !== overParsed.type) return;
 
       if (activeParsed.type === 'project') {
-        const ids = projects.map((p) => p.id);
+        const ids = userProjects.map((p) => p.id);
         const oldIndex = ids.indexOf(activeParsed.id);
         const newIndex = ids.indexOf(overParsed.id);
         if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return;
         const newIds = [...ids];
         newIds.splice(oldIndex, 1);
         newIds.splice(newIndex, 0, activeParsed.id);
-        setProjectsOrder(
-          newIds
+        const reorderedProjects = newIds
             .map((id, i) => {
-              const p = projects.find((x) => x.id === id);
+              const p = userProjects.find((x) => x.id === id);
               return p ? { ...p, sort_order: i } : null;
             })
-            .filter(Boolean) as AcpProject[],
-        );
+            .filter(Boolean) as AcpProject[];
+        setProjectsOrder([
+          ...reorderedProjects,
+          ...projects.filter((project) => project.kind === 'recent'),
+        ]);
         return;
       }
 
@@ -558,6 +586,7 @@ export function AcpSidebar() {
     },
     [
       projects,
+      userProjects,
       setProjectsOrder,
       allThreads,
       threads,
@@ -571,7 +600,9 @@ export function AcpSidebar() {
     (_event: DragEndEvent) => {
       if (activeDragProjectId) {
         setActiveDragProjectId(null);
-        const ids = useAcpStore.getState().projects.map((p) => p.id);
+        const ids = useAcpStore.getState().projects
+          .filter((project) => project.kind !== 'recent')
+          .map((project) => project.id);
         void reorderProjects(ids);
       }
       if (activeDragThread) {
@@ -603,12 +634,15 @@ export function AcpSidebar() {
     if (initialProjects.length > 0) {
       const current = useAcpStore.getState().projects;
       setProjectsOrder(
-        initialProjects
+        [
+          ...initialProjects
           .map((id, i) => {
             const p = current.find((x) => x.id === id);
             return p ? { ...p, sort_order: i } : null;
           })
           .filter(Boolean) as AcpProject[],
+          ...current.filter((project) => project.kind === 'recent'),
+        ],
       );
     }
     const initialThreads = dragInitialThreadOrderRef.current;
@@ -815,8 +849,13 @@ export function AcpSidebar() {
     setActivePage('settings');
   };
 
+  const handleNewRecentThread = () => {
+    void selectProject(null);
+    window.dispatchEvent(new Event('aqbot:reset-agent-draft'));
+  };
+
   // ── Conversations items — same shape as ChatSidebar getConversationItem ──
-  const conversationItems: ConversationItemType[] = useMemo(() => {
+  const projectConversationItems: ConversationItemType[] = useMemo(() => {
     const items: ConversationItemType[] = [];
     const q = query.trim().toLowerCase();
 
@@ -849,13 +888,12 @@ export function AcpSidebar() {
           key: `__empty_${project.id}`,
           group,
           label: (
-            <span style={{ color: token.colorTextQuaternary, fontSize: 12, fontStyle: 'italic' }}>
+            <span style={{ color: token.colorTextQuaternary, fontSize: 12 }}>
               {t('agentPage.emptyProjectThreads', '暂无对话')}
             </span>
           ),
           icon: null,
-          disabled: true,
-          style: { pointerEvents: 'none', minHeight: 28, opacity: 0.6 },
+          style: { pointerEvents: 'none', minHeight: 28 },
         });
         continue;
       }
@@ -880,6 +918,7 @@ export function AcpSidebar() {
         } as ConversationItemType);
       }
     }
+
     return items;
   }, [
     filteredProjects,
@@ -891,6 +930,32 @@ export function AcpSidebar() {
     runningByThread,
     token.colorTextQuaternary,
     t,
+  ]);
+
+  const recentConversationItems: ConversationItemType[] = useMemo(() => {
+    const items: ConversationItemType[] = [];
+    for (const thread of filteredRecentThreads) {
+      items.push({
+        key: thread.id,
+        icon: (
+          <ThreadListIcon
+            agentId={thread.agent_id}
+            agentName={agentName(thread.agent_id)}
+            agentIcon={agentIcon(thread.agent_id)}
+            isStreaming={!!runningByThread[thread.id]}
+            size={20}
+          />
+        ),
+        label: <ThreadTitleText title={thread.title} />,
+        'data-conv-id': thread.id,
+      } as ConversationItemType);
+    }
+    return items;
+  }, [
+    agentName,
+    agentIcon,
+    runningByThread,
+    filteredRecentThreads,
   ]);
 
   const renderGroupLabel = useCallback(
@@ -1065,8 +1130,8 @@ export function AcpSidebar() {
               icon={<MessageSquarePlus size={16} />}
               size="small"
               aria-label={t('agentPage.newThread')}
-              disabled={!activeProjectId || agents.length === 0}
-              onClick={() => activeProjectId && void handleNewThreadInProject(activeProjectId)}
+              disabled={agents.length === 0}
+              onClick={handleNewRecentThread}
             />
           </Tooltip>
         </div>
@@ -1112,17 +1177,6 @@ export function AcpSidebar() {
             >
               <Button type="primary" size="small" onClick={openSettings}>
                 {t('agentPage.openSettings')}
-              </Button>
-            </Empty>
-          </div>
-        ) : filteredProjects.length === 0 ? (
-          <div className="flex items-center justify-center h-full">
-            <Empty
-              image={Empty.PRESENTED_IMAGE_SIMPLE}
-              description={t('agentPage.noProjects')}
-            >
-              <Button type="primary" size="small" onClick={() => void handleAddProject()}>
-                {t('agentPage.addProject')}
               </Button>
             </Empty>
           </div>
@@ -1237,13 +1291,146 @@ export function AcpSidebar() {
               onDragEnd={handleSidebarDragEnd}
               onDragCancel={handleSidebarDragCancel}
             >
-              <Conversations
-                items={conversationItems}
-                activeKey={activeThreadId ?? undefined}
-                onActiveChange={handleActiveChange}
-                groupable={groupableConfig}
-                menu={menuFactory}
-              />
+              <div
+                style={{
+                  alignItems: 'center',
+                  color: token.colorTextSecondary,
+                  display: 'flex',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  padding: '6px 8px 2px 12px',
+                  width: '100%',
+                }}
+              >
+                <button
+                  type="button"
+                  aria-expanded={expandedSections.projects}
+                  onClick={() => setExpandedSections((current) => ({
+                    ...current,
+                    projects: !current.projects,
+                  }))}
+                  style={{
+                    alignItems: 'center',
+                    background: 'transparent',
+                    border: 0,
+                    color: 'inherit',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flex: 1,
+                    font: 'inherit',
+                    fontWeight: 'inherit',
+                    gap: 4,
+                    minWidth: 0,
+                    padding: '2px 0',
+                    textAlign: 'left',
+                  }}
+                >
+                  {expandedSections.projects
+                    ? <ChevronDown size={14} />
+                    : <ChevronRight size={14} />}
+                  <span>{t('agentPage.projects', '项目')}</span>
+                </button>
+                <Tooltip title={t('agentPage.addProject')}>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<Plus size={14} />}
+                    aria-label={t('agentPage.addProject')}
+                    onClick={() => void handleAddProject()}
+                  />
+                </Tooltip>
+              </div>
+              {expandedSections.projects ? (
+                projectConversationItems.length > 0 ? (
+                  <Conversations
+                    items={projectConversationItems}
+                    activeKey={activeThreadId ?? undefined}
+                    onActiveChange={handleActiveChange}
+                    groupable={groupableConfig}
+                    menu={menuFactory}
+                  />
+                ) : userProjects.length === 0 && !query.trim() ? (
+                  <div
+                    style={{
+                      color: token.colorTextQuaternary,
+                      fontSize: 12,
+                      padding: '6px 30px 10px',
+                    }}
+                  >
+                    {t('agentPage.emptyProjects', '当前没有任何项目')}
+                  </div>
+                ) : null
+              ) : null}
+
+              <div
+                style={{
+                  alignItems: 'center',
+                  color: token.colorTextSecondary,
+                  display: 'flex',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  padding: '6px 8px 2px 12px',
+                  width: '100%',
+                }}
+              >
+                <button
+                  type="button"
+                  aria-expanded={expandedSections.recent}
+                  onClick={() => setExpandedSections((current) => ({
+                    ...current,
+                    recent: !current.recent,
+                  }))}
+                  style={{
+                    alignItems: 'center',
+                    background: 'transparent',
+                    border: 0,
+                    color: 'inherit',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    flex: 1,
+                    font: 'inherit',
+                    fontWeight: 'inherit',
+                    gap: 4,
+                    minWidth: 0,
+                    padding: '2px 0',
+                    textAlign: 'left',
+                  }}
+                >
+                  {expandedSections.recent
+                    ? <ChevronDown size={14} />
+                    : <ChevronRight size={14} />}
+                  <span>{t('agentPage.recent', '最近')}</span>
+                </button>
+                <Tooltip title={t('agentPage.newThread')}>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<Plus size={14} />}
+                    aria-label={t('agentPage.newThread')}
+                    onClick={handleNewRecentThread}
+                  />
+                </Tooltip>
+              </div>
+              {expandedSections.recent ? (
+                recentConversationItems.length > 0 ? (
+                  <Conversations
+                    items={recentConversationItems}
+                    activeKey={activeThreadId ?? undefined}
+                    onActiveChange={handleActiveChange}
+                    menu={menuFactory}
+                  />
+                ) : !query.trim() ? (
+                  <div
+                    style={{
+                      color: token.colorTextQuaternary,
+                      fontSize: 12,
+                      padding: '6px 30px 10px',
+                    }}
+                  >
+                    {t('agentPage.emptyRecentThreads', '暂无最近对话')}
+                  </div>
+                ) : null
+              ) : null}
               <DragOverlay>
                 {activeDragProjectId
                   ? (() => {

@@ -69,13 +69,22 @@ fn agent_workspace_root(settings: &AppSettings) -> PathBuf {
         .unwrap_or_else(|| crate::paths::aqbot_home().join("workspace"))
 }
 
+#[cfg(test)]
 fn agent_workspace_dir_name(
     conv: &aqbot_core::types::Conversation,
     settings: &AppSettings,
 ) -> String {
+    agent_workspace_dir_name_for(&conv.id, conv.created_at, settings)
+}
+
+fn agent_workspace_dir_name_for(
+    conversation_id: &str,
+    created_at: i64,
+    settings: &AppSettings,
+) -> String {
     let raw = match settings.agent_workspace_name_strategy.as_str() {
-        "conversation_id" | "uuid" => conv.id.clone(),
-        "created_timestamp" => conv.created_at.to_string(),
+        "conversation_id" | "uuid" => conversation_id.to_string(),
+        "created_timestamp" => created_at.to_string(),
         "created_datetime" => {
             let format = settings
                 .agent_workspace_datetime_format
@@ -83,9 +92,9 @@ fn agent_workspace_dir_name(
                 .map(str::trim)
                 .filter(|format| !format.is_empty())
                 .unwrap_or(DEFAULT_AGENT_WORKSPACE_DATETIME_FORMAT);
-            format_agent_workspace_datetime(conv.created_at, format)
+            format_agent_workspace_datetime(created_at, format)
         }
-        _ => conv.id.clone(),
+        _ => conversation_id.to_string(),
     };
 
     sanitize_workspace_dir_name(&raw)
@@ -168,14 +177,22 @@ fn resolve_agent_workspace_dir(
     settings: &AppSettings,
     conv: &aqbot_core::types::Conversation,
 ) -> PathBuf {
+    resolve_agent_workspace_dir_for(settings, &conv.id, conv.created_at)
+}
+
+pub(crate) fn resolve_agent_workspace_dir_for(
+    settings: &AppSettings,
+    conversation_id: &str,
+    created_at: i64,
+) -> PathBuf {
     let root = agent_workspace_root(settings);
-    let base_name = agent_workspace_dir_name(conv, settings);
+    let base_name = agent_workspace_dir_name_for(conversation_id, created_at, settings);
     let first = root.join(&base_name);
     if !first.exists() {
         return first;
     }
 
-    let id_suffix = short_conversation_id(&conv.id);
+    let id_suffix = short_conversation_id(conversation_id);
     let with_id = root.join(append_workspace_suffix(&base_name, &id_suffix));
     if !with_id.exists() {
         return with_id;

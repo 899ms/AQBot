@@ -55,6 +55,27 @@ struct PersistedAcpToolCall {
     sequence: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcpRecentThreadReceipt {
+    project: aqbot_core::entity::acp_projects::Model,
+    thread: aqbot_core::entity::acp_threads::Model,
+}
+
+fn create_recent_workspace_dir(settings: &AppSettings) -> Result<(PathBuf, String), String> {
+    let workspace_id = aqbot_core::utils::gen_id();
+    let created_at = chrono::Utc::now().timestamp();
+    let workspace_dir =
+        super::agent::resolve_agent_workspace_dir_for(settings, &workspace_id, created_at);
+    std::fs::create_dir_all(&workspace_dir)
+        .map_err(|error| format!("failed to create ACP workspace: {error}"))?;
+    let root_path = workspace_dir
+        .to_str()
+        .ok_or_else(|| "invalid ACP workspace path encoding".to_string())?
+        .to_string();
+    Ok((workspace_dir, root_path))
+}
+
 fn next_tool_sequence(
     tools: &HashMap<String, PersistedAcpToolCall>,
     tool_call_id: &str,
@@ -1076,13 +1097,76 @@ pub async fn acp_create_thread(
 }
 
 #[tauri::command]
+pub async fn acp_create_recent_thread(
+    state: State<'_, AppState>,
+    agent_id: String,
+    title: Option<String>,
+) -> Result<AcpRecentThreadReceipt, String> {
+    let file = load_agents_file().map_err(|e| e.to_string())?;
+    if !file
+        .agents
+        .iter()
+        .any(|agent| agent.id == agent_id && is_agent_enabled(agent))
+    {
+        return Err(format!("agent `{agent_id}` is not enabled"));
+    }
+
+    let mut settings = aqbot_core::repo::settings::get_settings(&state.sea_db)
+        .await
+        .map_err(|error| error.to_string())?;
+    settings.agent_workspace_root =
+        aqbot_core::path_vars::decode_path_opt(&settings.agent_workspace_root);
+
+    let (workspace_dir, root_path) = create_recent_workspace_dir(&settings)?;
+    let title = title
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "New conversation".into());
+
+    let project = match acp_repo::create_recent_workspace(&state.sea_db, &title, &root_path).await {
+        Ok(project) => project,
+        Err(error) => {
+            let _ = std::fs::remove_dir(&workspace_dir);
+            return Err(error.to_string());
+        }
+    };
+
+    match acp_repo::create_thread(&state.sea_db, &project.id, &agent_id, &title).await {
+        Ok(thread) => Ok(AcpRecentThreadReceipt { project, thread }),
+        Err(error) => {
+            let _ = acp_repo::delete_project(&state.sea_db, &project.id).await;
+            let _ = std::fs::remove_dir(&workspace_dir);
+            Err(error.to_string())
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn acp_delete_thread(
     state: State<'_, AppState>,
     thread_id: String,
 ) -> Result<(), String> {
+    let project = match acp_repo::get_thread(&state.sea_db, &thread_id)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        Some(thread) => acp_repo::get_project(&state.sea_db, &thread.project_id)
+            .await
+            .map_err(|error| error.to_string())?,
+        None => None,
+    };
     acp_repo::delete_thread(&state.sea_db, &thread_id)
         .await
         .map_err(|e| e.to_string())?;
+    if let Some(project) = project.filter(|project| project.kind == "recent") {
+        let remaining = acp_repo::list_threads_for_project(&state.sea_db, &project.id)
+            .await
+            .map_err(|error| error.to_string())?;
+        if remaining.is_empty() {
+            acp_repo::delete_project(&state.sea_db, &project.id)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+    }
     // The repository rejects running turns, so removing the now-idle process
     // cannot invalidate a ResourceLink while the agent is reading it.
     runtime().drop_session(&thread_id).await;

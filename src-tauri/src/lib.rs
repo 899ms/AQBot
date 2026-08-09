@@ -552,6 +552,7 @@ pub fn run() {
         commands::acp::acp_list_threads,
         commands::acp::acp_list_all_threads,
         commands::acp::acp_create_thread,
+        commands::acp::acp_create_recent_thread,
         commands::acp::acp_delete_thread,
         commands::acp::acp_rename_thread,
         commands::acp::acp_toggle_thread_pin,

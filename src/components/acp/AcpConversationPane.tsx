@@ -12,7 +12,6 @@ import {
   Avatar,
   Button,
   Dropdown,
-  Empty,
   Popover,
   Progress,
   Tooltip,
@@ -552,6 +551,7 @@ export function AcpConversationPane() {
   const pendingPermissions = useAcpStore((s) => s.pendingPermissions);
   const sendPrompt = useAcpStore((s) => s.sendPrompt);
   const createThread = useAcpStore((s) => s.createThread);
+  const createRecentThread = useAcpStore((s) => s.createRecentThread);
   const selectProject = useAcpStore((s) => s.selectProject);
   const prepareDraft = useAcpStore((s) => s.prepareDraft);
   const prepareSession = useAcpStore((s) => s.prepareSession);
@@ -713,11 +713,23 @@ export function AcpConversationPane() {
     handleClipboardFiles,
     dragHandlers,
   } = useComposerAttachments({
-    enabled: !!activeProjectId && !!effectiveAgentId,
+    enabled: !!effectiveAgentId,
     acceptFile: acceptAcpAttachment,
     onRejected: handleRejectedAttachments,
     onReadError: handleAttachmentReadError,
   });
+
+  useEffect(() => {
+    const resetDraft = () => {
+      setValue('');
+      setPastedSnippets([]);
+      pastedSnippetSeqRef.current = 0;
+      resetAttachments();
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    };
+    window.addEventListener('aqbot:reset-agent-draft', resetDraft);
+    return () => window.removeEventListener('aqbot:reset-agent-draft', resetDraft);
+  }, [resetAttachments]);
   const composerScopeKey = `${activeProjectId ?? ''}:${activeThreadId ?? 'draft'}:${effectiveAgentId ?? ''}`;
   const composerScopeRef = useRef(composerScopeKey);
   composerScopeRef.current = composerScopeKey;
@@ -1497,7 +1509,7 @@ export function AcpConversationPane() {
 
   const projectMenuItems = useMemo<MenuProps['items']>(
     () =>
-      projects.map((p) => ({
+      projects.filter((project) => project.kind !== 'recent').map((p) => ({
         key: p.id,
         label: (
           <span
@@ -1627,10 +1639,6 @@ export function AcpConversationPane() {
     let recoveryScopeKey = submittedScopeKey;
     const mergedContent = mergePastedSnippetsIntoContent(submittedValue, submittedSnippets);
     if ((!mergedContent && attachedFiles.length === 0) || sending || streaming) return;
-    if (!activeProjectId) {
-      messageApi.warning(t('agentPage.selectProjectFirst', '请先选择一个项目'));
-      return;
-    }
     if (!effectiveAgentId) {
       messageApi.warning(t('agentPage.noAgents'));
       return;
@@ -1663,19 +1671,33 @@ export function AcpConversationPane() {
 
       let threadId = activeThreadId;
       if (!threadId) {
-        // The effect above normally finishes this work while the user types.
-        // Only await preparation when no authoritative draft snapshot exists;
-        // otherwise a second IPC delays the first visible message for no gain.
-        if (!draftKey || !sessionByThread[draftKey]) {
-          await prepareDraft(activeProjectId, effectiveAgentId);
+        if (!activeProjectId) {
+          const thread = await createRecentThread(
+            effectiveAgentId,
+            titleSeed.slice(0, 48),
+          );
+          threadId = thread.id;
+          recoveryScopeKey = `${thread.project_id}:${thread.id}:${effectiveAgentId}`;
+          previousComposerScopeRef.current = recoveryScopeKey;
+        } else {
+          // The effect above normally finishes this work while the user types.
+          // Only await preparation when no authoritative draft snapshot exists;
+          // otherwise a second IPC delays the first visible message for no gain.
+          if (!draftKey || !sessionByThread[draftKey]) {
+            await prepareDraft(activeProjectId, effectiveAgentId);
+          }
+          // First message in project → create thread then send
+          const thread = await createThread(
+            activeProjectId,
+            effectiveAgentId,
+            titleSeed.slice(0, 48),
+          );
+          threadId = thread.id;
+          recoveryScopeKey = `${activeProjectId}:${thread.id}:${effectiveAgentId}`;
+          // Draft adoption is the one scope transition that belongs to this send.
+          // Mark it consumed so a delayed effect cannot erase a failed-send restore.
+          previousComposerScopeRef.current = recoveryScopeKey;
         }
-        // First message in project → create thread then send
-        const thread = await createThread(activeProjectId, effectiveAgentId, titleSeed.slice(0, 48));
-        threadId = thread.id;
-        recoveryScopeKey = `${activeProjectId}:${thread.id}:${effectiveAgentId}`;
-        // Draft adoption is the one scope transition that belongs to this send.
-        // Mark it consumed so a delayed effect cannot erase a failed-send restore.
-        previousComposerScopeRef.current = recoveryScopeKey;
       }
       await sendPrompt(threadId, finalContent, attachmentInputs);
       revokeComposerAttachments(submittedAttachments);
@@ -1924,7 +1946,6 @@ export function AcpConversationPane() {
     !sending
     && !streaming
     && (value.trim().length > 0 || attachedFiles.length > 0 || pastedSnippets.length > 0)
-    && !!activeProjectId
     && !!effectiveAgentId;
 
   // Codex-style project welcome prompts
@@ -1965,7 +1986,7 @@ export function AcpConversationPane() {
     [],
   );
 
-  const showProjectEmpty = !!activeProject && (!activeThread || messages.length === 0);
+  const showProjectEmpty = !activeThread || messages.length === 0;
 
   const activeModelChoice = modelOption
     ? configChoices(modelOption).find(
@@ -2262,7 +2283,7 @@ export function AcpConversationPane() {
           name="acp-prompt"
           autoComplete="off"
           rows={1}
-          disabled={sending || !activeProjectId}
+          disabled={sending}
           style={{
             width: '100%',
             border: 'none',
@@ -2289,7 +2310,7 @@ export function AcpConversationPane() {
                 size="small"
                 icon={<Paperclip size={14} />}
                 onClick={openFilePicker}
-                disabled={sending || streaming || !activeProjectId || !effectiveAgentId}
+                disabled={sending || streaming || !effectiveAgentId}
                 aria-label={t('agentPage.attachFile')}
               />
             </Tooltip>
@@ -2545,21 +2566,6 @@ export function AcpConversationPane() {
     </div>
   );
 
-  // No project selected
-  if (!activeProject) {
-    return (
-      <div
-        className="flex-1 flex items-center justify-center h-full"
-        style={{ backgroundColor: token.colorBgElevated }}
-      >
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description={t('agentPage.selectProjectFirst', '选择左侧项目开始')}
-        />
-      </div>
-    );
-  }
-
   return (
     <div
       className="flex flex-col h-full min-w-0"
@@ -2633,25 +2639,34 @@ export function AcpConversationPane() {
                     </span>
                   </button>
                 </Dropdown>
-                {' '}
-                {t('agentPage.projectWelcomeMiddle', '在')}
-                {' '}
-                <Dropdown
-                  menu={{
-                    items: projectMenuItems,
-                    selectedKeys: activeProjectId ? [activeProjectId] : [],
-                    onClick: ({ key }) => {
-                      void selectProject(key);
-                    },
-                  }}
-                  trigger={['click']}
-                >
-                  <button type="button" style={welcomeLinkStyle}>
-                    <span>{activeProject.name}</span>
-                  </button>
-                </Dropdown>
-                {' '}
-                {t('agentPage.projectWelcomeSuffix', '中做点什么？')}
+                {activeProject?.kind !== 'recent' && activeProject ? (
+                  <>
+                    {' '}
+                    {t('agentPage.projectWelcomeMiddle', '在')}
+                    {' '}
+                    <Dropdown
+                      menu={{
+                        items: projectMenuItems,
+                        selectedKeys: activeProjectId ? [activeProjectId] : [],
+                        onClick: ({ key }) => {
+                          void selectProject(key);
+                        },
+                      }}
+                      trigger={['click']}
+                    >
+                      <button type="button" style={welcomeLinkStyle}>
+                        <span>{activeProject.name}</span>
+                      </button>
+                    </Dropdown>
+                    {' '}
+                    {t('agentPage.projectWelcomeSuffix', '中做点什么？')}
+                  </>
+                ) : (
+                  <>
+                    {' '}
+                    {t('agentPage.recentWelcomeSuffix', '做点什么？')}
+                  </>
+                )}
               </Title>
               <Prompts
                 items={projectPromptItems}

@@ -260,6 +260,7 @@ describe('AcpConversationPane', () => {
           id: 'project-1',
           name: 'AQBot',
           root_path: '/tmp/aqbot',
+          kind: 'project',
           sort_order: 0,
           created_at: '2026-08-08T00:00:00Z',
           updated_at: '2026-08-08T00:00:00Z',
@@ -1780,6 +1781,89 @@ describe('AcpConversationPane', () => {
       );
     });
     expect(invokeMock).not.toHaveBeenCalledWith('acp_prepare_draft', expect.anything());
+  });
+
+  it('creates a recent workspace when sending without a selected project', async () => {
+    const recentProject = {
+      id: 'recent-project',
+      name: 'hello anywhere',
+      root_path: '/tmp/aqbot-workspace/recent-project',
+      kind: 'recent' as const,
+      sort_order: 1,
+      created_at: '2026-08-08T00:00:00Z',
+      updated_at: '2026-08-08T00:00:00Z',
+    };
+    const recentThread = {
+      id: 'recent-thread',
+      project_id: recentProject.id,
+      agent_id: 'codex',
+      title: 'hello anywhere',
+      runtime_status: 'idle',
+      is_pinned: 0,
+      sort_order: 0,
+      created_at: '2026-08-08T00:00:00Z',
+      updated_at: '2026-08-08T00:00:00Z',
+    };
+    useAcpStore.setState({
+      projects: [],
+      threads: [],
+      allThreads: [],
+      messages: [],
+      activeProjectId: null,
+      activeThreadId: null,
+      runningByThread: {},
+      sessionByThread: {},
+    });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_create_recent_thread') {
+        return { project: recentProject, thread: recentThread };
+      }
+      if (command === 'acp_prepare_session') return sessionSnapshot;
+      if (command === 'acp_prompt') {
+        return {
+          userMessage: {
+            id: 'recent-user',
+            thread_id: recentThread.id,
+            role: 'user',
+            content: 'hello anywhere',
+            status: 'done',
+            attachments: [],
+            created_at: '2026-08-08T00:00:01Z',
+          },
+          assistantMessage: {
+            id: 'recent-assistant',
+            thread_id: recentThread.id,
+            role: 'assistant',
+            content: '',
+            status: 'streaming',
+            attachments: [],
+            created_at: '2026-08-08T00:00:02Z',
+          },
+        };
+      }
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+
+    const { container } = render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+    fireEvent.change(screen.getByPlaceholderText('做点什么…'), {
+      target: { value: 'hello anywhere' },
+    });
+    fireEvent.click(container.querySelector('.lucide-arrow-up')!.closest('button')!);
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      'acp_create_recent_thread',
+      { agentId: 'codex', title: 'hello anywhere' },
+    ));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
+      'acp_prompt',
+      expect.objectContaining({ threadId: recentThread.id, prompt: 'hello anywhere' }),
+    ));
+    expect(useAcpStore.getState().activeProjectId).toBe(recentProject.id);
+    expect(useAcpStore.getState().activeThreadId).toBe(recentThread.id);
   });
 
   it('does not restore a failed turn into a different thread composer', async () => {

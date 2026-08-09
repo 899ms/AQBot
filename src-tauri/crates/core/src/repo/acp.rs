@@ -149,6 +149,23 @@ pub async fn create_project(
     name: &str,
     root_path: &str,
 ) -> Result<acp_projects::Model> {
+    create_project_with_kind(db, name, root_path, "project").await
+}
+
+pub async fn create_recent_workspace(
+    db: &DatabaseConnection,
+    name: &str,
+    root_path: &str,
+) -> Result<acp_projects::Model> {
+    create_project_with_kind(db, name, root_path, "recent").await
+}
+
+async fn create_project_with_kind(
+    db: &DatabaseConnection,
+    name: &str,
+    root_path: &str,
+    kind: &str,
+) -> Result<acp_projects::Model> {
     let now = now_str();
     let max_order = acp_projects::Entity::find()
         .order_by_desc(acp_projects::Column::SortOrder)
@@ -160,6 +177,7 @@ pub async fn create_project(
         id: Set(gen_id()),
         name: Set(name.to_string()),
         root_path: Set(root_path.to_string()),
+        kind: Set(kind.to_string()),
         sort_order: Set(max_order + 1),
         created_at: Set(now.clone()),
         updated_at: Set(now.clone()),
@@ -968,6 +986,21 @@ mod tests {
             file_size: bytes.len() as u64,
             data: base64::engine::general_purpose::STANDARD.encode(bytes),
         }
+    }
+
+    #[tokio::test]
+    async fn recent_workspace_is_distinct_from_user_projects() {
+        let db = crate::db::create_test_pool().await.unwrap().conn;
+
+        let project = create_project(&db, "Project", "/tmp/project")
+            .await
+            .unwrap();
+        let recent = create_recent_workspace(&db, "Recent", "/tmp/recent")
+            .await
+            .unwrap();
+
+        assert_eq!(project.kind, "project");
+        assert_eq!(recent.kind, "recent");
     }
 
     #[tokio::test]

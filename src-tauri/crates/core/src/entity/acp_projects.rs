@@ -8,6 +8,7 @@ pub struct Model {
     pub id: String,
     pub name: String,
     pub root_path: String,
+    pub kind: String,
     pub sort_order: i32,
     pub created_at: String,
     pub updated_at: String,

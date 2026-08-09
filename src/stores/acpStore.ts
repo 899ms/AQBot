@@ -6,6 +6,7 @@ import type {
   AcpMessage,
   AcpPromptAccepted,
   AcpProject,
+  AcpRecentThreadReceipt,
   AcpSessionSnapshot,
   AcpThread,
   ConfiguredAgent,
@@ -581,6 +582,7 @@ interface AcpStore {
   loadThreads: (projectId: string) => Promise<void>;
   loadAllThreads: () => Promise<void>;
   createThread: (projectId: string, agentId: string, title?: string) => Promise<AcpThread>;
+  createRecentThread: (agentId: string, title?: string) => Promise<AcpThread>;
   deleteThread: (threadId: string) => Promise<void>;
   renameThread: (threadId: string, title: string) => Promise<AcpThread>;
   toggleThreadPin: (threadId: string) => Promise<AcpThread>;
@@ -1247,7 +1249,33 @@ export const useAcpStore = create<AcpStore>()(
     return thread;
   },
 
+  createRecentThread: async (agentId, title) => {
+    const { project, thread } = await invoke<AcpRecentThreadReceipt>('acp_create_recent_thread', {
+      agentId,
+      title: title ?? null,
+    });
+    set((state) => ({
+      projects: [
+        ...state.projects.filter((item) => item.id !== project.id),
+        project,
+      ],
+      activeProjectId: thread.project_id,
+      activeThreadId: thread.id,
+      threads: [thread],
+      allThreads: [thread, ...state.allThreads.filter((item) => item.id !== thread.id)],
+      messages: [],
+    }));
+    void get().prepareSession(thread.id).catch(() => undefined);
+    return thread;
+  },
+
   deleteThread: async (threadId) => {
+    const stateBeforeDelete = get();
+    const threadBeforeDelete = [...stateBeforeDelete.threads, ...stateBeforeDelete.allThreads]
+      .find((thread) => thread.id === threadId);
+    const recentProjectId = stateBeforeDelete.projects.find(
+      (project) => project.id === threadBeforeDelete?.project_id && project.kind === 'recent',
+    )?.id;
     await invoke('acp_delete_thread', { threadId });
     const { activeProjectId, activeThreadId } = get();
     set((state) => {
@@ -1267,10 +1295,18 @@ export const useAcpStore = create<AcpStore>()(
         planDocumentsByThread,
         pendingPermissions: removeThreadEntries(state.pendingPermissions, threadId),
         toolCalls: removeThreadEntries(state.toolCalls, threadId),
+        ...(recentProjectId
+          ? { projects: state.projects.filter((project) => project.id !== recentProjectId) }
+          : {}),
         ...(activeThreadId === threadId ? { activeThreadId: null, messages: [] } : {}),
+        ...(recentProjectId && activeProjectId === recentProjectId
+          ? { activeProjectId: null, threads: [] }
+          : {}),
       };
     });
-    if (activeProjectId) await get().loadThreads(activeProjectId);
+    if (activeProjectId && activeProjectId !== recentProjectId) {
+      await get().loadThreads(activeProjectId);
+    }
     await get().loadAllThreads();
   },
 
