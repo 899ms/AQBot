@@ -46,6 +46,7 @@ import {
   encodeAcpAgentIcon,
 } from '@/lib/acpAgentIcon';
 import { IconEditor } from '@/components/shared/IconEditor';
+import { sortRegistryAgents } from '@/lib/acpRegistrySort';
 import { SettingsGroup } from './SettingsGroup';
 import { SettingsSelect } from './SettingsSelect';
 
@@ -288,13 +289,13 @@ export function AcpAgentSettings() {
   const filteredRegistry = useMemo(() => {
     const list = registry?.agents ?? [];
     const q = registryQuery.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter(
+    const filtered = q ? list.filter(
       (a) =>
         a.id.toLowerCase().includes(q)
         || a.name.toLowerCase().includes(q)
         || (a.description ?? '').toLowerCase().includes(q),
-    );
+    ) : list;
+    return sortRegistryAgents(filtered);
   }, [registry, registryQuery]);
 
   const openAddCustom = useCallback(() => {
@@ -687,9 +688,14 @@ export function AcpAgentSettings() {
                         </div>
                       )}
                       {row.quarantineReason ? (
-                        <Tooltip title={row.quarantineReason}>
+                        <Tooltip
+                          title={t(
+                            `settings.acpAgents.quarantineReasons.${row.id}`,
+                            { defaultValue: row.quarantineReason },
+                          )}
+                        >
                           <Tag color="warning" style={{ marginTop: 4 }}>
-                            {t('settings.acpAgents.quarantined', '官方隔离')}
+                            {t('settings.acpAgents.quarantined')}
                           </Tag>
                         </Tooltip>
                       ) : null}

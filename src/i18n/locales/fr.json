@@ -1419,6 +1419,17 @@
       "saveSuccess": "Saved",
       "addSuccess": "Added {{name}}",
       "removeSuccess": "Removed",
+      "quarantined": "Mis en quarantaine officiellement",
+      "quarantineReasons": {
+        "agoragentic-acp": "Quarantaine officielle : script post-installation non sécurisé ou défectueux",
+        "codebuddy-code": "Quarantaine officielle : npx ne peut pas déterminer le fichier exécutable",
+        "crow-cli": "Quarantaine officielle : régression d’initialisation dans la version publiée",
+        "deepagents": "Quarantaine officielle : dépendance de paquet manquante",
+        "fast-agent": "Quarantaine officielle : l’initialisation dépasse le délai du protocole",
+        "minion-code": "Quarantaine officielle : dépendances Python non résolues",
+        "qoder": "Quarantaine officielle : régression d’initialisation dans la version publiée",
+        "vtcode": "Quarantaine officielle : builds incomplets pour certaines plateformes"
+      },
       "removeConfirmTitle": "Remove agent",
       "removeConfirmContent": "Remove “{{name}}” from the list?",
       "customRequired": "ID, name and command are required",

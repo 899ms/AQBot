@@ -1419,6 +1419,17 @@
       "saveSuccess": "Saved",
       "addSuccess": "Added {{name}}",
       "removeSuccess": "Removed",
+      "quarantined": "공식 격리",
+      "quarantineReasons": {
+        "agoragentic-acp": "공식 격리: 설치 후 스크립트가 안전하지 않거나 손상되었습니다",
+        "codebuddy-code": "공식 격리: npx가 실행 파일을 확인할 수 없습니다",
+        "crow-cli": "공식 격리: 배포된 버전의 초기화 기능에 회귀가 있습니다",
+        "deepagents": "공식 격리: 패키지 종속성이 누락되었습니다",
+        "fast-agent": "공식 격리: 초기화가 프로토콜 제한 시간을 초과합니다",
+        "minion-code": "공식 격리: Python 종속성 문제가 해결되지 않았습니다",
+        "qoder": "공식 격리: 배포된 버전의 초기화 기능에 회귀가 있습니다",
+        "vtcode": "공식 격리: 일부 플랫폼 빌드가 불완전합니다"
+      },
       "removeConfirmTitle": "Remove agent",
       "removeConfirmContent": "Remove “{{name}}” from the list?",
       "customRequired": "ID, name and command are required",

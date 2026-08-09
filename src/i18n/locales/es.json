@@ -1419,6 +1419,17 @@
       "saveSuccess": "Saved",
       "addSuccess": "Added {{name}}",
       "removeSuccess": "Removed",
+      "quarantined": "Cuarentena oficial",
+      "quarantineReasons": {
+        "agoragentic-acp": "Cuarentena oficial: script de posinstalación inseguro o defectuoso",
+        "codebuddy-code": "Cuarentena oficial: npx no puede determinar un ejecutable",
+        "crow-cli": "Cuarentena oficial: regresión de inicialización en la versión publicada",
+        "deepagents": "Cuarentena oficial: falta una dependencia del paquete",
+        "fast-agent": "Cuarentena oficial: la inicialización supera el tiempo límite del protocolo",
+        "minion-code": "Cuarentena oficial: dependencias de Python sin resolver",
+        "qoder": "Cuarentena oficial: regresión de inicialización en la versión publicada",
+        "vtcode": "Cuarentena oficial: compilaciones incompletas para algunas plataformas"
+      },
       "removeConfirmTitle": "Remove agent",
       "removeConfirmContent": "Remove “{{name}}” from the list?",
       "customRequired": "ID, name and command are required",

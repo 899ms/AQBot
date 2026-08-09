@@ -1419,6 +1419,17 @@
       "saveSuccess": "Saved",
       "addSuccess": "Added {{name}}",
       "removeSuccess": "Removed",
+      "quarantined": "Offiziell isoliert",
+      "quarantineReasons": {
+        "agoragentic-acp": "Offiziell isoliert: unsicheres oder fehlerhaftes Postinstallationsskript",
+        "codebuddy-code": "Offiziell isoliert: npx kann keine ausführbare Datei bestimmen",
+        "crow-cli": "Offiziell isoliert: veröffentlichte Initialisierungsregression",
+        "deepagents": "Offiziell isoliert: fehlende Paketabhängigkeit",
+        "fast-agent": "Offiziell isoliert: Initialisierung überschreitet das Protokoll-Zeitlimit",
+        "minion-code": "Offiziell isoliert: ungelöste Python-Abhängigkeiten",
+        "qoder": "Offiziell isoliert: veröffentlichte Initialisierungsregression",
+        "vtcode": "Offiziell isoliert: unvollständige Plattform-Builds"
+      },
       "removeConfirmTitle": "Remove agent",
       "removeConfirmContent": "Remove “{{name}}” from the list?",
       "customRequired": "ID, name and command are required",

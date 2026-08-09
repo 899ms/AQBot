@@ -1419,6 +1419,17 @@
       "saveSuccess": "Saved",
       "addSuccess": "Added {{name}}",
       "removeSuccess": "Removed",
+      "quarantined": "حجر رسمي",
+      "quarantineReasons": {
+        "agoragentic-acp": "حجر رسمي: برنامج ما بعد التثبيت غير آمن أو معطّل",
+        "codebuddy-code": "حجر رسمي: يتعذر على npx تحديد ملف قابل للتنفيذ",
+        "crow-cli": "حجر رسمي: تراجع في التهيئة بالإصدار المنشور",
+        "deepagents": "حجر رسمي: تبعية حزمة مفقودة",
+        "fast-agent": "حجر رسمي: تجاوزت التهيئة مهلة البروتوكول",
+        "minion-code": "حجر رسمي: تبعيات Python غير محلولة",
+        "qoder": "حجر رسمي: تراجع في التهيئة بالإصدار المنشور",
+        "vtcode": "حجر رسمي: إصدارات بناء غير مكتملة لبعض المنصات"
+      },
       "removeConfirmTitle": "Remove agent",
       "removeConfirmContent": "Remove “{{name}}” from the list?",
       "customRequired": "ID, name and command are required",

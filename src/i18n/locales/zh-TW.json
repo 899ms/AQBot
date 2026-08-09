@@ -1419,6 +1419,17 @@
       "saveSuccess": "已儲存",
       "addSuccess": "已新增 {{name}}",
       "removeSuccess": "已移除",
+      "quarantined": "官方隔離",
+      "quarantineReasons": {
+        "agoragentic-acp": "官方隔離：安裝後腳本不安全或已損壞",
+        "codebuddy-code": "官方隔離：npx 無法判定可執行檔",
+        "crow-cli": "官方隔離：已發佈版本的初始化功能發生回歸",
+        "deepagents": "官方隔離：缺少套件相依性",
+        "fast-agent": "官方隔離：初始化超出協定逾時時間",
+        "minion-code": "官方隔離：Python 相依性問題尚未解決",
+        "qoder": "官方隔離：已發佈版本的初始化功能發生回歸",
+        "vtcode": "官方隔離：部分平台建置不完整"
+      },
       "removeConfirmTitle": "移除 Agent",
       "removeConfirmContent": "確定從列表中移除「{{name}}」？",
       "customRequired": "請填寫 ID、名稱與命令",

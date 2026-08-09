@@ -1419,6 +1419,17 @@
       "saveSuccess": "Saved",
       "addSuccess": "Added {{name}}",
       "removeSuccess": "Removed",
+      "quarantined": "Официальный карантин",
+      "quarantineReasons": {
+        "agoragentic-acp": "Официальный карантин: небезопасный или неисправный postinstall-скрипт",
+        "codebuddy-code": "Официальный карантин: npx не может определить исполняемый файл",
+        "crow-cli": "Официальный карантин: регрессия инициализации в опубликованной версии",
+        "deepagents": "Официальный карантин: отсутствует зависимость пакета",
+        "fast-agent": "Официальный карантин: инициализация превышает тайм-аут протокола",
+        "minion-code": "Официальный карантин: неразрешённые зависимости Python",
+        "qoder": "Официальный карантин: регрессия инициализации в опубликованной версии",
+        "vtcode": "Официальный карантин: неполные сборки для некоторых платформ"
+      },
       "removeConfirmTitle": "Remove agent",
       "removeConfirmContent": "Remove “{{name}}” from the list?",
       "customRequired": "ID, name and command are required",

@@ -1419,6 +1419,17 @@
       "saveSuccess": "Saved",
       "addSuccess": "Added {{name}}",
       "removeSuccess": "Removed",
+      "quarantined": "公式隔離",
+      "quarantineReasons": {
+        "agoragentic-acp": "公式隔離：インストール後スクリプトが安全でないか破損しています",
+        "codebuddy-code": "公式隔離：npx が実行可能ファイルを特定できません",
+        "crow-cli": "公式隔離：公開版の初期化処理にリグレッションがあります",
+        "deepagents": "公式隔離：パッケージ依存関係が不足しています",
+        "fast-agent": "公式隔離：初期化がプロトコルのタイムアウトを超過します",
+        "minion-code": "公式隔離：Python の依存関係が未解決です",
+        "qoder": "公式隔離：公開版の初期化処理にリグレッションがあります",
+        "vtcode": "公式隔離：一部プラットフォームのビルドが不完全です"
+      },
       "removeConfirmTitle": "Remove agent",
       "removeConfirmContent": "Remove “{{name}}” from the list?",
       "customRequired": "ID, name and command are required",

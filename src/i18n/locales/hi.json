@@ -1419,6 +1419,17 @@
       "saveSuccess": "Saved",
       "addSuccess": "Added {{name}}",
       "removeSuccess": "Removed",
+      "quarantined": "आधिकारिक क्वारंटीन",
+      "quarantineReasons": {
+        "agoragentic-acp": "आधिकारिक क्वारंटीन: असुरक्षित या खराब पोस्ट-इंस्टॉल स्क्रिप्ट",
+        "codebuddy-code": "आधिकारिक क्वारंटीन: npx निष्पादन योग्य फ़ाइल निर्धारित नहीं कर सकता",
+        "crow-cli": "आधिकारिक क्वारंटीन: प्रकाशित संस्करण में इनिशियलाइज़ेशन रिग्रेशन",
+        "deepagents": "आधिकारिक क्वारंटीन: पैकेज निर्भरता अनुपस्थित है",
+        "fast-agent": "आधिकारिक क्वारंटीन: इनिशियलाइज़ेशन ने प्रोटोकॉल समय-सीमा पार की",
+        "minion-code": "आधिकारिक क्वारंटीन: Python निर्भरताएँ अनसुलझी हैं",
+        "qoder": "आधिकारिक क्वारंटीन: प्रकाशित संस्करण में इनिशियलाइज़ेशन रिग्रेशन",
+        "vtcode": "आधिकारिक क्वारंटीन: कुछ प्लेटफ़ॉर्म बिल्ड अधूरे हैं"
+      },
       "removeConfirmTitle": "Remove agent",
       "removeConfirmContent": "Remove “{{name}}” from the list?",
       "customRequired": "ID, name and command are required",

@@ -1472,6 +1472,17 @@
       "saveSuccess": "已保存",
       "addSuccess": "已添加 {{name}}",
       "removeSuccess": "已移除",
+      "quarantined": "官方隔离",
+      "quarantineReasons": {
+        "agoragentic-acp": "官方隔离：安装后脚本不安全或已损坏",
+        "codebuddy-code": "官方隔离：npx 无法确定可执行文件",
+        "crow-cli": "官方隔离：已发布版本的初始化功能存在回归",
+        "deepagents": "官方隔离：缺少软件包依赖",
+        "fast-agent": "官方隔离：初始化超出协议超时时间",
+        "minion-code": "官方隔离：Python 依赖问题尚未解决",
+        "qoder": "官方隔离：已发布版本的初始化功能存在回归",
+        "vtcode": "官方隔离：部分平台构建不完整"
+      },
       "removeConfirmTitle": "移除 Agent",
       "removeConfirmContent": "确定从列表中移除「{{name}}」？",
       "customRequired": "请填写 ID、名称和命令",

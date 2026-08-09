@@ -1472,6 +1472,17 @@
       "saveSuccess": "Saved",
       "addSuccess": "Added {{name}}",
       "removeSuccess": "Removed",
+      "quarantined": "Official quarantine",
+      "quarantineReasons": {
+        "agoragentic-acp": "Official quarantine: unsafe or broken postinstall script",
+        "codebuddy-code": "Official quarantine: npx cannot determine an executable",
+        "crow-cli": "Official quarantine: published initialization regression",
+        "deepagents": "Official quarantine: missing package dependency",
+        "fast-agent": "Official quarantine: initialization exceeds the protocol timeout",
+        "minion-code": "Official quarantine: unresolved Python dependencies",
+        "qoder": "Official quarantine: published initialization regression",
+        "vtcode": "Official quarantine: incomplete platform builds"
+      },
       "removeConfirmTitle": "Remove agent",
       "removeConfirmContent": "Remove “{{name}}” from the list?",
       "customRequired": "ID, name and command are required",
