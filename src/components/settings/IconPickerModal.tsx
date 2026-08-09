@@ -102,7 +102,7 @@ export default function IconPickerModal({ open, onClose, onSelect, defaultTab = 
             className="col-span-6 py-8 text-center"
             style={{ color: token.colorTextQuaternary }}
           >
-            No icons found
+            {t('settings.noMatchingIcons')}
           </div>
         )}
       </div>

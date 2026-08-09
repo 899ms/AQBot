@@ -109,8 +109,8 @@ export function ChatImageNode(props: ChatImageNodeProps) {
   }, [copied]);
 
   const filename = useMemo(() => getDefaultImageFilename(src, alt), [alt, src]);
-  const sourceLabel = src || raw || t('chat.imageMissingSource', '图片链接为空');
-  const altText = alt || title || t('chat.imagePreview', '图片预览');
+  const sourceLabel = src || raw || t('chat.imageMissingSource');
+  const altText = alt || title || t('chat.imagePreview');
 
   const handleCopy = useCallback(async () => {
     if (!src || status !== 'loaded') return;
@@ -118,10 +118,10 @@ export function ChatImageNode(props: ChatImageNodeProps) {
     try {
       await copyChatImage(src);
       setCopied(true);
-      message.success(t('chat.imageCopySuccess', '图片已复制'));
+      message.success(t('chat.imageCopySuccess'));
     } catch (error) {
       console.error('copy chat image failed:', error);
-      message.error(t('chat.imageCopyFailed', '复制图片失败'));
+      message.error(t('chat.imageCopyFailed'));
     } finally {
       setCopying(false);
     }
@@ -133,11 +133,11 @@ export function ChatImageNode(props: ChatImageNodeProps) {
     try {
       const saved = await saveChatImage(src, filename);
       if (saved) {
-        message.success(t('chat.imageSaveSuccess', '图片已保存'));
+        message.success(t('chat.imageSaveSuccess'));
       }
     } catch (error) {
       console.error('save chat image failed:', error);
-      message.error(t('chat.imageSaveFailed', '保存图片失败'));
+      message.error(t('chat.imageSaveFailed'));
     } finally {
       setSaving(false);
     }
@@ -172,7 +172,7 @@ export function ChatImageNode(props: ChatImageNodeProps) {
         <Alert
           type="error"
           showIcon
-          message={t('chat.imageLoadFailed', '图片加载失败')}
+          message={t('chat.imageLoadFailed')}
           description={(
             <Typography.Text
               copyable={src ? { text: src } : false}
@@ -199,7 +199,7 @@ export function ChatImageNode(props: ChatImageNodeProps) {
         <span style={loadingStyle}>
           <Spin size="small" />
           <Typography.Text type="secondary">
-            {t('chat.imageLoading', '图片加载中...')}
+            {t('chat.imageLoading')}
           </Typography.Text>
         </span>
       )}
@@ -256,22 +256,22 @@ export function ChatImageNode(props: ChatImageNodeProps) {
               border: `1px solid ${token.colorBorderSecondary}`,
             }}
           >
-            <Tooltip title={copied ? t('common.copied') : t('chat.copyImage', '复制图片')}>
+            <Tooltip title={copied ? t('common.copied') : t('chat.copyImage')}>
               <Button
                 type="text"
                 size="small"
-                aria-label={t('chat.copyImage', '复制图片')}
+                aria-label={t('chat.copyImage')}
                 icon={copied ? <Check size={14} style={{ color: token.colorSuccess }} /> : <Copy size={14} />}
                 loading={copying}
                 onClick={handleCopy}
                 style={{ width: 26, height: 26, padding: 0 }}
               />
             </Tooltip>
-            <Tooltip title={t('chat.saveImage', '保存图片')}>
+            <Tooltip title={t('chat.saveImage')}>
               <Button
                 type="text"
                 size="small"
-                aria-label={t('chat.saveImage', '保存图片')}
+                aria-label={t('chat.saveImage')}
                 icon={<Download size={14} />}
                 loading={saving}
                 onClick={handleSave}

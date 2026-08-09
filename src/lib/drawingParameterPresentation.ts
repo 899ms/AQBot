@@ -103,13 +103,13 @@ export function getDrawingParameterLabel(
 export function getDrawingParameterValueLabel(
   parameterKey: string,
   value: unknown,
-  t: DrawingParameterTranslate,
+  translate: DrawingParameterTranslate,
 ): string {
   const canonicalKey = canonicalParameterKey(parameterKey);
   const stringValue = String(value);
-  if (stringValue === 'auto') return t('drawing.option.auto', 'Auto');
+  if (stringValue === 'auto') return translate('drawing.option.auto', 'Auto');
   const localized = OPTION_LABELS[canonicalKey]?.[stringValue];
-  if (localized) return t(localized.key, localized.fallback);
+  if (localized) return translate(localized.key, localized.fallback);
   return stringValue;
 }
 

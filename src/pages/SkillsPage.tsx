@@ -703,11 +703,11 @@ export function SkillsPage() {
               <div style={{ marginBottom: 12 }}>
                 {selectedSkill.manifest.sourceRef && (
                   <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                    Source: {selectedSkill.manifest.sourceRef}
+                    {t('skills.manifestSource')}: {selectedSkill.manifest.sourceRef}
                   </Text>
                 )}
                 <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                  Installed: {selectedSkill.manifest.installedAt}
+                  {t('skills.installedAt')}: {selectedSkill.manifest.installedAt}
                 </Text>
               </div>
             )}
@@ -736,7 +736,7 @@ export function SkillsPage() {
             {selectedSkill.files.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  Files: {selectedSkill.files.join(', ')}
+                  {t('skills.filesLabel')}: {selectedSkill.files.join(', ')}
                 </Text>
               </div>
             )}

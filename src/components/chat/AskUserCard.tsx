@@ -109,8 +109,8 @@ const AskUserCard: React.FC<AskUserCardProps> = ({ askId, question, options }) =
           onChange={(e) => setAnswer(e.target.value)}
           placeholder={
             hasOptions
-              ? t('agent.askUserSupplementPlaceholder', 'Additional input (optional)...')
-              : t('agent.askUserPlaceholder', 'Type your answer...')
+              ? t('agent.askUserSupplementPlaceholder')
+              : t('agent.askUserPlaceholder')
           }
           autoSize={{ minRows: 1, maxRows: 4 }}
           disabled={submitting || submitted}
@@ -127,7 +127,7 @@ const AskUserCard: React.FC<AskUserCardProps> = ({ askId, question, options }) =
             <Space size={4} style={{ color: token.colorSuccess }}>
               <CheckCircle2 size={14} />
               <Text style={{ color: token.colorSuccess, fontSize: 13 }}>
-                {t('agent.askUserSubmitted', 'Submitted')}
+                {t('agent.askUserSubmitted')}
               </Text>
             </Space>
           ) : (
@@ -138,7 +138,7 @@ const AskUserCard: React.FC<AskUserCardProps> = ({ askId, question, options }) =
               loading={submitting}
               disabled={!canSubmit}
             >
-              {t('agent.askUserSubmit', 'Submit')}
+              {t('agent.askUserSubmit')}
             </Button>
           )}
         </div>

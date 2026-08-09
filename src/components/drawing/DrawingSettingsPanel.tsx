@@ -48,7 +48,7 @@ export function DrawingSettingsPanel({
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const setActivePage = useUIStore((state) => state.setActivePage);
   const setSettingsSection = useUIStore((state) => state.setSettingsSection);
-  const translateOption = (key: string, fallback: string) => t(key, fallback);
+  const translateOption = (key: string, _fallback: string) => t(key);
   const translateWarning = (key: string, options: Record<string, unknown>) =>
     String(t(key, options as never));
   const paramConfig = getDrawingParamConfig(settings.modelId);
@@ -257,7 +257,6 @@ export function DrawingSettingsPanel({
                 >
                   {t(
                     'drawing.noConfiguredImageProvider',
-                    '暂无任何配置绘画模型类型的服务商，请前往服务商设置页进行配置',
                   )}
                 </span>
                 <Button
@@ -270,7 +269,7 @@ export function DrawingSettingsPanel({
                     setActivePage('settings');
                   }}
                 >
-                  {t('drawing.openProviderSettings', '打开服务商设置')}
+                  {t('drawing.openProviderSettings')}
                 </Button>
               </div>
             )}
@@ -317,7 +316,7 @@ export function DrawingSettingsPanel({
               textAlign: 'left',
             }}
           >
-            <span>{t('drawing.advancedSettings', '高级设置')}</span>
+            <span>{t('drawing.advancedSettings')}</span>
             <span
               className="flex items-center justify-center"
               style={{

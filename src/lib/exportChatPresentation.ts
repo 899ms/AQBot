@@ -39,9 +39,9 @@ export function buildExportOptions(input: ExportPresentationInput): ExportMessag
 
   return {
     roleLabels: {
-      user: i18n.t('chat.you', { defaultValue: 'You' }),
-      assistant: i18n.t('chat.assistant', { defaultValue: 'Assistant' }),
-      system: i18n.t('chat.system', { defaultValue: 'System' }),
+      user: i18n.t('chat.you'),
+      assistant: i18n.t('chat.assistant'),
+      system: i18n.t('chat.system'),
     },
     userName: userName?.trim() || undefined,
     theme,

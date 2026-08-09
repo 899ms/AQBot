@@ -795,9 +795,7 @@ function KnowledgeBaseDetail({
               />
             </div>
             <Typography.Text type="secondary" style={{ alignSelf: 'flex-end', width: 280, fontSize: 12 }}>
-              {t('settings.knowledge.retrievalThresholdHelp', {
-                defaultValue: '最低相似度，值越高越严格；过高可能导致知识库无命中。',
-              })}
+              {t('settings.knowledge.retrievalThresholdHelp')}
             </Typography.Text>
           </div>
           <Divider style={{ margin: 0 }} />
@@ -1129,7 +1127,7 @@ function KnowledgeBaseDetail({
           <>
             <div className="flex items-center justify-between mb-3">
               <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                {t('settings.knowledge.totalChunks', '共 {{count}} 个分段', { count: chunks.length })}
+                {t('settings.knowledge.totalChunks', { count: chunks.length })}
               </Typography.Text>
               <Button
                 size="small"

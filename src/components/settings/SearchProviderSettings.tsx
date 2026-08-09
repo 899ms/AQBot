@@ -218,7 +218,7 @@ function SearchProviderDetail({
           value={provider.providerType}
           onChange={(val) => handleFieldChange('providerType', val)}
           style={{ width: 280 }}
-          options={providerSelectOptions((key, fallback) => (fallback ? t(key, fallback) : t(key)))}
+          options={providerSelectOptions((key) => t(key))}
           disabled
         />
       </div>
@@ -234,7 +234,7 @@ function SearchProviderDetail({
       </div>
       <Divider style={{ margin: '4px 0' }} />
       <div style={rowStyle} className="flex items-center justify-between">
-        <span>API Key</span>
+        <span>{t('settings.apiKey')}</span>
         <Input.Password
           value={apiKeyInput}
           onChange={(e) => setApiKeyInput(e.target.value)}
@@ -373,12 +373,12 @@ export default function SearchProviderSettings() {
             rules={[{ required: true }]}
           >
             <Select
-              options={providerSelectOptions((key, fallback) => (fallback ? t(key, fallback) : t(key)))}
+              options={providerSelectOptions((key) => t(key))}
             />
           </Form.Item>
           <Form.Item
             name="api_key"
-            label="API Key"
+            label={t('settings.apiKey')}
             rules={[{ required: true, message: t('settings.searchProviders.apiKeyPlaceholder') }]}
           >
             <Input.Password placeholder={t('settings.searchProviders.apiKeyPlaceholder')} />

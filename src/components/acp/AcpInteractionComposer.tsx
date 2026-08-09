@@ -35,7 +35,7 @@ export interface AcpInteractionComposerProps {
 export type AcpInteractionSubmission =
   | { optionId: string; feedback?: string }
   | { questionnaire: AcpQuestionnaireSubmission };
-type Translate = (key: string, fallback: string) => string;
+type Translate = (key: string) => string;
 
 /** Synthetic option: allow this tool for the rest of the AQBot thread/session. */
 export const ACP_SESSION_ALWAYS_ALLOW_OPTION_ID = '__aqbot_session_always_allow';
@@ -85,7 +85,7 @@ export function ensureSessionAlwaysAllowOption(
 
   const alwaysOption: AcpInteractionOption = {
     id: ACP_SESSION_ALWAYS_ALLOW_OPTION_ID,
-    label: '始终允许',
+    label: ACP_SESSION_ALWAYS_ALLOW_OPTION_ID,
     kind: 'AllowAlways',
     variant: 'default',
   };
@@ -103,12 +103,12 @@ export function ensureSessionAlwaysAllowOption(
 
 function interactionTitle(kind: AcpInteractionKind, translate: Translate): string {
   if (kind === 'question') {
-    return translate('agentPage.interactionQuestionTitle', '需要你的回答');
+    return translate('agentPage.interactionQuestionTitle');
   }
   if (kind === 'plan_review') {
-    return translate('agentPage.interactionPlanReviewTitle', '审核计划');
+    return translate('agentPage.interactionPlanReviewTitle');
   }
-  return translate('agentPage.interactionPermissionTitle', '需要权限');
+  return translate('agentPage.interactionPermissionTitle');
 }
 
 function knownOptionLabel(
@@ -123,21 +123,21 @@ function knownOptionLabel(
 
   if (requestKind === 'plan_review') {
     if (id === 'approved') {
-      return translate('agentPage.interactionPlanExecute', '立即执行');
+      return translate('agentPage.interactionPlanExecute');
     }
     if (id === 'cancelled') {
-      return translate('agentPage.interactionPlanRequestChanges', '进行改变');
+      return translate('agentPage.interactionPlanRequestChanges');
     }
     if (id === 'abandoned') {
-      return translate('agentPage.interactionPlanCancel', '取消');
+      return translate('agentPage.interactionPlanCancel');
     }
   }
 
   if (identity.includes('allowalways')) {
-    return translate('agentPage.interactionAllowAlways', '始终允许');
+    return translate('agentPage.interactionAllowAlways');
   }
   if (identity.includes('allowonce') || id === 'approved' || id === 'approve') {
-    return translate('agentPage.interactionAllowOnce', '允许一次');
+    return translate('agentPage.interactionAllowOnce');
   }
   if (
     identity.includes('reject')
@@ -145,7 +145,7 @@ function knownOptionLabel(
     || identity.includes('cancel')
     || id === 'abandoned'
   ) {
-    return translate('agentPage.interactionDeny', '拒绝');
+    return translate('agentPage.interactionDeny');
   }
   return option.label;
 }
@@ -253,7 +253,7 @@ export function AcpInteractionComposer({
       />
     );
   }
-  const translate: Translate = (key, fallback) => t(key, fallback);
+  const translate: Translate = (key) => t(key);
   const title = interactionTitle(kind, translate);
   const prompt = promptText(request, kind);
   const inputJson = JSON.stringify(request.input ?? {}, null, 2);
@@ -288,7 +288,7 @@ export function AcpInteractionComposer({
       if (!changeOption) return;
       const text = planFeedback.trim();
       if (!text) {
-        setSubmissionError(t('agentPage.interactionPlanFeedbackRequired', '请输入修改意见'));
+        setSubmissionError(t('agentPage.interactionPlanFeedbackRequired'));
         return;
       }
       void submitOption(changeOption.id, text);
@@ -390,8 +390,8 @@ export function AcpInteractionComposer({
               size="small"
               icon={planExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
               aria-label={planExpanded
-                ? t('agentPage.interactionPlanExitFullscreen', '退出全屏')
-                : t('agentPage.interactionPlanFullscreen', '全屏查看')}
+                ? t('agentPage.interactionPlanExitFullscreen')
+                : t('agentPage.interactionPlanFullscreen')}
               aria-pressed={planExpanded}
               onClick={() => setPlanExpanded((value) => !value)}
             />
@@ -407,7 +407,7 @@ export function AcpInteractionComposer({
               />
             </div>
           ) : (
-            <Text type="secondary">{t('agentPage.interactionPlanEmpty', '暂无计划内容')}</Text>
+            <Text type="secondary">{t('agentPage.interactionPlanEmpty')}</Text>
           )}
 
           {/* Fixed actions: never scrolled away */}
@@ -418,8 +418,8 @@ export function AcpInteractionComposer({
                 value={planFeedback}
                 disabled={submitting}
                 rows={3}
-                placeholder={t('agentPage.interactionPlanFeedbackPlaceholder', '描述希望如何调整计划…')}
-                aria-label={t('agentPage.interactionPlanFeedbackPlaceholder', '描述希望如何调整计划…')}
+                placeholder={t('agentPage.interactionPlanFeedbackPlaceholder')}
+                aria-label={t('agentPage.interactionPlanFeedbackPlaceholder')}
                 onChange={(event) => {
                   setPlanFeedback(event.target.value);
                   if (submissionError) setSubmissionError(null);
@@ -434,7 +434,7 @@ export function AcpInteractionComposer({
                     setSubmissionError(null);
                   }}
                 >
-                  {t('common.back', '返回')}
+                  {t('common.back')}
                 </Button>
                 <Button
                   type="primary"
@@ -442,7 +442,7 @@ export function AcpInteractionComposer({
                   loading={loadingOptionId === changeOption?.id}
                   onClick={submitPlanFeedback}
                 >
-                  {t('agentPage.interactionPlanSubmitFeedback', '提交修改意见')}
+                  {t('agentPage.interactionPlanSubmitFeedback')}
                 </Button>
               </div>
             </div>
@@ -464,7 +464,7 @@ export function AcpInteractionComposer({
                 onClick={() => approveOption && void submitOption(approveOption.id)}
                 style={{ height: 'auto', paddingBlock: 8, whiteSpace: 'normal' }}
               >
-                {t('agentPage.interactionPlanExecute', '立即执行')}
+                {t('agentPage.interactionPlanExecute')}
               </Button>
               <Button
                 className="aqbot-acp-interaction-option"
@@ -475,7 +475,7 @@ export function AcpInteractionComposer({
                 }}
                 style={{ height: 'auto', paddingBlock: 8, whiteSpace: 'normal' }}
               >
-                {t('agentPage.interactionPlanRequestChanges', '进行改变')}
+                {t('agentPage.interactionPlanRequestChanges')}
               </Button>
               <Button
                 className="aqbot-acp-interaction-option"
@@ -483,17 +483,17 @@ export function AcpInteractionComposer({
                 disabled={submitting || !cancelOption}
                 loading={loadingOptionId === cancelOption?.id}
                 onClick={() => cancelOption && void submitOption(cancelOption.id)}
-                aria-label={t('agentPage.interactionPlanCancel', '取消')}
+                aria-label={t('agentPage.interactionPlanCancel')}
                 style={{ height: 'auto', paddingBlock: 8, whiteSpace: 'normal' }}
               >
-                {t('agentPage.interactionPlanCancel', '取消')}
+                {t('agentPage.interactionPlanCancel')}
               </Button>
             </div>
           )}
 
           {submissionError ? (
             <Text type="danger" role="alert" style={{ flexShrink: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-              {t('agentPage.interactionSubmitFailed', '提交失败，请重试')}: {submissionError}
+              {t('agentPage.interactionSubmitFailed')}: {submissionError}
             </Text>
           ) : null}
         </form>
@@ -586,7 +586,7 @@ export function AcpInteractionComposer({
               className="aqbot-acp-interaction-summary"
               style={{ cursor: 'pointer', overflowWrap: 'anywhere' }}
             >
-              {t('agentPage.interactionRequestDetails', '请求详情')}
+              {t('agentPage.interactionRequestDetails')}
             </summary>
             <pre
               style={{
@@ -622,7 +622,7 @@ export function AcpInteractionComposer({
             const label = knownOptionLabel(kind, option, translate);
             const appearance = optionAppearance(kind, option);
             const optionLoading = loadingOptionId === option.id;
-            const loadingLabel = t('agentPage.interactionSubmitting', '提交中…');
+            const loadingLabel = t('agentPage.interactionSubmitting');
             const descriptionId = option.description ? `${titleId}-option-${index}` : undefined;
             return (
               <Button
@@ -677,7 +677,7 @@ export function AcpInteractionComposer({
 
         {submissionError ? (
           <Text type="danger" role="alert" style={{ flexShrink: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-            {t('agentPage.interactionSubmitFailed', '提交失败，请重试')}: {submissionError}
+            {t('agentPage.interactionSubmitFailed')}: {submissionError}
           </Text>
         ) : null}
       </div>

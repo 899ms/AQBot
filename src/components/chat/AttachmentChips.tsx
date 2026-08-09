@@ -51,6 +51,7 @@ type FileChipProps = {
 };
 
 const FileChip = memo(function FileChip({ attachment, onRemove }: FileChipProps) {
+  const { t } = useTranslation();
   const { token } = theme.useToken();
   const { file, previewUrl } = attachment;
   const isImage = previewUrl != null || isImageFile(file);
@@ -117,7 +118,7 @@ const FileChip = memo(function FileChip({ attachment, onRemove }: FileChipProps)
         className="cursor-pointer flex-shrink-0"
         style={{ color: token.colorTextTertiary }}
         onClick={onRemove}
-        aria-label="remove-attachment"
+        aria-label={t('common.removeAttachment')}
       />
     </span>
   );

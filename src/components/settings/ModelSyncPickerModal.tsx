@@ -82,7 +82,9 @@ function CapabilitiesSummaryTag({ capabilities }: { capabilities: ModelCapabilit
     >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
         {capabilities.map((cap) => {
-          const desc = t(`settings.capabilityDesc.${cap}`, '');
+          const known = isModelCapability(cap);
+          const desc = known ? t(`settings.capabilityDesc.${cap}`) : '';
+          const name = known ? t(`settings.capability.${cap}`) : cap;
           return (
             <div key={cap} style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
               {isModelCapability(cap) ? (
@@ -90,7 +92,7 @@ function CapabilitiesSummaryTag({ capabilities }: { capabilities: ModelCapabilit
               ) : null}
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 13 }}>
-                  {t(`settings.capability.${cap}`, cap)}
+                  {name}
                 </div>
                 {desc ? (
                   <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>

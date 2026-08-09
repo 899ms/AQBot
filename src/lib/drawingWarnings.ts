@@ -5,52 +5,28 @@ export type DrawingWarningTranslate = (
   options: Record<string, unknown>,
 ) => string;
 
-const WARNING_DEFAULTS: Record<string, string> = {
-  unknown_image_profile:
-    '{{modelId}} has no verified image parameter profile; only conservative text-to-image requests are enabled.',
-  using_fallback_profile:
-    '{{modelId}} has no verified image parameter profile; using the adapter default parameter preset.',
-  legacy_model:
-    '{{modelId}} is a legacy image model; use {{replacement}} for new work.',
-  retired_model:
-    '{{modelId}} is a retired preview model. Compatible proxies can still serve requests.',
-  deprecated_model:
-    'This image model is deprecated and scheduled to shut down. Compatible endpoints remain available.',
+const WARNING_KEYS: Readonly<Record<string, string>> = {
+  unknown_image_profile: 'drawing.warning.unknown_image_profile',
+  using_fallback_profile: 'drawing.warning.using_fallback_profile',
+  legacy_model: 'drawing.warning.legacy_model',
+  retired_model: 'drawing.warning.retired_model',
+  deprecated_model: 'drawing.warning.deprecated_model',
 };
 
-function interpolate(
-  template: string,
-  values: Record<string, string | null | undefined>,
-): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (_match, name: string) => {
-    const value = values[name];
-    return value == null ? '' : String(value);
-  });
-}
-
 /**
- * Localize backend image-model lifecycle warnings by stable `code`.
- * Falls back to the backend English message when the code is unknown.
+ * Localize known backend warning codes; preserve unknown backend messages verbatim.
  */
 export function getDrawingWarningTitle(
   warning: ImageModelWarning,
   modelId: string,
   t: DrawingWarningTranslate,
 ): string {
-  const defaultValue = WARNING_DEFAULTS[warning.code] ?? warning.message;
-  const translated = t(`drawing.warning.${warning.code}`, {
+  const key = WARNING_KEYS[warning.code];
+  if (!key) return warning.message;
+  return t(key, {
     modelId,
     replacement: warning.replacement_model_id ?? '',
-    defaultValue,
   });
-  // When t() ignores options and returns the key, fall back to a filled template.
-  if (!translated || translated === `drawing.warning.${warning.code}`) {
-    return interpolate(defaultValue, {
-      modelId,
-      replacement: warning.replacement_model_id,
-    });
-  }
-  return translated;
 }
 
 export function getDrawingWarningDescription(
@@ -62,7 +38,6 @@ export function getDrawingWarningDescription(
     parts.push(
       t('drawing.warning.deadline', {
         deadline: warning.deadline,
-        defaultValue: 'Deadline: {{deadline}}',
       }),
     );
   }
@@ -70,14 +45,11 @@ export function getDrawingWarningDescription(
     parts.push(
       t('drawing.warning.replacement', {
         modelId: warning.replacement_model_id,
-        defaultValue: 'Suggested model: {{modelId}}',
       }),
     );
   }
   if (parts.length === 0) return undefined;
-  const separator = t('drawing.warning.separator', {
-    defaultValue: ' · ',
-  });
+  const separator = t('drawing.warning.separator', {});
   return parts.join(separator);
 }
 

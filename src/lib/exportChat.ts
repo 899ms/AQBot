@@ -546,9 +546,9 @@ async function resolveDefaultRoleLabels(): Promise<ExportRoleLabels> {
   try {
     const i18n = (await import('@/i18n')).default
     return {
-      user: i18n.t('chat.you', { defaultValue: 'You' }),
-      assistant: i18n.t('chat.assistant', { defaultValue: 'Assistant' }),
-      system: i18n.t('chat.system', { defaultValue: 'System' }),
+      user: i18n.t('chat.you'),
+      assistant: i18n.t('chat.assistant'),
+      system: i18n.t('chat.system'),
     }
   } catch {
     return { ...FALLBACK_ROLE_LABELS }

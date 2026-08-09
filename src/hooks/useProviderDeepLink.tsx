@@ -43,15 +43,21 @@ function getSuccessMessageKey(result: DeepLinkProviderImportResult): string {
   return 'settings.deepLinkProviderKeyAdded';
 }
 
-function ProviderDeepLinkConfirmContent({ payload }: { payload: ProviderDeepLinkPayload }) {
+function ProviderDeepLinkConfirmContent({
+  payload,
+  t,
+}: {
+  payload: ProviderDeepLinkPayload;
+  t: ConfirmProviderDeepLinkDeps['t'];
+}) {
   return (
     <Descriptions size="small" column={1}>
-      <Descriptions.Item label="Name">{payload.name}</Descriptions.Item>
-      <Descriptions.Item label="Base URL">
+      <Descriptions.Item label={t('common.name')}>{payload.name}</Descriptions.Item>
+      <Descriptions.Item label={t('settings.apiHost')}>
         <Typography.Text code>{payload.baseurl}</Typography.Text>
       </Descriptions.Item>
-      <Descriptions.Item label="Type">{payload.type}</Descriptions.Item>
-      <Descriptions.Item label="API Key">
+      <Descriptions.Item label={t('settings.providerType')}>{payload.type}</Descriptions.Item>
+      <Descriptions.Item label={t('settings.apiKey')}>
         <Typography.Text code>{getProviderDeepLinkKeyPrefix(payload.apikey)}</Typography.Text>
       </Descriptions.Item>
     </Descriptions>
@@ -66,10 +72,10 @@ export function confirmProviderDeepLinkImport(
   deps.setSettingsSection('providers');
 
   deps.modal.confirm({
-    title: deps.t('settings.deepLinkProviderConfirmTitle', '导入服务商配置'),
-    content: <ProviderDeepLinkConfirmContent payload={payload} />,
-    okText: deps.t('common.confirm', '确认'),
-    cancelText: deps.t('common.cancel', '取消'),
+    title: deps.t('settings.deepLinkProviderConfirmTitle'),
+    content: <ProviderDeepLinkConfirmContent payload={payload} t={deps.t} />,
+    okText: deps.t('common.confirm'),
+    cancelText: deps.t('common.cancel'),
     onOk: async () => {
       try {
         const result = await deps.importProvider(payload);
@@ -77,7 +83,7 @@ export function confirmProviderDeepLinkImport(
         deps.setSelectedProviderId(result.provider_id);
         deps.message.success(deps.t(getSuccessMessageKey(result)));
       } catch (e) {
-        deps.message.error(`${deps.t('settings.deepLinkProviderImportFailed', '导入服务商失败')}: ${String(e)}`);
+        deps.message.error(`${deps.t('settings.deepLinkProviderImportFailed')}: ${String(e)}`);
         throw e;
       }
     },
@@ -86,11 +92,7 @@ export function confirmProviderDeepLinkImport(
 
 export function useProviderDeepLink({ modal, message }: { modal: ModalLike; message: MessageLike }) {
   const { t } = useTranslation();
-  const translate = useCallback(
-    (key: string, fallback?: string) =>
-      fallback ? t(key, { defaultValue: fallback }) : t(key),
-    [t],
-  );
+  const translate = useCallback((key: string) => t(key), [t]);
   const importProvider = useProviderStore((s) => s.importProviderFromDeepLink);
   const fetchProviders = useProviderStore((s) => s.fetchProviders);
   const enterSettings = useUIStore((s) => s.enterSettings);

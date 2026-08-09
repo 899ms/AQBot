@@ -94,6 +94,17 @@ with mode `0600` on Unix.
 
 ## UI Conventions
 
+### Internationalization (i18n)
+
+- All user-visible text MUST use i18n, including tooltips, placeholders, empty states, modal content, notifications, context menus, and accessibility labels such as `aria-label` and image `alt` text.
+- Do not add raw Chinese or English UI copy directly in TS/TSX. Technical identifiers, protocol names, brand names, code samples, URLs, file extensions, and units may remain literal when they are intentionally language-neutral.
+- Simplified Chinese (`zh-CN`) and English (`en-US`) are the semantic source locales. Every new key MUST be added to both with equivalent meaning before other locales are updated.
+- Every locale MUST contain the same leaf-key set, non-empty values, and identical interpolation placeholders such as `{{count}}`.
+- A key existing in every locale is not sufficient: non-English locales MUST NOT copy the English value for translatable UI text. Intentional shared values such as `HTTP`, `GitHub`, model IDs, and product names must be explicitly treated as language-neutral.
+- Prefer `t('namespace.key')` after the locale entry exists. Do not use a Chinese or English `defaultValue` to hide a missing locale entry.
+- Dynamic keys MUST be backed by a finite, reviewable key set in every locale; never construct unbounded translation keys from external input.
+- Before completing i18n work, run the locale completeness tests and scan changed UI files for raw visible strings. Verify at least one Chinese locale, English, and one non-Latin locale when sentence fragments are composed around dynamic components.
+
 ### Image Preview & Modal Rules
 
 All antd `<Image>` components **must** use blur-mask preview:

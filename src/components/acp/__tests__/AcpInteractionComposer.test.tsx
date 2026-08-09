@@ -1,6 +1,7 @@
 import { App } from 'antd';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { translateZhCN } from '@/test/i18nTestTranslator';
 import {
   AcpInteractionComposer,
   type AcpInteractionSubmission,
@@ -10,8 +11,7 @@ import {
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
-    t: (_key: string, fallback?: string | { defaultValue?: string }) =>
-      typeof fallback === 'string' ? fallback : (fallback?.defaultValue ?? _key),
+    t: translateZhCN,
   }),
 }));
 

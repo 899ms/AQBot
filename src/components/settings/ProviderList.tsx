@@ -211,7 +211,7 @@ function SortableProviderItem({
       provider.enabled
         ? {
             key: 'disable',
-            label: t('settings.disableProvider', '停用服务商'),
+            label: t('settings.disableProvider'),
             icon: <PowerOff size={14} />,
           }
         : {
@@ -280,7 +280,7 @@ function SortableProviderItem({
         className="min-w-0 flex-1 flex items-center gap-2"
         style={{ opacity: disabled ? 0.4 : 1 }}
       >
-        <BuiltinProviderIcon provider={provider} token={token} label={t('settings.builtinProviderBadge', '内置')} />
+        <BuiltinProviderIcon provider={provider} token={token} label={t('settings.builtinProviderBadge')} />
         <span style={{ color: isSelected || (batchMode && batchChecked) ? token.colorPrimary : undefined }}>{provider.name}</span>
       </div>
       {!batchMode && (
@@ -825,7 +825,7 @@ export function ProviderList() {
       <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-0">
         {enabledProviders.length > 0 && (
           <>
-            <div style={sectionHeaderStyle}>{t('settings.enabledProviders', '已启用')}</div>
+            <div style={sectionHeaderStyle}>{t('settings.enabledProviders')}</div>
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
@@ -862,7 +862,7 @@ export function ProviderList() {
 
         {disabledProviders.length > 0 && (
           <>
-            <div style={sectionHeaderStyle}>{t('settings.disabledProviders', '未启用')}</div>
+            <div style={sectionHeaderStyle}>{t('settings.disabledProviders')}</div>
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}

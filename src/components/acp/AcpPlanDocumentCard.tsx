@@ -65,19 +65,19 @@ export function extractAcpPlanContent(
 
 function outcomeLabel(
   status: AcpPlanDocument['status'],
-  t: (key: string, fallback: string) => string,
+  t: (key: string) => string,
 ): string | null {
   switch (status) {
     case 'approved':
-      return t('agentPage.interactionPlanOutcomeApproved', '已批准执行');
+      return t('agentPage.interactionPlanOutcomeApproved');
     case 'cancelled':
-      return t('agentPage.interactionPlanOutcomeChanges', '已请求修改');
+      return t('agentPage.interactionPlanOutcomeChanges');
     case 'abandoned':
-      return t('agentPage.interactionPlanOutcomeAbandoned', '已取消');
+      return t('agentPage.interactionPlanOutcomeAbandoned');
     case 'expired':
-      return t('agentPage.interactionPlanOutcomeExpired', '已过期');
+      return t('agentPage.interactionPlanOutcomeExpired');
     case 'pending':
-      return t('agentPage.interactionPlanOutcomePending', '待审核');
+      return t('agentPage.interactionPlanOutcomePending');
     default:
       return null;
   }
@@ -214,10 +214,10 @@ export function AcpPlanDocumentCard({
   const { copy: copyText, isCopiedFor } = useCopyToClipboard();
   const [expanded, setExpanded] = useState(defaultExpanded);
   const title = document.title?.trim()
-    || t('agentPage.interactionPlanReviewTitle', '审核计划');
+    || t('agentPage.interactionPlanReviewTitle');
   const outcome = hideOutcome ? null : outcomeLabel(
     document.status,
-    (key, fallback) => t(key, fallback),
+    (key) => t(key),
   );
   const copied = isCopiedFor(document.content);
 
@@ -304,7 +304,7 @@ export function AcpPlanDocumentCard({
               icon={copied
                 ? <Check size={14} style={{ color: token.colorSuccess }} />
                 : <Copy size={14} />}
-              aria-label={t('chat.copy', '复制')}
+              aria-label={t('chat.copy')}
               onClick={() => {
                 void copyText(document.content);
               }}
@@ -314,7 +314,7 @@ export function AcpPlanDocumentCard({
                 type="text"
                 size="small"
                 icon={<MessageSquarePlus size={14} />}
-                aria-label={t('agentPage.interactionPlanAddToContext', '带入上下文')}
+                aria-label={t('agentPage.interactionPlanAddToContext')}
                 onClick={() => onAddToContext(document.content)}
               />
             ) : null}
@@ -323,8 +323,8 @@ export function AcpPlanDocumentCard({
               size="small"
               icon={expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
               aria-label={expanded
-                ? t('agentPage.interactionPlanExitFullscreen', '退出全屏')
-                : t('agentPage.interactionPlanFullscreen', '全屏查看')}
+                ? t('agentPage.interactionPlanExitFullscreen')
+                : t('agentPage.interactionPlanFullscreen')}
               aria-pressed={expanded}
               onClick={() => setExpanded((value) => !value)}
             />
@@ -340,12 +340,12 @@ export function AcpPlanDocumentCard({
             />
           </div>
         ) : (
-          <Text type="secondary">{t('agentPage.interactionPlanEmpty', '暂无计划内容')}</Text>
+          <Text type="secondary">{t('agentPage.interactionPlanEmpty')}</Text>
         )}
 
         {document.feedback?.trim() ? (
           <Text type="secondary" style={{ fontSize: 12, overflowWrap: 'anywhere' }}>
-            {t('agentPage.interactionPlanFeedbackLabel', '修改意见')}: {document.feedback.trim()}
+            {t('agentPage.interactionPlanFeedbackLabel')}: {document.feedback.trim()}
           </Text>
         ) : null}
       </div>

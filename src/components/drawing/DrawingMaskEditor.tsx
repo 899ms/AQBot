@@ -254,7 +254,7 @@ export function DrawingMaskEditor({ open, image, onApply, onClose }: Props) {
   return (
     <Modal
       open={open}
-      title={t('drawing.maskEdit', '区域编辑')}
+      title={t('drawing.maskEdit')}
       width={MASK_MODAL_WIDTH}
       style={{
         top: MASK_MODAL_EDGE_GAP,
@@ -263,7 +263,7 @@ export function DrawingMaskEditor({ open, image, onApply, onClose }: Props) {
       }}
       onCancel={onClose}
       onOk={handleSubmit}
-      okText={t('drawing.submitMaskEdit', '提交区域编辑')}
+      okText={t('drawing.submitMaskEdit')}
       styles={{
         mask: { backdropFilter: 'blur(4px)' },
         body: {
@@ -354,7 +354,7 @@ export function DrawingMaskEditor({ open, image, onApply, onClose }: Props) {
                 return next;
               })}
             >
-              {t('drawing.eraser', '橡皮')}
+              {t('drawing.eraser')}
             </Button>
             <Button
               block
@@ -375,7 +375,7 @@ export function DrawingMaskEditor({ open, image, onApply, onClose }: Props) {
                 setHistory((items) => items.slice(0, -1));
               }}
             >
-              {t('drawing.undo', '撤销')}
+              {t('drawing.undo')}
             </Button>
             <Button
               block
@@ -387,10 +387,10 @@ export function DrawingMaskEditor({ open, image, onApply, onClose }: Props) {
                 setHistory([]);
               }}
             >
-              {t('drawing.reset', '重置')}
+              {t('drawing.reset')}
             </Button>
             <div>
-              <div style={{ fontSize: 12, color: token.colorTextSecondary }}>{t('drawing.brushSize', '画笔大小')}</div>
+              <div style={{ fontSize: 12, color: token.colorTextSecondary }}>{t('drawing.brushSize')}</div>
               <Slider min={4} max={96} value={brushSize} onChange={setBrushSize} />
             </div>
           </Space>

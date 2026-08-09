@@ -83,34 +83,34 @@ export function AcpToolCallNode(props: NodeComponentProps<{
   // not claim success when the actual terminal state is unknown.
   const status = tc?.status ?? 'unknown';
   const statusLabel = status === 'queued'
-    ? t('agentPage.interactionToolQueued', '等待执行')
+    ? t('agentPage.interactionToolQueued')
     : status === 'running'
-      ? t('agentPage.interactionToolRunning', '执行中')
+      ? t('agentPage.interactionToolRunning')
       : status === 'success'
-        ? t('agentPage.interactionToolSuccess', '执行成功')
+        ? t('agentPage.interactionToolSuccess')
         : status === 'error'
-          ? t('agentPage.interactionToolError', '执行失败')
+          ? t('agentPage.interactionToolError')
           : status === 'cancelled'
-            ? t('agentPage.interactionToolCancelled', '执行已取消')
-            : t('agentPage.interactionToolUnknown', '执行状态未知');
+            ? t('agentPage.interactionToolCancelled')
+            : t('agentPage.interactionToolUnknown');
   const statusColor = toolCallStatusColors[status] || token.colorTextSecondary;
   const isLoading = status === 'queued' || status === 'running';
   const output = tc?.output === 'aqbot:questionnaire:accepted'
-    ? t('agentPage.interactionAnswersSubmitted', '答案已提交')
+    ? t('agentPage.interactionAnswersSubmitted')
     : tc?.output === 'aqbot:questionnaire:chat_about_this'
-      ? t('agentPage.interactionChatAboutThis', '先聊聊这些答案')
+      ? t('agentPage.interactionChatAboutThis')
       : tc?.output === 'aqbot:questionnaire:skip_interview'
-        ? t('agentPage.interactionSkipInterview', '跳过问卷并立即规划')
+        ? t('agentPage.interactionSkipInterview')
         : tc?.output;
   const hasDetails = !!(tc && (tc.input || output));
   const approvalLabel = tc?.approvalStatus === 'approved'
-    ? t('agentPage.interactionApproved', '已批准')
+    ? t('agentPage.interactionApproved')
     : tc?.approvalStatus === 'denied'
-      ? t('agentPage.interactionDenied', '已拒绝')
+      ? t('agentPage.interactionDenied')
       : tc?.approvalStatus === 'cancelled'
-        ? t('agentPage.interactionCancelled', '已取消')
+        ? t('agentPage.interactionCancelled')
         : tc?.approvalStatus === 'expired'
-          ? t('agentPage.interactionExpired', '已过期')
+          ? t('agentPage.interactionExpired')
           : null;
   const approvalColor = tc?.approvalStatus === 'approved'
     ? token.colorSuccess
@@ -248,7 +248,7 @@ export function AcpToolCallNode(props: NodeComponentProps<{
                   userSelect: 'none',
                 }}
               >
-                {t('chat.inspector.toolInput', '输入参数')}
+                {t('chat.inspector.toolInput')}
               </summary>
               <pre
                 style={{
@@ -278,7 +278,7 @@ export function AcpToolCallNode(props: NodeComponentProps<{
                   userSelect: 'none',
                 }}
               >
-                {t('chat.inspector.toolOutput', '执行结果')}
+                {t('chat.inspector.toolOutput')}
               </summary>
               <pre
                 className="aqbot-chat-tool-output-pre"

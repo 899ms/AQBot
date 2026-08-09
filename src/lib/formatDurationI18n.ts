@@ -12,13 +12,13 @@ export function formatDurationI18n(ms: number, t: TFunction): string {
   const rounded = Math.max(0, Math.round(ms));
 
   if (rounded < 1000) {
-    return t('common.durationMs', { count: rounded, defaultValue: `${rounded}ms` });
+    return t('common.durationMs', { count: rounded });
   }
 
   if (rounded < 60_000) {
     const s = rounded / 1000;
     const display = Number.isInteger(s) ? s : Math.round(s * 10) / 10;
-    return t('common.durationSec', { count: display, defaultValue: `${display}s` });
+    return t('common.durationSec', { count: display });
   }
 
   if (rounded < 3_600_000) {
@@ -28,10 +28,9 @@ export function formatDurationI18n(ms: number, t: TFunction): string {
       return t('common.durationMinSec', {
         minutes,
         seconds,
-        defaultValue: `${minutes}m${seconds}s`,
       });
     }
-    return t('common.durationMin', { count: minutes, defaultValue: `${minutes}m` });
+    return t('common.durationMin', { count: minutes });
   }
 
   const hours = Math.floor(rounded / 3_600_000);
@@ -40,10 +39,9 @@ export function formatDurationI18n(ms: number, t: TFunction): string {
     return t('common.durationHourMin', {
       hours,
       minutes,
-      defaultValue: `${hours}h ${minutes}m`,
     });
   }
-  return t('common.durationHour', { count: hours, defaultValue: `${hours}h` });
+  return t('common.durationHour', { count: hours });
 }
 
 /** Parse ACP message meta_json for duration_ms. */

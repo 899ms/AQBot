@@ -240,7 +240,7 @@ function McpServerDetail({
     try {
       await updateServer(server.id, { [field]: value });
     } catch (e) {
-      message.error(`${t('settings.mcpServers.saveFailed', 'Save failed')}: ${e}`);
+      message.error(`${t('settings.mcpServers.saveFailed')}: ${e}`);
     }
   };
 

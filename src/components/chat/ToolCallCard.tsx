@@ -71,7 +71,7 @@ export function ToolCallCard({ toolCalls }: ToolCallChainProps) {
         contentParts.push(
           <details key="input" style={{ margin: 0 }}>
             <summary style={{ fontSize: 12, color: token.colorTextSecondary, cursor: 'pointer', userSelect: 'none' }}>
-              {t('chat.inspector.toolInput', '输入参数')}
+              {t('chat.inspector.toolInput')}
             </summary>
             <pre
               style={{
@@ -97,7 +97,7 @@ export function ToolCallCard({ toolCalls }: ToolCallChainProps) {
         contentParts.push(
           <details key="output" style={{ margin: 0 }}>
             <summary style={{ fontSize: 12, color: token.colorTextSecondary, cursor: 'pointer', userSelect: 'none' }}>
-              {t('chat.inspector.toolOutput', '执行结果')}
+              {t('chat.inspector.toolOutput')}
             </summary>
             <pre
               style={{

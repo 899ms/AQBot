@@ -327,7 +327,27 @@
       "userMessages": "用户消息",
       "assistantMessages": "AI 消息",
       "avgSpeed": "平均速度"
-    }
+    },
+    "categorySystemPromptPlaceholder": "System Prompt（分类下的对话将继承此提示词）",
+    "imageMissingSource": "图片链接为空",
+    "imagePreview": "图片预览",
+    "imageCopySuccess": "图片已复制",
+    "imageCopyFailed": "复制图片失败",
+    "imageSaveSuccess": "图片已保存",
+    "imageSaveFailed": "保存图片失败",
+    "imageLoadFailed": "图片加载失败",
+    "imageLoading": "图片加载中…",
+    "copyImage": "复制图片",
+    "saveImage": "保存图片",
+    "copyMarkdown": "复制 Markdown",
+    "exportMdNoThinking": "导出 Markdown（不含思维链）",
+    "exportTxtNoThinking": "导出文本（不含思维链）",
+    "exportJsonNoThinking": "导出 JSON（不含思维链）",
+    "messageRenderFallback": "该消息渲染失败，已切换为纯文本",
+    "summaryModel": "模型",
+    "summaryTokens": "摘要 tokens",
+    "summaryBoundary": "压缩到",
+    "contextTokenUsage": "上下文 tokens"
   },
   "gateway": {
     "title": "网关",
@@ -1098,7 +1118,8 @@
       "importPlaceholder": "粘贴 JSON 配置，例如：\n{\n  \"mcpServers\": {\n    \"my-coffee\": {\n      \"type\": \"streamablehttp\",\n      \"url\": \"https://example.com/mcp\",\n      \"headers\": {\n        \"Authorization\": \"Bearer xxx\"\n      }\n    }\n  }\n}",
       "importParseError": "JSON 格式无效",
       "importEmpty": "未找到有效的 MCP 服务器配置",
-      "importSuccess": "成功导入 {{count}} 个服务器"
+      "importSuccess": "成功导入 {{count}} 个服务器",
+      "saveFailed": "保存失败"
     },
     "knowledge": {
       "title": "知识库",
@@ -1489,8 +1510,14 @@
       "idExists": "该 ID 已存在",
       "reorder": "拖拽排序",
       "sourceCustom": "自定义",
-      "sourceRegistry": "Registry"
-    }
+      "sourceRegistry": "Registry",
+      "idPlaceholder": "例如 my-agent",
+      "argsPlaceholder": "以空格分隔"
+    },
+    "enabledProviders": "已启用",
+    "disabledProviders": "未启用",
+    "noMatchingIcons": "未找到匹配的图标",
+    "apiKey": "API 密钥"
   },
   "backup": {
     "title": "备份中心",
@@ -1668,7 +1695,15 @@
     "deny": "拒绝",
     "approved": "已批准",
     "denied": "已拒绝",
-    "expired": "已过期（Agent 已断开）"
+    "expired": "已过期（Agent 已断开）",
+    "unknown": "未知文件",
+    "on": "开启",
+    "off": "关闭",
+    "openDirectory": "打开目录",
+    "stop": "停止",
+    "removeAttachment": "删除附件",
+    "searchPlaceholder": "搜索…",
+    "noResults": "无结果"
   },
   "image": {
     "loadError": "图片加载失败",
@@ -1786,7 +1821,8 @@
     "selectImage": "选择图片",
     "imageUrl": "图片链接",
     "emoji": "表情符号",
-    "urlPlaceholder": "输入图片 URL"
+    "urlPlaceholder": "输入图片 URL",
+    "avatarSaveFailed": "图片已预览，但保存到本地失败，重启后可能丢失"
   },
   "files": {
     "images": "图片",
@@ -1861,7 +1897,10 @@
     "group": "技能组",
     "groupSkillCount": "{{count}} 个技能",
     "uninstallGroupConfirm": "确定要卸载技能组「{{name}}」及其所有子技能吗？",
-    "sourceAll": "全部"
+    "sourceAll": "全部",
+    "manifestSource": "来源",
+    "installedAt": "安装时间",
+    "filesLabel": "文件"
   },
   "roles": {
     "title": "角色",
@@ -1928,7 +1967,17 @@
     "askUserPlaceholder": "输入您的回答...",
     "askUserSupplementPlaceholder": "补充说明（可选）...",
     "askUserSubmit": "提交",
-    "askUserSubmitted": "已提交"
+    "askUserSubmitted": "已提交",
+    "permissionDontAsk": "不询问（拒绝）",
+    "permissionAutoApprove": "自动审批",
+    "permissionAcceptEdits": "允许编辑",
+    "permissionFullAccess": "完全访问",
+    "permissionAskEveryTime": "每次询问",
+    "agentDefault": "Agent 默认",
+    "permissionFullAccessWarningTitle": "完全访问模式",
+    "permissionAcceptEditsWarningTitle": "允许编辑模式",
+    "permissionFullAccessWarning": "Agent 将拥有完全访问权限，可以执行任何文件操作且不受路径限制。请确保你信任当前使用的模型和 System Prompt。",
+    "permissionAcceptEditsWarning": "Agent 将自动批准文件编辑操作，无需逐一确认。请确保你了解潜在的安全风险。"
   },
   "imageProtocol": {
     "title": "图片协议",
@@ -2227,6 +2276,7 @@
     "interactionPlanOutcomePending": "待审核",
     "interactionPlanAddToContext": "带入上下文",
     "interactionPlanAddedToContext": "已带入上下文",
-    "interactionPlanFeedbackLabel": "修改意见"
+    "interactionPlanFeedbackLabel": "修改意见",
+    "preparingConversation": "正在准备对话…"
   }
 }

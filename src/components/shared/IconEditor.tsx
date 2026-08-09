@@ -96,7 +96,7 @@ export function IconEditor({
           onChange('file', relativePath);
         } catch (err) {
           console.error('save_avatar_file failed:', err);
-          message.warning(t('userProfile.avatarSaveFailed', '图片已预览，但保存到本地失败，重启后可能丢失'));
+          message.warning(t('userProfile.avatarSaveFailed'));
           // Keep data URI already applied above.
         }
       }

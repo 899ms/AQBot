@@ -286,10 +286,10 @@ export function DrawingPage() {
     }
 
     modal.confirm({
-      title: t('drawing.replacePromptTitle', '替换当前提示词？'),
-      content: t('drawing.replacePromptContent', '输入框已有内容，是否使用这条历史提示词替换当前内容？'),
-      okText: t('common.confirm', '确认'),
-      cancelText: t('common.cancel', '取消'),
+      title: t('drawing.replacePromptTitle'),
+      content: t('drawing.replacePromptContent'),
+      okText: t('common.confirm'),
+      cancelText: t('common.cancel'),
       onOk: () => setPrompt(nextPrompt),
     });
   }, [modal, prompt, t]);

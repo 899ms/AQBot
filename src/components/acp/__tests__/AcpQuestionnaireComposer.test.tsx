@@ -1,6 +1,7 @@
 import { App } from 'antd';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { translateZhCN } from '@/test/i18nTestTranslator';
 import {
   AcpInteractionComposer,
   type AcpInteractionRequest,
@@ -10,8 +11,7 @@ import {
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
-    t: (_key: string, fallback?: string | { defaultValue?: string }) =>
-      typeof fallback === 'string' ? fallback : (fallback?.defaultValue ?? _key),
+    t: translateZhCN,
   }),
 }));
 
@@ -114,6 +114,9 @@ describe('AcpQuestionnaireComposer', () => {
     expect(await screen.findByText('Which layers?', {}, { timeout: 1500 })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('checkbox', { name: 'Frontend' }));
+    await waitFor(() => expect(
+      screen.getByRole('checkbox', { name: 'Frontend' }),
+    ).toBeChecked());
     fireEvent.click(screen.getByRole('checkbox', { name: 'Backend' }));
     fireEvent.change(screen.getByRole('textbox', { name: '其他: Which layers?' }), {
       target: { value: '  Keep mobile unchanged  ' },

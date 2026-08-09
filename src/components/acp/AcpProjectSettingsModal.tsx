@@ -72,11 +72,11 @@ export function AcpProjectSettingsModal({
     const trimmedName = name.trim();
     const trimmedPath = rootPath.trim();
     if (!trimmedName) {
-      message.warning(t('agentPage.projectNameRequired', '请填写项目名称'));
+      message.warning(t('agentPage.projectNameRequired'));
       return;
     }
     if (!trimmedPath) {
-      message.warning(t('agentPage.projectPathRequired', '请选择项目目录'));
+      message.warning(t('agentPage.projectPathRequired'));
       return;
     }
     setSaving(true);
@@ -106,7 +106,7 @@ export function AcpProjectSettingsModal({
 
   return (
     <Modal
-      title={t('agentPage.projectSettings', '项目设置')}
+      title={t('agentPage.projectSettings')}
       open={open}
       mask={{ enabled: true, blur: true }}
       onCancel={onClose}
@@ -147,25 +147,25 @@ export function AcpProjectSettingsModal({
         </div>
 
         <div style={{ marginBottom: 16 }}>
-          <div style={labelStyle}>{t('agentPage.projectName', '项目名称')}</div>
+          <div style={labelStyle}>{t('agentPage.projectName')}</div>
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder={t('agentPage.projectName', '项目名称')}
+            placeholder={t('agentPage.projectName')}
           />
         </div>
 
         <div style={{ marginBottom: 8 }}>
-          <div style={labelStyle}>{t('agentPage.projectDirectory', '项目目录')}</div>
+          <div style={labelStyle}>{t('agentPage.projectDirectory')}</div>
           <div style={{ display: 'flex', gap: 8 }}>
             <Input
               value={rootPath}
               onChange={(e) => setRootPath(e.target.value)}
-              placeholder={t('agentPage.projectDirectory', '项目目录')}
+              placeholder={t('agentPage.projectDirectory')}
               style={{ flex: 1 }}
             />
             <Button icon={<FolderOpen size={14} />} onClick={() => void handlePickDirectory()}>
-              {t('agentPage.browseDirectory', '浏览')}
+              {t('agentPage.browseDirectory')}
             </Button>
           </div>
         </div>

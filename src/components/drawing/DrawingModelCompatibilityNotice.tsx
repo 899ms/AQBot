@@ -11,7 +11,6 @@ interface Props {
   warnings: ImageModelWarning[];
   modelId: string;
   translate: DrawingWarningTranslate;
-  titleFallback?: string;
 }
 
 /**
@@ -22,15 +21,12 @@ export function DrawingModelCompatibilityNotice({
   warnings,
   modelId,
   translate,
-  titleFallback = '兼容提示',
 }: Props) {
   const { token } = theme.useToken();
   if (warnings.length === 0) return null;
 
   const title = String(
-    translate('drawing.warning.compatibilityTitle', {
-      defaultValue: titleFallback,
-    }),
+    translate('drawing.warning.compatibilityTitle', {}),
   );
 
   const content = (

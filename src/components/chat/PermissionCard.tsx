@@ -63,9 +63,9 @@ const PermissionCard: React.FC<PermissionCardProps> = ({
   };
 
   const actionOptions: PermissionOptionButton[] = options ?? [
-    { id: 'allow_once', label: t('common.allowOnce', 'Allow Once'), variant: 'primary' },
-    { id: 'allow_always', label: t('common.allowAlways', 'Always Allow'), variant: 'default' },
-    { id: 'deny', label: t('common.deny', 'Deny'), variant: 'danger' },
+    { id: 'allow_once', label: t('common.allowOnce'), variant: 'primary' },
+    { id: 'allow_always', label: t('common.allowAlways'), variant: 'default' },
+    { id: 'deny', label: t('common.deny'), variant: 'danger' },
   ];
 
   const inputStr = JSON.stringify(input, null, 2);
@@ -92,7 +92,7 @@ const PermissionCard: React.FC<PermissionCardProps> = ({
         {/* Header */}
         <Space align="center">
           <Shield size={16} />
-          <Text strong>{t('common.permissionRequired', 'Permission Required')}</Text>
+          <Text strong>{t('common.permissionRequired')}</Text>
           <Tag>{toolName}</Tag>
         </Space>
 
@@ -103,7 +103,7 @@ const PermissionCard: React.FC<PermissionCardProps> = ({
         >
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           <Text type="secondary" style={{ fontSize: 12 }}>
-            {t('common.toolInput', 'Tool Input')}
+            {t('common.toolInput')}
           </Text>
         </div>
         {expanded && (
@@ -149,16 +149,16 @@ const PermissionCard: React.FC<PermissionCardProps> = ({
         ) : status === 'approved' ? (
           <Space>
             <ShieldCheck size={14} style={{ color: token.colorSuccess }} />
-            <Text type="success">{t('common.approved', 'Approved')}</Text>
+            <Text type="success">{t('common.approved')}</Text>
           </Space>
         ) : status === 'denied' ? (
           <Space>
             <ShieldX size={14} style={{ color: token.colorError }} />
-            <Text type="danger">{t('common.denied', 'Denied')}</Text>
+            <Text type="danger">{t('common.denied')}</Text>
           </Space>
         ) : (
           <Space>
-            <Text type="warning">⚠️ {t('common.expired', 'Expired (Agent disconnected)')}</Text>
+            <Text type="warning">⚠️ {t('common.expired')}</Text>
           </Space>
         )}
       </Space>

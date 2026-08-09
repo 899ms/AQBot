@@ -327,7 +327,27 @@
       "searchPlaceholder": "Search skills",
       "empty": "No skills yet. Install some on the Skills page.",
       "manage": "Manage skills →"
-    }
+    },
+    "categorySystemPromptPlaceholder": "System Prompt (conversations in this category inherit this prompt)",
+    "imageMissingSource": "Image source is empty",
+    "imagePreview": "Image preview",
+    "imageCopySuccess": "Image copied",
+    "imageCopyFailed": "Failed to copy image",
+    "imageSaveSuccess": "Image saved",
+    "imageSaveFailed": "Failed to save image",
+    "imageLoadFailed": "Failed to load image",
+    "imageLoading": "Loading image…",
+    "copyImage": "Copy image",
+    "saveImage": "Save image",
+    "copyMarkdown": "Copy Markdown",
+    "exportMdNoThinking": "Export Markdown (without chain of thought)",
+    "exportTxtNoThinking": "Export text (without chain of thought)",
+    "exportJsonNoThinking": "Export JSON (without chain of thought)",
+    "messageRenderFallback": "This message failed to render and was switched to plain text",
+    "summaryModel": "Model",
+    "summaryTokens": "Summary tokens",
+    "summaryBoundary": "Compressed through",
+    "contextTokenUsage": "Context tokens"
   },
   "gateway": {
     "title": "Gateway",
@@ -1098,7 +1118,8 @@
       "importPlaceholder": "Paste JSON config, e.g.:\n{\n  \"mcpServers\": {\n    \"my-coffee\": {\n      \"type\": \"streamablehttp\",\n      \"url\": \"https://example.com/mcp\",\n      \"headers\": {\n        \"Authorization\": \"Bearer xxx\"\n      }\n    }\n  }\n}",
       "importParseError": "Invalid JSON format",
       "importEmpty": "No valid MCP server config found",
-      "importSuccess": "Successfully imported {{count}} server(s)"
+      "importSuccess": "Successfully imported {{count}} server(s)",
+      "saveFailed": "Save failed"
     },
     "knowledge": {
       "title": "Knowledge Base",
@@ -1489,8 +1510,14 @@
       "idExists": "This ID already exists",
       "reorder": "Drag to reorder",
       "sourceCustom": "Custom",
-      "sourceRegistry": "Registry"
-    }
+      "sourceRegistry": "Registry",
+      "idPlaceholder": "e.g. my-agent",
+      "argsPlaceholder": "Space-separated"
+    },
+    "enabledProviders": "Enabled",
+    "disabledProviders": "Disabled",
+    "noMatchingIcons": "No matching icons",
+    "apiKey": "API Key"
   },
   "backup": {
     "title": "Backup Center",
@@ -1668,7 +1695,15 @@
     "deny": "Deny",
     "approved": "Approved",
     "denied": "Denied",
-    "expired": "Expired (Agent disconnected)"
+    "expired": "Expired (Agent disconnected)",
+    "unknown": "Unknown file",
+    "on": "On",
+    "off": "Off",
+    "openDirectory": "Open directory",
+    "stop": "Stop",
+    "removeAttachment": "Remove attachment",
+    "searchPlaceholder": "Search…",
+    "noResults": "No results"
   },
   "image": {
     "loadError": "Image failed to load",
@@ -1786,7 +1821,8 @@
     "selectImage": "Select image",
     "imageUrl": "Image URL",
     "emoji": "Emoji",
-    "urlPlaceholder": "Enter image URL"
+    "urlPlaceholder": "Enter image URL",
+    "avatarSaveFailed": "The image was previewed, but saving it locally failed and it may be lost after restart"
   },
   "files": {
     "images": "Images",
@@ -1861,7 +1897,10 @@
     "group": "Skill Group",
     "groupSkillCount": "{{count}} skills",
     "uninstallGroupConfirm": "Are you sure you want to uninstall skill group \"{{name}}\" and all its sub-skills?",
-    "sourceAll": "All"
+    "sourceAll": "All",
+    "manifestSource": "Source",
+    "installedAt": "Installed",
+    "filesLabel": "Files"
   },
   "roles": {
     "title": "Roles",
@@ -1928,7 +1967,17 @@
     "askUserPlaceholder": "Type your answer...",
     "askUserSupplementPlaceholder": "Additional input (optional)...",
     "askUserSubmit": "Submit",
-    "askUserSubmitted": "Submitted"
+    "askUserSubmitted": "Submitted",
+    "permissionDontAsk": "Don't Ask (Deny)",
+    "permissionAutoApprove": "Auto Approve",
+    "permissionAcceptEdits": "Accept Edits",
+    "permissionFullAccess": "Full Access",
+    "permissionAskEveryTime": "Ask Every Time",
+    "agentDefault": "Agent Default",
+    "permissionFullAccessWarningTitle": "Full Access Mode",
+    "permissionAcceptEditsWarningTitle": "Accept Edits Mode",
+    "permissionFullAccessWarning": "The agent will have full access and can perform any file operation without path restrictions. Make sure you trust the current model and System Prompt.",
+    "permissionAcceptEditsWarning": "The agent will automatically approve file edits without individual confirmation. Make sure you understand the potential security risks."
   },
   "imageProtocol": {
     "title": "Image protocol",
@@ -2227,6 +2276,7 @@
     "interactionPlanOutcomePending": "Pending review",
     "interactionPlanAddToContext": "Add to context",
     "interactionPlanAddedToContext": "Added to context",
-    "interactionPlanFeedbackLabel": "Feedback"
+    "interactionPlanFeedbackLabel": "Feedback",
+    "preparingConversation": "Preparing conversation…"
   }
 }

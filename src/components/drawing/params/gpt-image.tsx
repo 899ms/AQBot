@@ -73,9 +73,9 @@ export function isGptImageOutputCompressionSupported(
   return modelId.startsWith('gpt-image-') && (outputFormat === 'jpeg' || outputFormat === 'webp');
 }
 
-export function getGptImageSizeOptions(t: DrawingTranslate): DrawingParamOption[] {
+export function getGptImageSizeOptions(translate: DrawingTranslate): DrawingParamOption[] {
   return GPT_IMAGE_SIZE_OPTIONS.map((size) => ({
-    fallbackLabel: size === 'auto' ? t('drawing.option.auto', 'Auto') : size,
+    fallbackLabel: size === 'auto' ? translate('drawing.option.auto', 'Auto') : size,
     value: size,
   }));
 }

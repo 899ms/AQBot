@@ -7,6 +7,7 @@ import {
   useAcpStore,
 } from '@/stores/acpStore';
 import type { AcpSessionSnapshot } from '@/types/acp';
+import { translateZhCN } from '@/test/i18nTestTranslator';
 import { AcpConversationPane, localizeAcpStatus } from '../AcpConversationPane';
 
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
@@ -69,8 +70,7 @@ vi.mock('@/lib/invoke', async (importOriginal) => {
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
-    t: (key: string, fallback?: string | { defaultValue?: string }) =>
-      typeof fallback === 'string' ? fallback : (fallback?.defaultValue ?? key),
+    t: translateZhCN,
   }),
 }));
 
@@ -177,12 +177,15 @@ describe('AcpConversationPane', () => {
   it('localizes host-owned status codes without rewriting Agent status text', () => {
     const translate = (key: string) => key;
     const interpolate = (
-      _key: string,
-      fallback: string,
+      key: string,
       values?: Record<string, string | number>,
     ) => Object.entries(values ?? {}).reduce(
       (text, [name, value]) => text.split(`{{${name}}}`).join(String(value)),
-      fallback,
+      ({
+        'agentPage.interactionNetworkRetryProgress': '网络重试 {{attempt}}/{{maximum}}',
+        'agentPage.interactionNetworkRetryAttempt': '网络重试 {{attempt}}',
+        'agentPage.interactionNetworkRetry': '网络重试',
+      } as Record<string, string>)[key] ?? key,
     );
 
     const localizedStatuses = [
@@ -1382,7 +1385,7 @@ describe('AcpConversationPane', () => {
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('acp_prompt', expect.objectContaining({
         threadId: 'thread-1',
-        prompt: '(attachment)',
+        prompt: '（附件）',
         attachments: [{
           file_name: 'diagram.png',
           file_type: 'image/png',
@@ -1438,7 +1441,7 @@ describe('AcpConversationPane', () => {
     fireEvent.change(fileInput!, {
       target: { files: [new File(['image'], 'blocked.png', { type: 'image/png' })] },
     });
-    expect(await screen.findByText('agentPage.imageAttachmentUnsupported')).toBeInTheDocument();
+    expect(await screen.findByText('当前 Agent 不支持图片输入')).toBeInTheDocument();
     expect(screen.queryByText('blocked.png')).not.toBeInTheDocument();
 
     fireEvent.change(fileInput!, {
@@ -1450,7 +1453,7 @@ describe('AcpConversationPane', () => {
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith('acp_prompt', expect.objectContaining({
         threadId: 'thread-1',
-        prompt: '(attachment)',
+        prompt: '（附件）',
         attachments: [{
           file_name: 'sources.zip',
           file_type: 'application/zip',
@@ -1503,7 +1506,7 @@ describe('AcpConversationPane', () => {
     });
 
     await waitFor(() => expect(screen.queryByText('pending.png')).not.toBeInTheDocument());
-    expect(await screen.findByText('agentPage.imageAttachmentUnsupported')).toBeInTheDocument();
+    expect(await screen.findByText('当前 Agent 不支持图片输入')).toBeInTheDocument();
   });
 
   it('collapses a long paste and expands it into the ACP prompt', async () => {

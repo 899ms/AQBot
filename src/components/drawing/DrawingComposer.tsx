@@ -112,7 +112,7 @@ function DrawingEditPreview({ image, previewUrl }: { image: DrawingImage; previe
       {src ? (
         <Image
           src={src}
-          alt={t('drawing.editPreview', '编辑预览')}
+          alt={t('drawing.editPreview')}
           width={36}
           height={36}
           style={{
@@ -223,17 +223,16 @@ export function DrawingComposer({
     if (!submissionAvailable) {
       message.warning(t(
         'drawing.operationUnavailable',
-        '当前模型不支持这项图片操作，请更换模型或移除参考图。',
       ));
       return;
     }
     if (!settings.providerId) {
-      message.warning(t('drawing.selectProvider', '选择 OpenAI Provider'));
+      message.warning(t('drawing.selectProvider'));
       return;
     }
     const promptText = prompt.trim();
     if (!promptText) {
-      message.warning(t('drawing.promptRequired', '请输入提示词'));
+      message.warning(t('drawing.promptRequired'));
       return;
     }
     try {
@@ -348,7 +347,7 @@ export function DrawingComposer({
     void (async () => {
       try {
         await Promise.all(imageFiles.map((file) => uploadReferenceImage(file)));
-        message.success?.(t('drawing.referenceAdded', '已加入参考图'));
+        message.success?.(t('drawing.referenceAdded'));
       } catch (error) {
         message.error?.(String(error));
       }
@@ -393,7 +392,7 @@ export function DrawingComposer({
             <DrawingEditPreview image={editSourceImage} previewUrl={editPreviewUrl} />
             <div className="flex min-w-0 flex-1 flex-col gap-1">
               <Tag color={editMaskFileId ? 'green' : 'blue'} style={{ width: 'fit-content', marginInlineEnd: 0 }}>
-                {editMaskFileId ? t('drawing.maskEditMode', '区域编辑模式') : t('drawing.editMode', '编辑模式')}
+                {editMaskFileId ? t('drawing.maskEditMode') : t('drawing.editMode')}
               </Tag>
               <span className="min-w-0 truncate" style={{ fontSize: 12, color: token.colorTextSecondary }}>
                 {editSourceImage.storage_path}
@@ -414,7 +413,7 @@ export function DrawingComposer({
               handleSubmit();
             }
           }}
-          placeholder={t('drawing.promptPlaceholder', '输入你想生成的画面')}
+          placeholder={t('drawing.promptPlaceholder')}
           rows={2}
           style={{
             width: '100%',

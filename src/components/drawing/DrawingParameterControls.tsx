@@ -74,7 +74,7 @@ export function DrawingParameterField({
           <Select
             value={settings.modelId}
             options={toSelectOptions(context.modelOptions, translate)}
-            placeholder={translate('drawing.selectModel', '选择绘图模型')}
+            placeholder={translate('drawing.selectModel', 'Select drawing model')}
             onChange={(value) => onChange(field, value)}
           />
         </Form.Item>
@@ -84,7 +84,7 @@ export function DrawingParameterField({
         <Form.Item label={label}>
           <Select
             value={settings.providerId || undefined}
-            placeholder={translate('drawing.selectProvider', '选择服务商')}
+            placeholder={translate('drawing.selectProvider', 'Select provider')}
             options={providerOptions}
             optionLabelProp="label"
             onChange={onProviderChange}
@@ -154,7 +154,7 @@ export function DrawingParameterField({
           />
           {field.fallbackHint && (
             <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-              {translate(field.hintKey ?? field.id, field.fallbackHint)}
+              {translate(field.hintKey ?? field.id, field.fallbackHint ?? '')}
             </Typography.Text>
           )}
         </Form.Item>

@@ -1449,9 +1449,9 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                   icon={<ExternalLink size={13} />}
                   onClick={() => openExternalUrl(providerWebsite)}
                   style={{ paddingInline: 2, height: 'auto', gap: 2 }}
-                  aria-label={t('settings.website', '官网')}
+                  aria-label={t('settings.website')}
                 >
-                  {t('settings.website', '官网')}
+                  {t('settings.website')}
                 </Button>
               )}
               {!provider.builtin_id && (
@@ -1619,7 +1619,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
           <Form.Item
             label={
               <Space size={4}>
-                <span>Base URL</span>
+                <span>{t('settings.apiHost')}</span>
                 <Tooltip title={t('settings.urlHintExclamation')}>
                   <CircleHelp size={14} style={{ cursor: 'help' }} />
                 </Tooltip>
@@ -1854,7 +1854,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
                 <Text type="secondary">
                   {t(
                     'settings.emptyModelsHint',
-                    '模型列表为空。请先配置 API 密钥，然后点击「同步模型」从上游拉取模型。',
                   )}
                 </Text>
               </div>
@@ -1881,7 +1880,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
         ) : filteredModels.length === 0 ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={t('settings.noMatchingModels', '未找到匹配的模型')}
+            description={t('settings.noMatchingModels')}
             style={{ padding: '24px 16px' }}
           />
         ) : (

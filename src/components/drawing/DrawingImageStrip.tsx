@@ -167,9 +167,9 @@ function DrawingPreviewImage({
       {src && (onUseAsReference || onEdit || onMaskEdit) && (
         <div className="drawing-image-hover-actions pointer-events-none absolute right-2 top-2 z-20 flex gap-1">
           {onUseAsReference && (
-            <Tooltip title={t('drawing.useAsReference', '作为参考图')}>
+            <Tooltip title={t('drawing.useAsReference')}>
               <Button
-                aria-label={t('drawing.useAsReference', '作为参考图')}
+                aria-label={t('drawing.useAsReference')}
                 className="drawing-image-action-button pointer-events-auto"
                 size="small"
                 shape="circle"
@@ -189,9 +189,9 @@ function DrawingPreviewImage({
             </Tooltip>
           )}
           {onEdit && (
-            <Tooltip title={t('drawing.reEdit', '重新编辑')}>
+            <Tooltip title={t('drawing.reEdit')}>
               <Button
-                aria-label={t('drawing.reEdit', '重新编辑')}
+                aria-label={t('drawing.reEdit')}
                 className="drawing-image-action-button pointer-events-auto"
                 size="small"
                 shape="circle"
@@ -211,9 +211,9 @@ function DrawingPreviewImage({
             </Tooltip>
           )}
           {onMaskEdit && (
-            <Tooltip title={t('drawing.maskEdit', '区域编辑')}>
+            <Tooltip title={t('drawing.maskEdit')}>
               <Button
-                aria-label={t('drawing.maskEdit', '区域编辑')}
+                aria-label={t('drawing.maskEdit')}
                 className="drawing-image-action-button pointer-events-auto"
                 size="small"
                 shape="circle"

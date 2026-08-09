@@ -3,13 +3,13 @@ import { App } from 'antd';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAcpStore } from '@/stores/acpStore';
+import { translateZhCN } from '@/test/i18nTestTranslator';
 import { AcpToolCallNode } from '../AcpToolCallNode';
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
   useTranslation: () => ({
-    t: (key: string, fallback?: string | { defaultValue?: string }) =>
-      typeof fallback === 'string' ? fallback : (fallback?.defaultValue ?? key),
+    t: translateZhCN,
   }),
 }));
 
@@ -57,7 +57,7 @@ describe('AcpToolCallNode', () => {
       </App>,
     );
 
-    const trigger = screen.getByRole('button', { name: /terminal.*执行成功.*已批准/i });
+    const trigger = screen.getByRole('button', { name: /terminal.*已完成.*已批准/i });
     fireEvent.click(trigger);
     expect(screen.getByText('README.md')).toBeInTheDocument();
     expect(screen.queryByText('/workspace')).not.toBeInTheDocument();
@@ -91,8 +91,8 @@ describe('AcpToolCallNode', () => {
       </App>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /ask_user_question.*执行成功/i }));
-    expect(screen.getByText('跳过问卷并立即规划')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /ask_user_question.*已完成/i }));
+    expect(screen.getByText('跳过提问并开始规划')).toBeInTheDocument();
     expect(screen.queryByText('aqbot:questionnaire:skip_interview')).not.toBeInTheDocument();
   });
 });

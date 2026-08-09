@@ -94,6 +94,7 @@ function SortableCategoryLabel({
   newConversationLabel,
   editLabel,
   deleteLabel,
+  systemPromptLabel,
 }: {
   cat: ConversationCategory
   onCreateConversation: () => void
@@ -103,6 +104,7 @@ function SortableCategoryLabel({
   newConversationLabel: string
   editLabel: string
   deleteLabel: string
+  systemPromptLabel: string
 }) {
   const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({ id: cat.id })
   const { setNodeRef: setDropRef } = useDroppable({ id: cat.id })
@@ -141,7 +143,7 @@ function SortableCategoryLabel({
         <CategoryIcon cat={cat} size={14} />
         <span className="truncate">{cat.name}</span>
         {cat.system_prompt && (
-          <Tooltip title="System Prompt">
+          <Tooltip title={systemPromptLabel}>
             <MessageSquareText size={12} style={{ opacity: 0.45, flexShrink: 0 }} />
           </Tooltip>
         )}
@@ -830,6 +832,7 @@ export function ChatSidebar() {
             newConversationLabel={t('chat.newConversation')}
             editLabel={t('chat.editCategory')}
             deleteLabel={t('chat.deleteCategory')}
+            systemPromptLabel={t('roles.systemPrompt')}
             onEdit={() => {
               setEditingCategory(cat)
               setCategoryModalOpen(true)

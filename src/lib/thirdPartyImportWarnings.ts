@@ -7,7 +7,7 @@ export type ImportWarningTranslate = (
 
 /**
  * Localize third-party import warnings by stable backend `code`.
- * Falls back to the backend English `message` when the locale key is missing.
+ * Uses the backend message only for codes not represented by a locale key.
  */
 export function getThirdPartyImportWarningMessage(
   warning: ThirdPartyImportWarning,
@@ -18,7 +18,6 @@ export function getThirdPartyImportWarningMessage(
   const params = {
     id: warning.sourceId ?? '',
     name: warning.sourceId ?? '',
-    defaultValue: warning.message,
   };
   const translated = t(key, params);
   if (!translated || translated === key) {

@@ -404,8 +404,10 @@ export function RolesPage() {
     const groups = new Map<string, { label: string; options: { value: string; label: string; description?: string }[] }>();
     for (const skill of skills) {
       const source = skill.source || 'other';
+      const sourceKey = `skills.source.${source}`;
+      const localizedSource = t(sourceKey);
       const group = groups.get(source) ?? {
-        label: t(`skills.source.${source}`, { defaultValue: source }),
+        label: localizedSource === sourceKey ? source : localizedSource,
         options: [],
       };
       group.options.push({

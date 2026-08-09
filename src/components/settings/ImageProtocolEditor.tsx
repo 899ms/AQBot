@@ -63,11 +63,11 @@ export function ImageProtocolEditor({
     try {
       parsed = text.trim() ? JSON.parse(text) : {};
     } catch {
-      setJsonError(t('imageProtocol.invalidJson', '图片协议 JSON 无效'));
+      setJsonError(t('imageProtocol.invalidJson'));
       return;
     }
     if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
-      setJsonError(t('imageProtocol.jsonObjectRequired', '必须是 JSON 对象'));
+      setJsonError(t('imageProtocol.jsonObjectRequired'));
       return;
     }
     setJsonError(null);
@@ -78,27 +78,25 @@ export function ImageProtocolEditor({
     <div className="space-y-3">
       <div>
         <Typography.Title level={5} style={{ margin: 0 }}>
-          {t('imageProtocol.title', '图片协议')}
+          {t('imageProtocol.title')}
         </Typography.Title>
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           {isXaiImageModel(modelId) || providerType === 'xai'
             ? t(
               'imageProtocol.grokAutoDetectDescription',
-              '当前模型默认识别为 xAI Images，可在下方显式覆盖。协议与参数预设相互独立。',
             )
             : t(
               'imageProtocol.autoDetectDescription',
-              '适配器决定请求协议；参数兜底模型决定参数面板与校验。真实 model id 始终原样发送。',
             )}
         </Typography.Text>
       </div>
 
       <Form layout="vertical">
-        <Form.Item label={t('imageProtocol.adapterProfile', '适配器预设（协议）')}>
+        <Form.Item label={t('imageProtocol.adapterProfile')}>
           <Select
             value={config.adapter_id ?? ''}
             options={[
-              { value: '', label: t('imageProtocol.autoDetect', '自动识别') },
+              { value: '', label: t('imageProtocol.autoDetect') },
               { value: 'openai_images', label: 'OpenAI Images' },
               { value: 'xai_images', label: 'xAI Images' },
               { value: 'glm_images', label: 'GLM / CogView' },
@@ -110,10 +108,9 @@ export function ImageProtocolEditor({
           />
         </Form.Item>
         <Form.Item
-          label={t('imageProtocol.paramProfile', '绘画参数兜底模型')}
+          label={t('imageProtocol.paramProfile')}
           extra={t(
             'imageProtocol.paramProfileHint',
-            '只影响参数面板与校验范围，不改变请求协议和真实 model id。留空则按适配器默认预设（OpenAI 协议默认 gpt-image-2）。',
           )}
         >
           <Select
@@ -121,7 +118,7 @@ export function ImageProtocolEditor({
             options={[
               {
                 value: '',
-                label: t('imageProtocol.paramProfileAuto', '自动（适配器默认）'),
+                label: t('imageProtocol.paramProfileAuto'),
               },
               ...IMAGE_PARAM_PROFILES.map((id) => ({
                 value: id,
@@ -134,15 +131,14 @@ export function ImageProtocolEditor({
         <Form.Item
           label={t(
             'imageProtocol.capabilityOverrides',
-            '能力覆盖（留空使用适配器预设值）',
           )}
         >
           <Checkbox.Group
             value={config.operation_overrides ?? []}
             options={[
-              { value: 'generate', label: t('imageProtocol.operation.generate', '生成') },
-              { value: 'edit', label: t('imageProtocol.operation.edit', '编辑') },
-              { value: 'mask_edit', label: t('imageProtocol.operation.maskEdit', '区域编辑') },
+              { value: 'generate', label: t('imageProtocol.operation.generate') },
+              { value: 'edit', label: t('imageProtocol.operation.edit') },
+              { value: 'mask_edit', label: t('imageProtocol.operation.maskEdit') },
             ]}
             onChange={(operations) => patch({
               operation_overrides: operations.length > 0
@@ -151,54 +147,53 @@ export function ImageProtocolEditor({
             })}
           />
         </Form.Item>
-        <Form.Item label={t('imageProtocol.generationEndpoint', '生成端点')}>
+        <Form.Item label={t('imageProtocol.generationEndpoint')}>
           <Input
             value={config.endpoint ?? ''}
             placeholder={t(
               'imageProtocol.generationEndpointPlaceholder',
-              '/images/generations 或完整 URL',
             )}
             onChange={(event) => patch({ endpoint: event.target.value || null })}
           />
         </Form.Item>
-        <Form.Item label={t('imageProtocol.editEndpoint', '编辑端点')}>
+        <Form.Item label={t('imageProtocol.editEndpoint')}>
           <Input
             value={config.edit_endpoint ?? ''}
             placeholder="/images/edits"
             onChange={(event) => patch({ edit_endpoint: event.target.value || null })}
           />
         </Form.Item>
-        <Form.Item label={t('imageProtocol.pollEndpoint', '轮询端点')}>
+        <Form.Item label={t('imageProtocol.pollEndpoint')}>
           <Input
             value={config.poll_endpoint ?? ''}
             placeholder="/tasks/{task_id}"
             onChange={(event) => patch({ poll_endpoint: event.target.value || null })}
           />
         </Form.Item>
-        <Form.Item label={t('imageProtocol.cancelEndpoint', '取消端点')}>
+        <Form.Item label={t('imageProtocol.cancelEndpoint')}>
           <Input
             value={config.cancel_endpoint ?? ''}
             placeholder="/tasks/{task_id}/cancel"
             onChange={(event) => patch({ cancel_endpoint: event.target.value || null })}
           />
         </Form.Item>
-        <Form.Item label={t('imageProtocol.authMode', '认证方式')}>
+        <Form.Item label={t('imageProtocol.authMode')}>
           <Select
             value={config.auth_mode ?? 'bearer'}
             options={[
-              { value: 'bearer', label: t('imageProtocol.auth.bearer', 'Bearer Token') },
+              { value: 'bearer', label: t('imageProtocol.auth.bearer') },
               {
                 value: 'api_key_header',
-                label: t('imageProtocol.auth.apiKeyHeader', 'API 密钥 Header'),
+                label: t('imageProtocol.auth.apiKeyHeader'),
               },
-              { value: 'query', label: t('imageProtocol.auth.query', '查询参数') },
-              { value: 'none', label: t('imageProtocol.auth.none', '无认证') },
+              { value: 'query', label: t('imageProtocol.auth.query') },
+              { value: 'none', label: t('imageProtocol.auth.none') },
             ]}
             onChange={(authMode) => patch({ auth_mode: authMode })}
           />
         </Form.Item>
         {config.auth_mode === 'api_key_header' && (
-          <Form.Item label={t('imageProtocol.authHeaderName', '认证 Header 名称')}>
+          <Form.Item label={t('imageProtocol.authHeaderName')}>
             <Input
               value={config.auth_header ?? ''}
               placeholder="x-api-key"
@@ -207,7 +202,7 @@ export function ImageProtocolEditor({
           </Form.Item>
         )}
         <div className="grid grid-cols-2 gap-3">
-          <Form.Item label={t('imageProtocol.pollIntervalSeconds', '轮询间隔（秒）')}>
+          <Form.Item label={t('imageProtocol.pollIntervalSeconds')}>
             <InputNumber
               min={1}
               max={30}
@@ -216,7 +211,7 @@ export function ImageProtocolEditor({
               onChange={(next) => patch({ poll_interval_secs: next ?? 3 })}
             />
           </Form.Item>
-          <Form.Item label={t('imageProtocol.timeoutSeconds', '总时限（秒）')}>
+          <Form.Item label={t('imageProtocol.timeoutSeconds')}>
             <InputNumber
               min={60}
               max={86400}
@@ -226,7 +221,7 @@ export function ImageProtocolEditor({
             />
           </Form.Item>
         </div>
-        <Form.Item label={t('imageProtocol.extraBody', '附加请求体（JSON 对象）')}>
+        <Form.Item label={t('imageProtocol.extraBody')}>
           <Input.TextArea
             value={extraBodyText}
             autoSize={{ minRows: 2, maxRows: 6 }}
@@ -238,7 +233,6 @@ export function ImageProtocolEditor({
           <Form.Item
             label={t(
               'imageProtocol.fieldResponseMapping',
-              '字段与响应映射（JSON 对象）',
             )}
           >
             <Input.TextArea
@@ -255,7 +249,7 @@ export function ImageProtocolEditor({
         <Alert
           type="error"
           showIcon
-          title={t('imageProtocol.invalidJson', '图片协议 JSON 无效')}
+          title={t('imageProtocol.invalidJson')}
           description={jsonError}
         />
       )}

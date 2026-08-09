@@ -242,7 +242,7 @@ export function WebSearchNode(props: NodeComponentProps<WebSearchNodeData>) {
           }}
         >
           <Search size={16} style={{ color: token.colorTextTertiary }} />
-          <span style={{ flex: 1 }}>{t('chat.search.noResults', '未找到相关搜索结果')}</span>
+          <span style={{ flex: 1 }}>{t('chat.search.noResults')}</span>
         </div>
       </>
     );

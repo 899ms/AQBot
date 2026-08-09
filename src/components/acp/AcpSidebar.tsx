@@ -58,17 +58,17 @@ function useRevealInFolderLabel(): string {
   const { t } = useTranslation();
   return useMemo(() => {
     if (typeof navigator === 'undefined') {
-      return t('agentPage.showInFolder', '在文件夹中显示');
+      return t('agentPage.showInFolder');
     }
     const platform = navigator.platform || '';
     const ua = navigator.userAgent || '';
     if (/Mac|iPhone|iPad|iPod/i.test(platform) || (/Mac OS/i.test(ua) && !/Windows|Linux|Android/i.test(ua))) {
-      return t('agentPage.showInFinder', '在 Finder 中显示');
+      return t('agentPage.showInFinder');
     }
     if (/Win/i.test(platform) || /Windows/i.test(ua)) {
-      return t('agentPage.showInExplorer', '在资源管理器中显示');
+      return t('agentPage.showInExplorer');
     }
-    return t('agentPage.showInFileManager', '在文件管理器中显示');
+    return t('agentPage.showInFileManager');
   }, [t]);
 }
 
@@ -675,7 +675,7 @@ export function AcpSidebar() {
     (thread: AcpThread) => {
       let newTitle = thread.title;
       modal.confirm({
-        title: t('chat.rename', '重命名'),
+        title: t('chat.rename'),
         mask: { enabled: true, blur: true },
         content: (
           <Input
@@ -707,9 +707,9 @@ export function AcpSidebar() {
         try {
           const copy = await duplicateThread(
             thread.id,
-            t('agentPage.copyThreadSuffix', ' (副本)'),
+            t('agentPage.copyThreadSuffix'),
           );
-          messageApi.success(t('agentPage.copyThreadSuccess', '已复制对话'));
+          messageApi.success(t('agentPage.copyThreadSuccess'));
           void selectThread(copy.id);
         } catch (e) {
           messageApi.error(String(e));
@@ -889,7 +889,7 @@ export function AcpSidebar() {
           group,
           label: (
             <span style={{ color: token.colorTextQuaternary, fontSize: 12 }}>
-              {t('agentPage.emptyProjectThreads', '暂无对话')}
+              {t('agentPage.emptyProjectThreads')}
             </span>
           ),
           icon: null,
@@ -969,7 +969,7 @@ export function AcpSidebar() {
           project={project}
           menuActionRef={menuActionRef}
           newThreadLabel={t('agentPage.newThread')}
-          settingsLabel={t('agentPage.projectSettings', '项目设置')}
+          settingsLabel={t('agentPage.projectSettings')}
           revealLabel={revealLabel}
           deleteLabel={t('agentPage.deleteProject')}
           onSelect={() => handleSelectProject(projectId)}
@@ -1023,13 +1023,13 @@ export function AcpSidebar() {
         {
           key: 'rename',
           icon: <Pencil size={14} />,
-          label: t('chat.rename', '重命名'),
+          label: t('chat.rename'),
           onClick: () => handleRenameThread(thread),
         },
         {
           key: 'pin',
           icon: pinned ? <PinOff size={14} /> : <Pin size={14} />,
-          label: pinned ? t('chat.unpin', '取消置顶') : t('chat.pin', '置顶'),
+          label: pinned ? t('chat.unpin') : t('chat.pin'),
           onClick: () => {
             void toggleThreadPin(thread.id);
           },
@@ -1037,7 +1037,7 @@ export function AcpSidebar() {
         {
           key: 'duplicate',
           icon: <Copy size={14} />,
-          label: t('agentPage.copyThread', '复制对话'),
+          label: t('agentPage.copyThread'),
           onClick: () => handleDuplicateThread(thread),
         },
         {
@@ -1328,7 +1328,7 @@ export function AcpSidebar() {
                   {expandedSections.projects
                     ? <ChevronDown size={14} />
                     : <ChevronRight size={14} />}
-                  <span>{t('agentPage.projects', '项目')}</span>
+                  <span>{t('agentPage.projects')}</span>
                 </button>
                 <Tooltip title={t('agentPage.addProject')}>
                   <Button
@@ -1357,7 +1357,7 @@ export function AcpSidebar() {
                       padding: '6px 30px 10px',
                     }}
                   >
-                    {t('agentPage.emptyProjects', '当前没有任何项目')}
+                    {t('agentPage.emptyProjects')}
                   </div>
                 ) : null
               ) : null}
@@ -1399,7 +1399,7 @@ export function AcpSidebar() {
                   {expandedSections.recent
                     ? <ChevronDown size={14} />
                     : <ChevronRight size={14} />}
-                  <span>{t('agentPage.recent', '最近')}</span>
+                  <span>{t('agentPage.recent')}</span>
                 </button>
                 <Tooltip title={t('agentPage.newThread')}>
                   <Button
@@ -1427,7 +1427,7 @@ export function AcpSidebar() {
                       padding: '6px 30px 10px',
                     }}
                   >
-                    {t('agentPage.emptyRecentThreads', '暂无最近对话')}
+                    {t('agentPage.emptyRecentThreads')}
                   </div>
                 ) : null
               ) : null}

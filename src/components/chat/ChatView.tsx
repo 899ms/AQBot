@@ -728,7 +728,7 @@ function ToolCallNode(props: NodeComponentProps<{
           {tc.input && Object.keys(tc.input).length > 0 && (
             <details style={{ margin: 0 }}>
               <summary style={{ fontSize: 12, color: token.colorTextSecondary, cursor: 'pointer', userSelect: 'none' }}>
-                {t('chat.inspector.toolInput', '输入参数')}
+                {t('chat.inspector.toolInput')}
               </summary>
               <pre
                 style={{
@@ -751,7 +751,7 @@ function ToolCallNode(props: NodeComponentProps<{
           {tc.output && (
             <details style={{ margin: 0 }}>
               <summary style={{ fontSize: 12, color: token.colorTextSecondary, cursor: 'pointer', userSelect: 'none' }}>
-                {t('chat.inspector.toolOutput', '执行结果')}
+                {t('chat.inspector.toolOutput')}
               </summary>
               <pre
                 className="aqbot-chat-tool-output-pre"
@@ -2659,7 +2659,7 @@ export function ChatView() {
   const exportSelectedShare = useCallback(async (format: 'png' | 'md' | 'copy-md') => {
     const selected = getSelectedShareMessagesOrdered();
     if (selected.length === 0) {
-      messageApi.warning(t('chat.shareSelectNone', '请先选择要分享的消息'));
+      messageApi.warning(t('chat.shareSelectNone'));
       return;
     }
     const title = activeConversation?.title ?? 'chat';
@@ -2697,7 +2697,7 @@ export function ChatView() {
     () => [
       {
         key: 'select-share',
-        label: t('chat.shareSelectMessages', '选择消息分享…'),
+        label: t('chat.shareSelectMessages'),
         icon: <ListChecks size={14} />,
         onClick: () => {
           if (shareableMessages.length === 0) {
@@ -2709,7 +2709,7 @@ export function ChatView() {
       },
       {
         key: 'copy-md',
-        label: t('chat.copyMarkdown', '复制 Markdown'),
+        label: t('chat.copyMarkdown'),
         icon: <Copy size={14} />,
         onClick: async () => {
           try {
@@ -2763,7 +2763,7 @@ export function ChatView() {
       },
       {
         key: 'export-md-no-thinking',
-        label: t('chat.exportMdNoThinking', '导出 Markdown（不含思维链）'),
+        label: t('chat.exportMdNoThinking'),
         icon: <FileCode size={14} />,
         onClick: async () => {
           try {
@@ -2797,7 +2797,7 @@ export function ChatView() {
       },
       {
         key: 'export-txt-no-thinking',
-        label: t('chat.exportTxtNoThinking', '导出文本（不含思维链）'),
+        label: t('chat.exportTxtNoThinking'),
         icon: <FileType size={14} />,
         onClick: async () => {
           try {
@@ -2831,7 +2831,7 @@ export function ChatView() {
       },
       {
         key: 'export-json-no-thinking',
-        label: t('chat.exportJsonNoThinking', '导出 JSON（不含思维链）'),
+        label: t('chat.exportJsonNoThinking'),
         icon: <FileText size={14} />,
         onClick: async () => {
           try {
@@ -3588,7 +3588,7 @@ export function ChatView() {
           fallback={(
             <MessageRenderFallback
               content={content}
-              notice={t('chat.messageRenderFallback', { defaultValue: '该消息渲染失败，已切换为纯文本' })}
+              notice={t('chat.messageRenderFallback')}
               textAlign={textAlign}
             />
           )}
@@ -3815,7 +3815,7 @@ export function ChatView() {
             fallback={(
               <MessageRenderFallback
                 content={versionContent}
-                notice={t('chat.messageRenderFallback', { defaultValue: '该消息渲染失败，已切换为纯文本' })}
+                notice={t('chat.messageRenderFallback')}
               />
             )}
           >
@@ -3918,7 +3918,7 @@ export function ChatView() {
                     fallback={(
                       <MessageRenderFallback
                         content={errorDisplay.prefix}
-                        notice={t('chat.messageRenderFallback', { defaultValue: '该消息渲染失败，已切换为纯文本' })}
+                        notice={t('chat.messageRenderFallback')}
                       />
                     )}
                   >
@@ -3978,7 +3978,7 @@ export function ChatView() {
                 fallback={(
                   <MessageRenderFallback
                     content={renderContent}
-                    notice={t('chat.messageRenderFallback', { defaultValue: '该消息渲染失败，已切换为纯文本' })}
+                    notice={t('chat.messageRenderFallback')}
                   />
                 )}
               >
@@ -4591,10 +4591,10 @@ export function ChatView() {
                 }}
               >
                 <Typography.Text style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
-                  {t('chat.shareSelectedCount', '已选 {{count}} 条', { count: selectedShareMessageIds.length })}
+                  {t('chat.shareSelectedCount', { count: selectedShareMessageIds.length })}
                 </Typography.Text>
                 <Button size="small" onClick={selectAllShareMessages}>
-                  {t('chat.shareSelectAll', '全选')}
+                  {t('chat.shareSelectAll')}
                 </Button>
                 <Button
                   size="small"
@@ -4619,7 +4619,7 @@ export function ChatView() {
                       {
                         key: 'copy-md',
                         icon: <Copy size={14} />,
-                        label: t('chat.copyMarkdown', '复制 Markdown'),
+                        label: t('chat.copyMarkdown'),
                         disabled: selectedShareMessageIds.length === 0 || shareExporting,
                         onClick: () => { void exportSelectedShare('copy-md'); },
                       },
@@ -4634,13 +4634,13 @@ export function ChatView() {
                     disabled={selectedShareMessageIds.length === 0 || shareExporting}
                   >
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                      {t('chat.shareMoreFormats', '更多')}
+                      {t('chat.shareMoreFormats')}
                       <ChevronDown size={12} />
                     </span>
                   </Button>
                 </Dropdown>
                 <Button size="small" icon={<X size={14} />} onClick={exitShareSelectMode}>
-                  {t('common.cancel', '取消')}
+                  {t('common.cancel')}
                 </Button>
               </div>
             )}
@@ -4751,7 +4751,7 @@ export function ChatView() {
                 setSummaryModalTab('summary');
               }}
             >
-              {t('common.close', '关闭')}
+              {t('common.close')}
             </Button>
           </div>
         }
@@ -4761,13 +4761,13 @@ export function ChatView() {
           {summaryModalSummary && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
               {summaryModalSummary.model_used && (
-                <Tag>{t('chat.summaryModel', '模型')}: {summaryModalSummary.model_used}</Tag>
+                <Tag>{t('chat.summaryModel')}: {summaryModalSummary.model_used}</Tag>
               )}
               {summaryModalSummary.token_count != null && (
-                <Tag>{t('chat.summaryTokens', '摘要 tokens')}: {summaryModalSummary.token_count.toLocaleString()}</Tag>
+                <Tag>{t('chat.summaryTokens')}: {summaryModalSummary.token_count.toLocaleString()}</Tag>
               )}
               {summaryBoundaryLabel && (
-                <Tag>{t('chat.summaryBoundary', '压缩到')}: {summaryBoundaryLabel}</Tag>
+                <Tag>{t('chat.summaryBoundary')}: {summaryBoundaryLabel}</Tag>
               )}
             </div>
           )}

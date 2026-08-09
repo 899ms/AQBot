@@ -439,13 +439,13 @@ export function InputArea() {
       const isFullAccess = mode === 'full_access';
       modal.confirm({
         title: isFullAccess
-          ? t('agent.permissionFullAccessWarningTitle', '完全访问模式')
-          : t('agent.permissionAcceptEditsWarningTitle', '允许编辑模式'),
+          ? t('agent.permissionFullAccessWarningTitle')
+          : t('agent.permissionAcceptEditsWarningTitle'),
         content: isFullAccess
-          ? t('agent.permissionFullAccessWarning', 'Agent 将拥有完全访问权限，可以执行任何文件操作且不受路径限制。请确保你信任当前使用的模型和 System Prompt。')
-          : t('agent.permissionAcceptEditsWarning', 'Agent 将自动批准文件编辑操作，无需逐一确认。请确保你了解潜在的安全风险。'),
-        okText: t('common.confirm', '确认'),
-        cancelText: t('common.cancel', '取消'),
+          ? t('agent.permissionFullAccessWarning')
+          : t('agent.permissionAcceptEditsWarning'),
+        okText: t('common.confirm'),
+        cancelText: t('common.cancel'),
         okButtonProps: isFullAccess ? { danger: true } : undefined,
         onOk: applyChange,
       });
@@ -678,7 +678,7 @@ export function InputArea() {
   const thinkingOptions = useMemo(
     () => reasoningProfile.options.map((option) => ({
       ...option,
-      label: t(option.labelKey, option.fallbackLabel),
+      label: t(option.labelKey),
     })),
     [reasoningProfile, t],
   );
@@ -1002,7 +1002,7 @@ export function InputArea() {
     if (!mergedContent && submittedAttachments.length === 0) return;
 
     // Attachment-only messages need a minimal content marker so downstream pipelines stay valid.
-    const finalContent = mergedContent || t('chat.attachmentOnlyMessage', '(attachment)');
+    const finalContent = mergedContent || t('chat.attachmentOnlyMessage');
     // Prefer human text for auto titles; fall back to snippet/file when the box is token-only.
     const titleSeed = value.replace(/\[\[paste:#\d+\]\]/g, '').trim()
       || submittedSnippets[0]?.content.slice(0, 80)
@@ -1523,7 +1523,7 @@ export function InputArea() {
                 title={
                   hasFunctionCalling
                     ? t('chat.mcp.title')
-                    : t('chat.mcp.unsupported', '当前模型不支持工具调用，已禁用 MCP')
+                    : t('chat.mcp.unsupported')
                 }
                 open={mcpPopoverOpen ? false : undefined}
               >
@@ -1677,7 +1677,7 @@ export function InputArea() {
               <Button type="text" size="small" icon={<SlidersHorizontal size={14} />} onClick={() => setSettingsOpen(true)} />
             </Tooltip>
             {hasRealtimeVoice && (
-              <Tooltip title={t('voice.startCall') + '（暂未实现）'}>
+              <Tooltip title={`${t('voice.startCall')} (${t('common.comingSoon')})`}>
                 <Button
                   type="text"
                   size="small"
@@ -1765,7 +1765,7 @@ export function InputArea() {
             </Tooltip>
           )}
           {currentMode === 'agent' && agentCwd && (
-            <Tooltip title={t('common.openDirectory', '打开目录')}>
+            <Tooltip title={t('common.openDirectory')}>
               <Button
                 type="text"
                 size="small"
@@ -1871,7 +1871,7 @@ export function InputArea() {
                 }
               >
                 <svg
-                  aria-label={t('chat.contextTokenUsage', '上下文 tokens')}
+                  aria-label={t('chat.contextTokenUsage')}
                   width={size}
                   height={size}
                   style={{ display: 'block', cursor: 'pointer' }}

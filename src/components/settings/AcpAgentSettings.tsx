@@ -441,7 +441,6 @@ export function AcpAgentSettings() {
             <div style={{ color: token.colorTextDescription, fontSize: 12 }}>
               {t(
                 'settings.acpAgents.permissionFallbackHint',
-                'Only used when an agent does not advertise permission modes; agent options take priority',
               )}
             </div>
           </div>
@@ -571,7 +570,7 @@ export function AcpAgentSettings() {
           <div>
             <div style={{ marginBottom: 4, fontSize: 13 }}>{t('settings.acpAgents.id')}</div>
             <Input
-              placeholder="e.g. my-agent"
+              placeholder={t('settings.acpAgents.idPlaceholder')}
               value={customForm.id}
               disabled={!!editingId}
               onChange={(e) => setCustomForm((s) => ({ ...s, id: e.target.value }))}
@@ -595,7 +594,7 @@ export function AcpAgentSettings() {
           <div>
             <div style={{ marginBottom: 4, fontSize: 13 }}>{t('settings.acpAgents.args')}</div>
             <Input
-              placeholder="space-separated"
+              placeholder={t('settings.acpAgents.argsPlaceholder')}
               value={customForm.args}
               onChange={(e) => setCustomForm((s) => ({ ...s, args: e.target.value }))}
             />
@@ -649,6 +648,8 @@ export function AcpAgentSettings() {
           ) : (
             filteredRegistry.map((row, index) => {
               const exists = configuredIds.has(row.id);
+              const quarantineKey = `settings.acpAgents.quarantineReasons.${row.id}`;
+              const localizedQuarantineReason = t(quarantineKey);
               return (
                 <div key={row.id}>
                   {index > 0 && <Divider style={{ margin: 0 }} />}
@@ -689,10 +690,9 @@ export function AcpAgentSettings() {
                       )}
                       {row.quarantineReason ? (
                         <Tooltip
-                          title={t(
-                            `settings.acpAgents.quarantineReasons.${row.id}`,
-                            { defaultValue: row.quarantineReason },
-                          )}
+                          title={localizedQuarantineReason === quarantineKey
+                            ? row.quarantineReason
+                            : localizedQuarantineReason}
                         >
                           <Tag color="warning" style={{ marginTop: 4 }}>
                             {t('settings.acpAgents.quarantined')}

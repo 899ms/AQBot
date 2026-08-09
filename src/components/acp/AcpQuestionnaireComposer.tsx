@@ -219,7 +219,7 @@ export function AcpQuestionnaireComposer({
     if (outcome === 'accepted') {
       const emptyOther = nextDrafts.some((entry) => entry.otherSelected && !entry.otherText.trim());
       if (emptyOther || answers.length === 0) {
-        setValidationError(t('agentPage.interactionAnswerRequired', '请至少回答一个问题。'));
+        setValidationError(t('agentPage.interactionAnswerRequired'));
         return;
       }
     }
@@ -313,7 +313,7 @@ export function AcpQuestionnaireComposer({
     setSubmissionError(null);
     setValidationError(null);
     if (draft.otherSelected && !draft.otherText.trim()) {
-      setValidationError(t('agentPage.interactionAnswerRequired', '请至少回答一个问题。'));
+      setValidationError(t('agentPage.interactionAnswerRequired'));
       return;
     }
     setCurrentIndex((index) => Math.min(total - 1, index + 1));
@@ -326,8 +326,8 @@ export function AcpQuestionnaireComposer({
   if (!question) return null;
 
   const hint = question.multiSelect
-    ? t('agentPage.interactionSelectMany', '可多选')
-    : t('agentPage.interactionSelectOne', '请选择一项');
+    ? t('agentPage.interactionSelectMany')
+    : t('agentPage.interactionSelectOne');
 
   const radioValue = draft.otherSelected
     ? OTHER_VALUE
@@ -394,7 +394,7 @@ export function AcpQuestionnaireComposer({
           }}
         >
           <div style={{ display: 'flex', minWidth: 0, flexWrap: 'wrap', alignItems: 'center', gap: 8 }}>
-            <Text id={titleId} strong>{t('agentPage.interactionQuestionTitle', '需要你的回答')}</Text>
+            <Text id={titleId} strong>{t('agentPage.interactionQuestionTitle')}</Text>
             <code
               translate="no"
               style={{
@@ -420,7 +420,7 @@ export function AcpQuestionnaireComposer({
                 size="small"
                 disabled={submitting || isFirst}
                 icon={<ChevronLeft size={16} />}
-                aria-label={t('agentPage.interactionPrevQuestion', '上一题')}
+                aria-label={t('agentPage.interactionPrevQuestion')}
                 onClick={goPrev}
               />
               <Text
@@ -435,7 +435,7 @@ export function AcpQuestionnaireComposer({
                 size="small"
                 disabled={submitting || isLast}
                 icon={<ChevronRight size={16} />}
-                aria-label={t('agentPage.interactionNextQuestion', '下一题')}
+                aria-label={t('agentPage.interactionNextQuestion')}
                 onClick={goNext}
               />
             </div>
@@ -540,12 +540,12 @@ export function AcpQuestionnaireComposer({
                       }));
                     }}
                   >
-                    {t('agentPage.interactionOther', '其他')}
+                    {t('agentPage.interactionOther')}
                   </Checkbox>
                   <Input
                     value={draft.otherText}
                     disabled={submitting}
-                    aria-label={`${t('agentPage.interactionOther', '其他')}: ${question.question}`}
+                    aria-label={`${t('agentPage.interactionOther')}: ${question.question}`}
                     onFocus={() => ensureOtherSelected(safeIndex, true)}
                     onChange={(event) => updateDraft(safeIndex, (current) => ({
                       ...current,
@@ -604,12 +604,12 @@ export function AcpQuestionnaireComposer({
                     className="aqbot-acp-question-option"
                     value={OTHER_VALUE}
                   >
-                    {t('agentPage.interactionOther', '其他')}
+                    {t('agentPage.interactionOther')}
                   </Radio>
                   <Input
                     value={draft.otherText}
                     disabled={submitting}
-                    aria-label={`${t('agentPage.interactionOther', '其他')}: ${question.question}`}
+                    aria-label={`${t('agentPage.interactionOther')}: ${question.question}`}
                     onFocus={() => ensureOtherSelected(safeIndex, false)}
                     onChange={(event) => updateDraft(safeIndex, (current) => ({
                       ...current,
@@ -627,7 +627,7 @@ export function AcpQuestionnaireComposer({
 
         <details style={{ minWidth: 0, flexShrink: 0 }}>
           <summary className="aqbot-acp-question-summary" style={{ cursor: 'pointer' }}>
-            {t('agentPage.interactionRequestDetails', '请求详情')}
+            {t('agentPage.interactionRequestDetails')}
           </summary>
           <pre style={{ maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
             {JSON.stringify(request.input, null, 2)}
@@ -645,27 +645,27 @@ export function AcpQuestionnaireComposer({
           }}
         >
           <Button disabled={submitting} onClick={() => void submit('cancelled')}>
-            {t('common.cancel', '取消')}
+            {t('common.cancel')}
           </Button>
           {questionnaire.mode === 'plan' ? (
             <>
               <Button disabled={submitting} onClick={() => void submit('chat_about_this')}>
-                {t('agentPage.interactionChatAboutThis', '讨论这些回答')}
+                {t('agentPage.interactionChatAboutThis')}
               </Button>
               <Button disabled={submitting} onClick={() => void submit('skip_interview')}>
-                {t('agentPage.interactionSkipInterview', '跳过提问并开始规划')}
+                {t('agentPage.interactionSkipInterview')}
               </Button>
             </>
           ) : null}
           {!isLast ? (
             <Button type="primary" htmlType="submit" disabled={submitting}>
-              {t('agentPage.interactionContinue', '继续')}
+              {t('agentPage.interactionContinue')}
             </Button>
           ) : (
             <Button type="primary" htmlType="submit" disabled={submitting}>
               {submitting
-                ? t('agentPage.interactionSubmitting', '提交中…')
-                : t('agentPage.interactionSubmitAnswers', '提交回答')}
+                ? t('agentPage.interactionSubmitting')
+                : t('agentPage.interactionSubmitAnswers')}
             </Button>
           )}
         </div>
@@ -677,7 +677,7 @@ export function AcpQuestionnaireComposer({
         ) : null}
         {submissionError ? (
           <Text type="danger" role="alert" style={{ flexShrink: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
-            {t('agentPage.interactionSubmitFailed', '提交失败，请重试')}: {submissionError}
+            {t('agentPage.interactionSubmitFailed')}: {submissionError}
           </Text>
         ) : null}
       </form>

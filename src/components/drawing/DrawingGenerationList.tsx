@@ -48,7 +48,7 @@ export function DrawingGenerationList({
         data-testid="drawing-generation-list"
         style={{ color: token.colorTextSecondary }}
       >
-        <Empty description={t('drawing.empty', '暂无绘画记录')} />
+        <Empty description={t('drawing.empty')} />
       </div>
     );
   }

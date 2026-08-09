@@ -120,7 +120,6 @@ const COMPOSER_ABSOLUTE_MAX_HEIGHT = 600;
 
 type AcpStatusTranslator = (
   key: string,
-  fallback: string,
   values?: Record<string, string | number>,
 ) => string;
 
@@ -130,39 +129,18 @@ interface GrokRetryStatusPayload {
   detail?: string;
 }
 
-const ACP_STATUS_TRANSLATIONS: Readonly<Record<string, readonly [string, string]>> = {
-  [ACP_STATUS_FIRST_OUTPUT_SILENCE]: [
-    'agentPage.interactionSilenceHint',
-    'Agent 暂未输出，可继续等待或停止',
-  ],
-  [ACP_STATUS_CANCELLING]: ['agentPage.interactionCancelling', '正在停止…'],
-  [ACP_HOST_STATUS.cancelRestarting]: [
-    'agentPage.interactionCancelRestarting',
-    '取消请求发送失败，正在重启 Agent…',
-  ],
-  [ACP_HOST_STATUS.usingSharedAgent]: [
-    'agentPage.interactionUsingSharedAgent',
-    '正在复用共享 Agent…',
-  ],
-  [ACP_HOST_STATUS.launchingAgent]: ['agentPage.interactionLaunchingAgent', '正在启动 Agent…'],
-  [ACP_HOST_STATUS.agentReady]: ['agentPage.interactionAgentReady', 'Agent 已就绪'],
-  [ACP_HOST_STATUS.restoringSession]: [
-    'agentPage.interactionRestoringSession',
-    '正在恢复会话…',
-  ],
-  [ACP_HOST_STATUS.savedSessionExpired]: [
-    'agentPage.interactionSavedSessionExpired',
-    '已保存的会话已过期，正在新建会话…',
-  ],
-  [ACP_HOST_STATUS.creatingSession]: [
-    'agentPage.interactionCreatingSession',
-    '正在新建会话…',
-  ],
-  [ACP_HOST_STATUS.sendingPrompt]: ['agentPage.interactionSendingPrompt', '正在发送消息…'],
-  [ACP_HOST_STATUS.sessionExpired]: [
-    'agentPage.interactionSessionExpired',
-    '会话已过期，正在新建会话…',
-  ],
+const ACP_STATUS_TRANSLATIONS: Readonly<Record<string, string>> = {
+  [ACP_STATUS_FIRST_OUTPUT_SILENCE]: 'agentPage.interactionSilenceHint',
+  [ACP_STATUS_CANCELLING]: 'agentPage.interactionCancelling',
+  [ACP_HOST_STATUS.cancelRestarting]: 'agentPage.interactionCancelRestarting',
+  [ACP_HOST_STATUS.usingSharedAgent]: 'agentPage.interactionUsingSharedAgent',
+  [ACP_HOST_STATUS.launchingAgent]: 'agentPage.interactionLaunchingAgent',
+  [ACP_HOST_STATUS.agentReady]: 'agentPage.interactionAgentReady',
+  [ACP_HOST_STATUS.restoringSession]: 'agentPage.interactionRestoringSession',
+  [ACP_HOST_STATUS.savedSessionExpired]: 'agentPage.interactionSavedSessionExpired',
+  [ACP_HOST_STATUS.creatingSession]: 'agentPage.interactionCreatingSession',
+  [ACP_HOST_STATUS.sendingPrompt]: 'agentPage.interactionSendingPrompt',
+  [ACP_HOST_STATUS.sessionExpired]: 'agentPage.interactionSessionExpired',
 };
 
 export function localizeAcpStatus(
@@ -173,7 +151,7 @@ export function localizeAcpStatus(
   const localized = Object.prototype.hasOwnProperty.call(ACP_STATUS_TRANSLATIONS, status)
     ? ACP_STATUS_TRANSLATIONS[status]
     : undefined;
-  if (localized) return translate(localized[0], localized[1]);
+  if (localized) return translate(localized);
   if (status.startsWith(ACP_HOST_STATUS.grokRetry)) {
     try {
       const payload = JSON.parse(
@@ -184,15 +162,13 @@ export function localizeAcpStatus(
         ? typeof payload.maximum === 'number'
           ? translate(
             'agentPage.interactionNetworkRetryProgress',
-            '网络重试 {{attempt}}/{{maximum}}',
             values,
           )
           : translate(
             'agentPage.interactionNetworkRetryAttempt',
-            '网络重试 {{attempt}}',
             values,
           )
-        : translate('agentPage.interactionNetworkRetry', '网络重试');
+        : translate('agentPage.interactionNetworkRetry');
       return payload.detail ? `${progress}: ${payload.detail}` : progress;
     } catch {
       return status;
@@ -571,7 +547,7 @@ export function AcpConversationPane() {
   const localizedStatus = useCallback(
     (status: string | undefined) => localizeAcpStatus(
       status,
-      (key, fallback, values) => t(key, { defaultValue: fallback, ...values }),
+      (key, values) => t(key, values),
     ),
     [t],
   );
@@ -697,7 +673,7 @@ export function AcpConversationPane() {
   }, [messageApi, t]);
   const handleAttachmentReadError = useCallback((filePath: string, error: unknown) => {
     console.error('[acp attachment] Failed to read file:', filePath, error);
-    const name = filePath.split(/[\\/]/).pop() || filePath || t('common.unknown', '未知文件');
+    const name = filePath.split(/[\\/]/).pop() || filePath || t('common.unknown');
     messageApi.error(t('agentPage.attachmentReadFailed', { name }));
   }, [messageApi, t]);
   const {
@@ -885,7 +861,7 @@ export function AcpConversationPane() {
       const inserted = insertPasteTokenAtSelection(current, start, start, index);
       return inserted.value;
     });
-    messageApi.success(t('agentPage.interactionPlanAddedToContext', '已带入上下文'));
+    messageApi.success(t('agentPage.interactionPlanAddedToContext'));
     requestAnimationFrame(() => {
       const textarea = textareaRef.current;
       if (!textarea) return;
@@ -1106,7 +1082,7 @@ export function AcpConversationPane() {
             <div>
               <Text type="secondary" style={{ fontSize: 13 }}>
                 {localizedStatus(statusByThread[activeThreadId ?? ''])
-                  || t('agentPage.streaming', '生成中…')}
+                  || t('agentPage.streaming')}
               </Text>
               <StreamingDots color={token.colorTextSecondary} />
             </div>
@@ -1269,22 +1245,22 @@ export function AcpConversationPane() {
   const permissionChoiceName = useCallback((choice: AcpSessionConfigSelectOption) => {
     const token = String(choice.value).trim().toLowerCase().replace(/[\s_-]/g, '');
     if (token === 'dontask') {
-      return t('agent.permissionDontAsk', '不询问（拒绝）');
+      return t('agent.permissionDontAsk');
     }
     if (token === 'auto') {
-      return t('agent.permissionAutoApprove', '自动审批');
+      return t('agent.permissionAutoApprove');
     }
     if (token === 'acceptedits' || token === 'autoedit' || token === 'agent') {
-      return t('agent.permissionAcceptEdits', '允许编辑');
+      return t('agent.permissionAcceptEdits');
     }
     if (token === 'bypasspermissions' || token === 'dangerouslyskippermissions') {
-      return t('agent.permissionFullAccess', '完全访问');
+      return t('agent.permissionFullAccess');
     }
     if (isRestrictivePermissionChoice(choice.value, choice.name)) {
-      return t('agent.permissionAskEveryTime', '每次询问');
+      return t('agent.permissionAskEveryTime');
     }
     if (isFullAccessPermissionChoice(choice.value, choice.name)) {
-      return t('agent.permissionFullAccess', '完全访问');
+      return t('agent.permissionFullAccess');
     }
     return choice.name;
   }, [t]);
@@ -1295,11 +1271,11 @@ export function AcpConversationPane() {
   ) => {
     if (option && isPermissionOption(option)) return permissionChoiceName(choice);
     if (option && isBooleanConfigOption(option)) {
-      if (choice.value === 'true') return t('common.on', '开启');
-      if (choice.value === 'false') return t('common.off', '关闭');
+      if (choice.value === 'true') return t('common.on');
+      if (choice.value === 'false') return t('common.off');
     }
     if (choice.value === '__agent_default') {
-      return t('agent.agentDefault', 'Agent 默认');
+      return t('agent.agentDefault');
     }
     return choice.name;
   }, [permissionChoiceName, t]);
@@ -1400,12 +1376,12 @@ export function AcpConversationPane() {
       || permissionOption.id.toLowerCase().includes('allow_all');
     modal.confirm({
       title: fullAccess
-        ? t('agent.permissionFullAccessWarningTitle', '完全访问模式')
-        : t('agent.permissionAcceptEditsWarningTitle', 'Agent 权限变更'),
+        ? t('agent.permissionFullAccessWarningTitle')
+        : t('agent.permissionAcceptEditsWarningTitle'),
       content: choice?.description
-        ?? t('agent.permissionAcceptEditsWarning', 'Agent 将获得文件编辑或命令执行权限，请确认你信任当前 Agent。'),
-      okText: t('common.confirm', '确认'),
-      cancelText: t('common.cancel', '取消'),
+        ?? t('agent.permissionAcceptEditsWarning'),
+      okText: t('common.confirm'),
+      cancelText: t('common.cancel'),
       okButtonProps: fullAccess ? { danger: true } : undefined,
       onOk: apply,
     });
@@ -1573,7 +1549,7 @@ export function AcpConversationPane() {
           branch,
         });
         setGitInfo(info);
-        messageApi.success(t('agentPage.branchSwitched', { branch, defaultValue: `已切换到 ${branch}` }));
+        messageApi.success(t('agentPage.branchSwitched', { branch }));
       } catch (e) {
         messageApi.error(String(e));
       } finally {
@@ -1663,11 +1639,11 @@ export function AcpConversationPane() {
           )
         : undefined;
       const finalContent = mergedContent
-        || t('chat.attachmentOnlyMessage', '(attachment)');
+        || t('chat.attachmentOnlyMessage');
       const titleSeed = submittedValue.replace(/\[\[paste:#\d+\]\]/g, '').trim()
         || submittedSnippets[0]?.content.slice(0, 80)
         || submittedAttachments[0]?.file.name
-        || t('agentPage.newThread', '新任务');
+        || t('agentPage.newThread');
 
       let threadId = activeThreadId;
       if (!threadId) {
@@ -1954,22 +1930,22 @@ export function AcpConversationPane() {
       {
         key: 'explore',
         icon: <Telescope size={16} style={{ color: '#3b82f6' }} />,
-        label: t('agentPage.promptExplore', '探索并理解代码'),
+        label: t('agentPage.promptExplore'),
       },
       {
         key: 'build',
         icon: <Hammer size={16} style={{ color: '#a855f7' }} />,
-        label: t('agentPage.promptBuild', '构建新功能、应用或工具'),
+        label: t('agentPage.promptBuild'),
       },
       {
         key: 'review',
         icon: <RefreshCw size={16} style={{ color: '#22c55e' }} />,
-        label: t('agentPage.promptReview', '审查代码并提出修改建议'),
+        label: t('agentPage.promptReview'),
       },
       {
         key: 'fix',
         icon: <Bug size={16} style={{ color: '#f97316' }} />,
-        label: t('agentPage.promptFix', '修复问题和失败'),
+        label: t('agentPage.promptFix'),
       },
     ],
     [t],
@@ -2053,10 +2029,10 @@ export function AcpConversationPane() {
 
   const renderSpeedToggle = (option: AcpSessionConfigOption) => {
     const enabled = isSpeedEnabled(option);
-    const label = option.name || t('agentPage.fast', 'Fast');
+    const label = option.name || t('agentPage.fast');
     const tip = enabled
-      ? t('agentPage.fastOnTip', '{{name}} 已开启', { name: label })
-      : t('agentPage.fastOffTip', '{{name}} 已关闭', { name: label });
+      ? t('agentPage.fastOnTip', { name: label })
+      : t('agentPage.fastOffTip', { name: label });
     return (
       <Tooltip key={option.id} title={tip}>
         <Button
@@ -2094,7 +2070,7 @@ export function AcpConversationPane() {
     streaming && activePlan && activePlan.total > 0 ? (
       <Popover
         placement="topRight"
-        title={t('agentPage.planProgress', '计划进度')}
+        title={t('agentPage.planProgress')}
         content={(
           <div style={{ width: 280, maxHeight: 260, overflowY: 'auto' }}>
             {activePlan.entries.map((entry, index) => (
@@ -2132,7 +2108,7 @@ export function AcpConversationPane() {
         icon={<Square size={14} />}
         onClick={() => void handleCancel()}
         loading={cancelling}
-        aria-label={t('agentPage.stop', '停止')}
+        aria-label={t('agentPage.stop')}
       />
     ) : null
   );
@@ -2205,7 +2181,7 @@ export function AcpConversationPane() {
                   size="small"
                   disabled={clampedInteractionIndex <= 0}
                   icon={<ChevronLeft size={16} />}
-                  aria-label={t('agentPage.interactionPrevItem', '上一项')}
+                  aria-label={t('agentPage.interactionPrevItem')}
                   onClick={() => setInteractionCursor((index) => Math.max(0, index - 1))}
                 />
                 <Text
@@ -2225,7 +2201,7 @@ export function AcpConversationPane() {
                   size="small"
                   disabled={clampedInteractionIndex >= pendingInteractions.length - 1}
                   icon={<ChevronRight size={16} />}
-                  aria-label={t('agentPage.interactionNextItem', '下一项')}
+                  aria-label={t('agentPage.interactionNextItem')}
                   onClick={() => setInteractionCursor((index) => (
                     Math.min(pendingInteractions.length - 1, index + 1)
                   ))}
@@ -2278,8 +2254,8 @@ export function AcpConversationPane() {
           onChange={handleInput}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={t('agentPage.inputPlaceholder', '做点什么…')}
-          aria-label={t('agentPage.inputPlaceholder', '做点什么…')}
+          placeholder={t('agentPage.inputPlaceholder')}
+          aria-label={t('agentPage.inputPlaceholder')}
           name="acp-prompt"
           autoComplete="off"
           rows={1}
@@ -2370,7 +2346,7 @@ export function AcpConversationPane() {
                 onClick={() => void handleSend()}
                 disabled={!canSend}
                 loading={sending}
-                aria-label={t('agentPage.send', '发送')}
+                aria-label={t('agentPage.send')}
               />
             )}
           </div>
@@ -2386,13 +2362,13 @@ export function AcpConversationPane() {
             preparing || !statusByThread[sessionKey] ? (
               <Button type="text" size="small" loading disabled style={{ fontSize: 12 }}>
                 {agentProcessReady
-                  ? t('agentPage.preparingConversation', '正在准备对话…')
-                  : t('agentPage.preparing', '正在连接 Agent…')}
+                  ? t('agentPage.preparingConversation')
+                  : t('agentPage.preparing')}
               </Button>
             ) : (
               <Tooltip
                 title={localizedStatus(statusByThread[sessionKey])
-                  || t('agentPage.prepareFailed', 'Agent 连接失败')}
+                  || t('agentPage.prepareFailed')}
               >
                 <Button
                   type="text"
@@ -2408,7 +2384,7 @@ export function AcpConversationPane() {
                   }}
                   style={{ fontSize: 12 }}
                 >
-                  {t('agentPage.retryConnection', '重试连接')}
+                  {t('agentPage.retryConnection')}
                 </Button>
               </Tooltip>
             )
@@ -2447,7 +2423,7 @@ export function AcpConversationPane() {
           </Dropdown>
           {planEnabled ? (
             <span
-              aria-label={t('agentPage.plan', '计划')}
+              aria-label={t('agentPage.plan')}
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -2464,10 +2440,10 @@ export function AcpConversationPane() {
               }}
             >
               <ListTodo size={12} style={{ flexShrink: 0 }} />
-              <span>{t('agentPage.plan', '计划')}</span>
+              <span>{t('agentPage.plan')}</span>
               <button
                 type="button"
-                aria-label={t('common.close', '关闭')}
+                aria-label={t('common.close')}
                 onClick={() => void disablePlanMode()}
                 style={{
                   display: 'inline-flex',
@@ -2523,12 +2499,12 @@ export function AcpConversationPane() {
                     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                   }}
                 >
-                  {gitInfo.branch || t('agentPage.detachedHead', 'detached')}
+                  {gitInfo.branch || t('agentPage.detachedHead')}
                 </span>
               </Button>
             </Dropdown>
           ) : activeProjectId ? (
-            <Tooltip title={t('agentPage.notAGitRepo', '当前项目不是 Git 仓库')}>
+            <Tooltip title={t('agentPage.notAGitRepo')}>
               <Button
                 type="text"
                 size="small"
@@ -2536,7 +2512,7 @@ export function AcpConversationPane() {
                 icon={<GitBranch size={14} />}
                 style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12 }}
               >
-                {t('agentPage.noGit', '无 Git')}
+                {t('agentPage.noGit')}
               </Button>
             </Tooltip>
           ) : null}
@@ -2610,7 +2586,7 @@ export function AcpConversationPane() {
                 }}
               >
                 {/* 让 {Agent} 在 {project} 中开发什么 — agent/project are dashed dropdowns */}
-                {t('agentPage.projectWelcomePrefix', '让')}
+                {t('agentPage.projectWelcomePrefix')}
                 {' '}
                 <Dropdown
                   menu={{
@@ -2635,14 +2611,14 @@ export function AcpConversationPane() {
                       <Bot size={18} />
                     )}
                     <span>
-                      {agentMeta?.name || t('agentPage.selectAgent', '选择 Agent')}
+                      {agentMeta?.name || t('agentPage.selectAgent')}
                     </span>
                   </button>
                 </Dropdown>
                 {activeProject?.kind !== 'recent' && activeProject ? (
                   <>
                     {' '}
-                    {t('agentPage.projectWelcomeMiddle', '在')}
+                    {t('agentPage.projectWelcomeMiddle')}
                     {' '}
                     <Dropdown
                       menu={{
@@ -2659,12 +2635,12 @@ export function AcpConversationPane() {
                       </button>
                     </Dropdown>
                     {' '}
-                    {t('agentPage.projectWelcomeSuffix', '中做点什么？')}
+                    {t('agentPage.projectWelcomeSuffix')}
                   </>
                 ) : (
                   <>
                     {' '}
-                    {t('agentPage.recentWelcomeSuffix', '做点什么？')}
+                    {t('agentPage.recentWelcomeSuffix')}
                   </>
                 )}
               </Title>

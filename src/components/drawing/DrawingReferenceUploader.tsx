@@ -61,7 +61,7 @@ export function DrawingReferenceUploader() {
         <div className="flex flex-col items-center gap-1 py-2">
           <ImagePlus size={18} style={{ color: token.colorPrimary }} />
           <span style={{ fontSize: 12, color: token.colorTextSecondary }}>
-            {t('drawing.referenceUpload', '上传参考图')}
+            {t('drawing.referenceUpload')}
           </span>
         </div>
       </Upload.Dragger>
