@@ -387,6 +387,11 @@ export function AcpSidebar() {
   const enabledAgents = useAcpStore((s) => s.enabledAgents);
   const configReady = useAcpStore((s) => s.configReady);
   const projectsReady = useAcpStore((s) => s.projectsReady);
+  const threadsReady = useAcpStore((s) => s.threadsReady);
+  const composerSubmitting = useAcpStore((s) => s.composerSubmitting);
+  const creatingThread = useAcpStore((s) => s.creatingThread);
+  const newConversationLocked = composerSubmitting || creatingThread;
+  const ensureRecentDraft = useAcpStore((s) => s.ensureRecentDraft);
   const agents = enabledAgents();
   // Cold start: config not fetched yet and no cached agents → loading, not "未配置"
   const showAgentsLoading = !configReady && agents.length === 0;
@@ -463,7 +468,7 @@ export function AcpSidebar() {
   );
 
   const userProjects = useMemo(
-    () => projects.filter((project) => project.kind !== 'recent'),
+    () => projects.filter((project) => project.kind === 'project'),
     [projects],
   );
 
@@ -552,7 +557,7 @@ export function AcpSidebar() {
             .filter(Boolean) as AcpProject[];
         setProjectsOrder([
           ...reorderedProjects,
-          ...projects.filter((project) => project.kind === 'recent'),
+          ...projects.filter((project) => project.kind !== 'project'),
         ]);
         return;
       }
@@ -601,7 +606,7 @@ export function AcpSidebar() {
       if (activeDragProjectId) {
         setActiveDragProjectId(null);
         const ids = useAcpStore.getState().projects
-          .filter((project) => project.kind !== 'recent')
+          .filter((project) => project.kind === 'project')
           .map((project) => project.id);
         void reorderProjects(ids);
       }
@@ -641,7 +646,7 @@ export function AcpSidebar() {
             return p ? { ...p, sort_order: i } : null;
           })
           .filter(Boolean) as AcpProject[],
-          ...current.filter((project) => project.kind === 'recent'),
+          ...current.filter((project) => project.kind !== 'project'),
         ],
       );
     }
@@ -804,13 +809,45 @@ export function AcpSidebar() {
     await selectProject(projectId);
   }, [agents.length, selectProject, setActivePage, setSettingsSection]);
 
+  const handleNewRecentThread = useCallback(() => {
+    if (newConversationLocked) return;
+    void (async () => {
+      await selectProject(null);
+      window.dispatchEvent(new Event('aqbot:reset-agent-draft'));
+      if (!projectsReady || !threadsReady) return;
+      try {
+        await ensureRecentDraft();
+      } catch (error) {
+        messageApi.error(String(error));
+      }
+    })();
+  }, [
+    ensureRecentDraft,
+    messageApi,
+    newConversationLocked,
+    projectsReady,
+    selectProject,
+    threadsReady,
+  ]);
+
   // Shortcut: new thread in current project (parity with chat new conversation)
   useEffect(() => {
+    const activeProjectKind = projects.find((project) => project.id === activeProjectId)?.kind;
     const onNew = () => {
-      if (activeProjectId) void handleNewThreadInProject(activeProjectId);
+      if (newConversationLocked) return;
+      if (activeProjectId && activeProjectKind === 'project') {
+        void handleNewThreadInProject(activeProjectId);
+      } else {
+        handleNewRecentThread();
+      }
     };
     const onCloseThread = () => {
-      void selectThread(null);
+      if (newConversationLocked) return;
+      if (activeProjectKind === 'project') {
+        void selectThread(null);
+      } else {
+        handleNewRecentThread();
+      }
     };
     const onOpenSearch = () => {
       setSearchOpen(true);
@@ -826,7 +863,14 @@ export function AcpSidebar() {
       window.removeEventListener('aqbot:close-agent-thread', onCloseThread);
       window.removeEventListener('aqbot:open-agent-search', onOpenSearch);
     };
-  }, [activeProjectId, handleNewThreadInProject, selectThread]);
+  }, [
+    activeProjectId,
+    handleNewRecentThread,
+    handleNewThreadInProject,
+    newConversationLocked,
+    projects,
+    selectThread,
+  ]);
 
   const handleDeleteProject = useCallback(
     (project: AcpProject) => {
@@ -847,11 +891,6 @@ export function AcpSidebar() {
   const openSettings = () => {
     setSettingsSection('acpAgents');
     setActivePage('settings');
-  };
-
-  const handleNewRecentThread = () => {
-    void selectProject(null);
-    window.dispatchEvent(new Event('aqbot:reset-agent-draft'));
   };
 
   // ── Conversations items — same shape as ChatSidebar getConversationItem ──
@@ -1130,7 +1169,7 @@ export function AcpSidebar() {
               icon={<MessageSquarePlus size={16} />}
               size="small"
               aria-label={t('agentPage.newThread')}
-              disabled={agents.length === 0}
+              disabled={newConversationLocked || agents.length === 0}
               onClick={handleNewRecentThread}
             />
           </Tooltip>
@@ -1407,6 +1446,7 @@ export function AcpSidebar() {
                     size="small"
                     icon={<Plus size={14} />}
                     aria-label={t('agentPage.newThread')}
+                    disabled={newConversationLocked}
                     onClick={handleNewRecentThread}
                   />
                 </Tooltip>

@@ -93,6 +93,7 @@ import {
 import { AcpAgentIcon } from '@/lib/acpAgentIcon';
 import { hasKnownModelIcon, SmartModelIcon } from '@/lib/providerIcons';
 import type {
+  AcpProject,
   AcpSessionConfigOption,
   AcpSessionConfigSelectGroup,
   AcpSessionConfigSelectOption,
@@ -142,6 +143,17 @@ const ACP_STATUS_TRANSLATIONS: Readonly<Record<string, string>> = {
   [ACP_HOST_STATUS.sendingPrompt]: 'agentPage.interactionSendingPrompt',
   [ACP_HOST_STATUS.sessionExpired]: 'agentPage.interactionSessionExpired',
 };
+
+function composerScopeKey(
+  project: Pick<AcpProject, 'id' | 'kind'> | null,
+  threadId: string | null,
+  agentId: string | null,
+): string {
+  const projectScope = !threadId && (!project || project.kind !== 'project')
+    ? 'recent'
+    : (project?.id ?? '');
+  return `${projectScope}:${threadId ?? 'draft'}:${agentId ?? ''}`;
+}
 
 export function localizeAcpStatus(
   status: string | undefined,
@@ -516,6 +528,8 @@ export function AcpConversationPane() {
   const messages = useAcpStore((s) => s.messages);
   const activeProjectId = useAcpStore((s) => s.activeProjectId);
   const activeThreadId = useAcpStore((s) => s.activeThreadId);
+  const projectsReady = useAcpStore((s) => s.projectsReady);
+  const threadsReady = useAcpStore((s) => s.threadsReady);
   const statusByThread = useAcpStore((s) => s.statusByThread);
   const runningByThread = useAcpStore((s) => s.runningByThread);
   const agentReadinessById = useAcpStore((s) => s.agentReadinessById);
@@ -527,7 +541,7 @@ export function AcpConversationPane() {
   const pendingPermissions = useAcpStore((s) => s.pendingPermissions);
   const sendPrompt = useAcpStore((s) => s.sendPrompt);
   const createThread = useAcpStore((s) => s.createThread);
-  const createRecentThread = useAcpStore((s) => s.createRecentThread);
+  const ensureRecentDraft = useAcpStore((s) => s.ensureRecentDraft);
   const selectProject = useAcpStore((s) => s.selectProject);
   const prepareDraft = useAcpStore((s) => s.prepareDraft);
   const prepareSession = useAcpStore((s) => s.prepareSession);
@@ -579,6 +593,8 @@ export function AcpConversationPane() {
   const [gitLoading, setGitLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [configUpdatingId, setConfigUpdatingId] = useState<string | null>(null);
+  const [recentDraftPreparing, setRecentDraftPreparing] = useState(false);
+  const [recentDraftError, setRecentDraftError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lastNonPlanModeBySessionRef = useRef<Record<string, string>>({});
   const bubbleListRef = useRef<BubbleListRef | null>(null);
@@ -645,9 +661,12 @@ export function AcpConversationPane() {
   }, [activeInteraction?.requestId]);
 
   // Prefer thread agent; otherwise composer selection / first enabled agent
+  const selectedComposerAgentId = agents.some((agent) => agent.id === composerAgentId)
+    ? composerAgentId
+    : null;
   const effectiveAgentId =
     activeThread?.agent_id
-    ?? composerAgentId
+    ?? selectedComposerAgentId
     ?? agents[0]?.id
     ?? null;
   const agentMeta = agents.find((a) => a.id === effectiveAgentId);
@@ -706,10 +725,14 @@ export function AcpConversationPane() {
     window.addEventListener('aqbot:reset-agent-draft', resetDraft);
     return () => window.removeEventListener('aqbot:reset-agent-draft', resetDraft);
   }, [resetAttachments]);
-  const composerScopeKey = `${activeProjectId ?? ''}:${activeThreadId ?? 'draft'}:${effectiveAgentId ?? ''}`;
-  const composerScopeRef = useRef(composerScopeKey);
-  composerScopeRef.current = composerScopeKey;
-  const previousComposerScopeRef = useRef(composerScopeKey);
+  const currentComposerScopeKey = composerScopeKey(
+    activeProject,
+    activeThreadId,
+    effectiveAgentId,
+  );
+  const composerScopeRef = useRef(currentComposerScopeKey);
+  composerScopeRef.current = currentComposerScopeKey;
+  const previousComposerScopeRef = useRef(currentComposerScopeKey);
 
   useEffect(() => {
     if (!composerAgentId && agents[0]?.id) {
@@ -725,7 +748,7 @@ export function AcpConversationPane() {
   }, [activeThread?.agent_id]);
 
   useEffect(() => {
-    const scopeChanged = previousComposerScopeRef.current !== composerScopeKey;
+    const scopeChanged = previousComposerScopeRef.current !== currentComposerScopeKey;
     if (scopeChanged) {
       const removedImage = attachedFiles.some(({ file }) => isImageFile(file));
       resetAttachments();
@@ -735,7 +758,7 @@ export function AcpConversationPane() {
       ));
       setPastedSnippets([]);
       pastedSnippetSeqRef.current = 0;
-      previousComposerScopeRef.current = composerScopeKey;
+      previousComposerScopeRef.current = currentComposerScopeKey;
       if (removedImage && !supportsImageAttachments) {
         messageApi.warning(t('agentPage.imageAttachmentUnsupported'));
       }
@@ -748,7 +771,7 @@ export function AcpConversationPane() {
     messageApi.warning(t('agentPage.imageAttachmentUnsupported'));
   }, [
     attachedFiles,
-    composerScopeKey,
+    currentComposerScopeKey,
     messageApi,
     pastedSnippets,
     removeAttachment,
@@ -757,6 +780,18 @@ export function AcpConversationPane() {
     t,
   ]);
 
+  const prepareRecentWorkspace = useCallback(async () => {
+    setRecentDraftPreparing(true);
+    setRecentDraftError(null);
+    try {
+      await ensureRecentDraft();
+    } catch (error) {
+      setRecentDraftError(String(error));
+    } finally {
+      setRecentDraftPreparing(false);
+    }
+  }, [ensureRecentDraft]);
+
   // Warm initialize + session setup while the user is reading/typing. The
   // store deduplicates StrictMode and rapid-selection calls.
   useEffect(() => {
@@ -764,6 +799,10 @@ export function AcpConversationPane() {
       if (!sessionByThread[activeThreadId]) {
         void prepareSession(activeThreadId).catch(() => undefined);
       }
+      return;
+    }
+    if (!activeProjectId && effectiveAgentId && projectsReady && threadsReady) {
+      void prepareRecentWorkspace();
       return;
     }
     if (activeProjectId && effectiveAgentId) {
@@ -776,9 +815,12 @@ export function AcpConversationPane() {
     activeThreadId,
     activeProjectId,
     effectiveAgentId,
+    prepareRecentWorkspace,
     prepareDraft,
     prepareSession,
+    projectsReady,
     sessionByThread,
+    threadsReady,
   ]);
 
   // Load git branch info for active project
@@ -1395,7 +1437,7 @@ export function AcpConversationPane() {
   ]);
 
   const setPlanModeEnabled = useCallback(async (enabled: boolean) => {
-    if (!sessionKey || streaming || preparing || configUpdatingId) return;
+    if (!sessionKey || sending || streaming || preparing || configUpdatingId) return;
     if (planMode) {
       const currentlyOn = sessionSnapshot?.modes?.currentModeId === planMode.id;
       if (enabled === currentlyOn) return;
@@ -1447,6 +1489,7 @@ export function AcpConversationPane() {
     sessionKey,
     sessionSnapshot?.modes?.availableModes,
     sessionSnapshot?.modes?.currentModeId,
+    sending,
     setSessionMode,
     streaming,
   ]);
@@ -1485,7 +1528,7 @@ export function AcpConversationPane() {
 
   const projectMenuItems = useMemo<MenuProps['items']>(
     () =>
-      projects.filter((project) => project.kind !== 'recent').map((p) => ({
+      projects.filter((project) => project.kind === 'project').map((p) => ({
         key: p.id,
         label: (
           <span
@@ -1611,10 +1654,17 @@ export function AcpConversationPane() {
   const handleSend = async () => {
     const submittedValue = value;
     const submittedSnippets = pastedSnippets;
-    const submittedScopeKey = composerScopeKey;
+    const submittedScopeKey = currentComposerScopeKey;
     let recoveryScopeKey = submittedScopeKey;
     const mergedContent = mergePastedSnippetsIntoContent(submittedValue, submittedSnippets);
-    if ((!mergedContent && attachedFiles.length === 0) || sending || streaming) return;
+    if (
+      (!mergedContent && attachedFiles.length === 0)
+      || sending
+      || streaming
+      || preparing
+      || configUpdatingId
+      || !sessionSnapshot
+    ) return;
     if (!effectiveAgentId) {
       messageApi.warning(t('agentPage.noAgents'));
       return;
@@ -1622,6 +1672,7 @@ export function AcpConversationPane() {
 
     const submittedAttachments = detachAttachments();
     setSending(true);
+    useAcpStore.setState({ composerSubmitting: true });
     setValue('');
     setPastedSnippets([]);
     pastedSnippetSeqRef.current = 0;
@@ -1647,33 +1698,26 @@ export function AcpConversationPane() {
 
       let threadId = activeThreadId;
       if (!threadId) {
-        if (!activeProjectId) {
-          const thread = await createRecentThread(
-            effectiveAgentId,
-            titleSeed.slice(0, 48),
-          );
-          threadId = thread.id;
-          recoveryScopeKey = `${thread.project_id}:${thread.id}:${effectiveAgentId}`;
-          previousComposerScopeRef.current = recoveryScopeKey;
-        } else {
-          // The effect above normally finishes this work while the user types.
-          // Only await preparation when no authoritative draft snapshot exists;
-          // otherwise a second IPC delays the first visible message for no gain.
-          if (!draftKey || !sessionByThread[draftKey]) {
-            await prepareDraft(activeProjectId, effectiveAgentId);
-          }
-          // First message in project → create thread then send
-          const thread = await createThread(
-            activeProjectId,
-            effectiveAgentId,
-            titleSeed.slice(0, 48),
-          );
-          threadId = thread.id;
-          recoveryScopeKey = `${activeProjectId}:${thread.id}:${effectiveAgentId}`;
-          // Draft adoption is the one scope transition that belongs to this send.
-          // Mark it consumed so a delayed effect cannot erase a failed-send restore.
-          previousComposerScopeRef.current = recoveryScopeKey;
+        const projectId = activeProjectId ?? (await ensureRecentDraft()).id;
+        const pendingDraftKey = `draft:${projectId}:${effectiveAgentId}`;
+        // The effect above normally finishes this work while the user types.
+        // Only await preparation when no authoritative draft snapshot exists;
+        // otherwise a second IPC delays the first visible message for no gain.
+        if (!useAcpStore.getState().sessionByThread[pendingDraftKey]) {
+          await prepareDraft(projectId, effectiveAgentId);
         }
+        // First message in project → create thread then send. A hidden Recent
+        // draft follows this same adoption path as a regular project draft.
+        const thread = await createThread(
+          projectId,
+          effectiveAgentId,
+          titleSeed.slice(0, 48),
+        );
+        threadId = thread.id;
+        recoveryScopeKey = `${projectId}:${thread.id}:${effectiveAgentId}`;
+        // Draft adoption is the one scope transition that belongs to this send.
+        // Mark it consumed so a delayed effect cannot erase a failed-send restore.
+        previousComposerScopeRef.current = recoveryScopeKey;
       }
       await sendPrompt(threadId, finalContent, attachmentInputs);
       revokeComposerAttachments(submittedAttachments);
@@ -1682,9 +1726,14 @@ export function AcpConversationPane() {
       const currentStore = useAcpStore.getState();
       const currentThread = [...currentStore.threads, ...currentStore.allThreads]
         .find((thread) => thread.id === currentStore.activeThreadId);
-      const currentStoreScopeKey = `${currentStore.activeProjectId ?? ''}:${currentStore.activeThreadId ?? 'draft'}:${
-        currentThread?.agent_id ?? effectiveAgentId ?? ''
-      }`;
+      const currentProject = currentStore.projects.find(
+        (project) => project.id === currentStore.activeProjectId,
+      ) ?? null;
+      const currentStoreScopeKey = composerScopeKey(
+        currentProject,
+        currentStore.activeThreadId,
+        currentThread?.agent_id ?? effectiveAgentId,
+      );
       const belongsToSubmission = (scopeKey: string) => scopeKey === submittedScopeKey
         || scopeKey === recoveryScopeKey;
       const canRestore = belongsToSubmission(currentScopeKey)
@@ -1702,6 +1751,7 @@ export function AcpConversationPane() {
       messageApi.error(String(e));
     } finally {
       setSending(false);
+      useAcpStore.setState({ composerSubmitting: false });
     }
   };
 
@@ -1921,6 +1971,9 @@ export function AcpConversationPane() {
   const canSend =
     !sending
     && !streaming
+    && !preparing
+    && !configUpdatingId
+    && !!sessionSnapshot
     && (value.trim().length > 0 || attachedFiles.length > 0 || pastedSnippets.length > 0)
     && !!effectiveAgentId;
 
@@ -1993,7 +2046,7 @@ export function AcpConversationPane() {
       }}
       trigger={['click']}
       placement="topRight"
-      disabled={streaming || preparing || !!configUpdatingId}
+      disabled={sending || streaming || preparing || !!configUpdatingId}
     >
       <Button
         type="text"
@@ -2039,7 +2092,7 @@ export function AcpConversationPane() {
           type="text"
           size="small"
           loading={configUpdatingId === option.id}
-          disabled={streaming || preparing || !!configUpdatingId}
+          disabled={sending || streaming || preparing || !!configUpdatingId}
           aria-pressed={enabled}
           aria-label={label}
           onClick={() => {
@@ -2301,7 +2354,7 @@ export function AcpConversationPane() {
                 }}
                 trigger={['click']}
                 placement="topLeft"
-                disabled={planEnabled || streaming || preparing || !!configUpdatingId}
+                disabled={sending || planEnabled || streaming || preparing || !!configUpdatingId}
               >
                 <Button
                   type="text"
@@ -2358,7 +2411,26 @@ export function AcpConversationPane() {
       {/* Bottom bar: agent picker + plan tag · git branch */}
       <div className="flex flex-wrap items-center justify-between gap-y-1 px-1 pt-1">
         <div className="flex flex-wrap items-center gap-1">
-          {sessionKey && !sessionSnapshot ? (
+          {!sessionKey && recentDraftError ? (
+            <Tooltip title={recentDraftError}>
+              <Button
+                type="text"
+                danger
+                size="small"
+                icon={<RefreshCw size={14} />}
+                onClick={() => void prepareRecentWorkspace()}
+                style={{ fontSize: 12 }}
+              >
+                {t('agentPage.retryConnection')}
+              </Button>
+            </Tooltip>
+          ) : !sessionKey && recentDraftPreparing ? (
+            <Button type="text" size="small" loading disabled style={{ fontSize: 12 }}>
+              {agentProcessReady
+                ? t('agentPage.preparingConversation')
+                : t('agentPage.preparing')}
+            </Button>
+          ) : sessionKey && !sessionSnapshot ? (
             preparing || !statusByThread[sessionKey] ? (
               <Button type="text" size="small" loading disabled style={{ fontSize: 12 }}>
                 {agentProcessReady
@@ -2395,13 +2467,13 @@ export function AcpConversationPane() {
               selectedKeys: effectiveAgentId ? [effectiveAgentId] : [],
               onClick: ({ key }) => {
                 if (!activeThreadId) {
-                  composerScopeRef.current = `${activeProjectId ?? ''}:draft:${key}`;
+                  composerScopeRef.current = composerScopeKey(activeProject, null, key);
                   setComposerAgentId(key);
                 }
               },
             }}
             trigger={['click']}
-            disabled={!!activeThreadId || agents.length === 0}
+            disabled={sending || !!activeThreadId || agents.length === 0}
           >
             <Button
               type="text"
@@ -2597,7 +2669,7 @@ export function AcpConversationPane() {
                     },
                   }}
                   trigger={['click']}
-                  disabled={agents.length === 0}
+                  disabled={sending || agents.length === 0}
                 >
                   <button type="button" style={welcomeLinkStyle}>
                     {effectiveAgentId ? (
@@ -2615,7 +2687,7 @@ export function AcpConversationPane() {
                     </span>
                   </button>
                 </Dropdown>
-                {activeProject?.kind !== 'recent' && activeProject ? (
+                {activeProject?.kind === 'project' ? (
                   <>
                     {' '}
                     {t('agentPage.projectWelcomeMiddle')}

@@ -547,6 +547,7 @@ pub fn run() {
         commands::acp::acp_list_projects,
         commands::acp::acp_reorder_projects,
         commands::acp::acp_create_project,
+        commands::acp::acp_ensure_recent_draft,
         commands::acp::acp_update_project,
         commands::acp::acp_delete_project,
         commands::acp::acp_list_threads,

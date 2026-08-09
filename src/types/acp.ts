@@ -47,7 +47,7 @@ export interface AcpProject {
   id: string;
   name: string;
   root_path: string;
-  kind: 'project' | 'recent';
+  kind: 'project' | 'recent' | 'recent_draft';
   sort_order: number;
   created_at: string;
   updated_at: string;

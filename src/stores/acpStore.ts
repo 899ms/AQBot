@@ -22,7 +22,11 @@ let _acpUnlisten: UnlistenFn | null = null;
 let _acpEventsReady: Promise<UnlistenFn> | null = null;
 let _acpBootstrapInFlight: Promise<void> | null = null;
 let _acpPrewarmInFlight: Promise<void> | null = null;
+let _acpRecentDraftInFlight: Promise<AcpProject> | null = null;
+let _acpProjectsLoadGeneration = 0;
+let _acpAllThreadsLoadGeneration = 0;
 const _acpPrepareInFlight = new Map<string, Promise<AcpSessionSnapshot>>();
+const _acpThreadListLoadVersion = new Map<string, number>();
 const _acpMessageLoadVersion = new Map<string, number>();
 const _acpFirstOutputTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let _acpOptimisticMessageSeq = 0;
@@ -61,6 +65,18 @@ function clearFirstOutputTimer(threadId: string): void {
   const timer = _acpFirstOutputTimers.get(threadId);
   if (timer) clearTimeout(timer);
   _acpFirstOutputTimers.delete(threadId);
+}
+
+function replaceProjectThreadsInPlace(
+  allThreads: AcpThread[],
+  projectId: string,
+  refreshed: AcpThread[],
+): AcpThread[] {
+  const insertionIndex = allThreads.findIndex((thread) => thread.project_id === projectId);
+  if (insertionIndex < 0) return [...allThreads, ...refreshed];
+  const next = allThreads.filter((thread) => thread.project_id !== projectId);
+  next.splice(insertionIndex, 0, ...refreshed);
+  return next;
 }
 
 interface AcpPrewarmResult {
@@ -544,6 +560,8 @@ interface AcpStore {
   spawnModelByThread: Record<string, string>;
   spawnReasoningByThread: Record<string, string>;
   permissionMode: string;
+  composerSubmitting: boolean;
+  creatingThread: boolean;
   loading: boolean;
   error: string | null;
   /**
@@ -573,6 +591,7 @@ interface AcpStore {
   /** Persist order after drag end. */
   reorderProjects: (projectIds: string[]) => Promise<void>;
   createProject: (name: string, rootPath: string) => Promise<AcpProject>;
+  ensureRecentDraft: () => Promise<AcpProject>;
   updateProject: (
     projectId: string,
     patch: { name?: string; rootPath?: string },
@@ -929,6 +948,8 @@ export const useAcpStore = create<AcpStore>()(
   spawnModelByThread: {},
   spawnReasoningByThread: {},
   permissionMode: 'default',
+  composerSubmitting: false,
+  creatingThread: false,
   loading: false,
   error: null,
   configReady: false,
@@ -1083,10 +1104,13 @@ export const useAcpStore = create<AcpStore>()(
   },
 
   loadProjects: async () => {
+    const generation = ++_acpProjectsLoadGeneration;
     try {
       const projects = await invoke<AcpProject[]>('acp_list_projects');
+      if (generation !== _acpProjectsLoadGeneration) return;
       set({ projects, projectsReady: true });
     } catch (e) {
+      if (generation !== _acpProjectsLoadGeneration) return;
       set({ projectsReady: true, error: String(e) });
     }
   },
@@ -1098,14 +1122,20 @@ export const useAcpStore = create<AcpStore>()(
   reorderProjects: async (projectIds) => {
     await invoke('acp_reorder_projects', { projectIds });
     // Keep local sort_order in sync
-    set((s) => ({
-      projects: projectIds
+    set((s) => {
+      const orderedUserProjects = projectIds
         .map((id, i) => {
           const p = s.projects.find((x) => x.id === id);
           return p ? { ...p, sort_order: i } : null;
         })
-        .filter(Boolean) as AcpProject[],
-    }));
+        .filter(Boolean) as AcpProject[];
+      return {
+        projects: [
+          ...orderedUserProjects,
+          ...s.projects.filter((project) => project.kind !== 'project'),
+        ],
+      };
+    });
   },
 
   createProject: async (name, rootPath) => {
@@ -1113,6 +1143,41 @@ export const useAcpStore = create<AcpStore>()(
     await get().loadProjects();
     await get().loadAllThreads();
     return project;
+  },
+
+  ensureRecentDraft: async () => {
+    if (_acpRecentDraftInFlight) return _acpRecentDraftInFlight;
+    const task = invoke<AcpProject>('acp_ensure_recent_draft')
+      .then((project) => {
+        // A list request started before this mutation must not erase the
+        // authoritative project returned by the command when it resolves late.
+        _acpProjectsLoadGeneration += 1;
+        set((state) => ({
+          projects: [
+            ...state.projects.filter((item) => item.id !== project.id),
+            project,
+          ],
+          projectsReady: true,
+          ...(!state.activeProjectId && !state.activeThreadId
+            ? {
+                activeProjectId: project.id,
+                activeThreadId: null,
+                threads: [],
+                messages: [],
+              }
+            : {}),
+        }));
+        return project;
+      })
+      .catch((error) => {
+        set({ error: String(error) });
+        throw error;
+      })
+      .finally(() => {
+        if (_acpRecentDraftInFlight === task) _acpRecentDraftInFlight = null;
+      });
+    _acpRecentDraftInFlight = task;
+    return task;
   },
 
   updateProject: async (projectId, patch) => {
@@ -1147,19 +1212,21 @@ export const useAcpStore = create<AcpStore>()(
   },
 
   loadThreads: async (projectId) => {
+    const version = (_acpThreadListLoadVersion.get(projectId) ?? 0) + 1;
+    _acpThreadListLoadVersion.set(projectId, version);
     const threads = await invoke<AcpThread[]>('acp_list_threads', { projectId });
+    if (_acpThreadListLoadVersion.get(projectId) !== version) return;
     set((s) => ({
-      threads,
-      allThreads: [
-        ...s.allThreads.filter((th) => th.project_id !== projectId),
-        ...threads,
-      ],
+      ...(s.activeProjectId === projectId ? { threads } : {}),
+      allThreads: replaceProjectThreadsInPlace(s.allThreads, projectId, threads),
     }));
   },
 
   loadAllThreads: async () => {
+    const generation = ++_acpAllThreadsLoadGeneration;
     try {
       const allThreads = await invoke<AcpThread[]>('acp_list_all_threads');
+      if (generation !== _acpAllThreadsLoadGeneration) return;
       const { activeProjectId } = get();
       set({
         allThreads,
@@ -1169,6 +1236,7 @@ export const useAcpStore = create<AcpStore>()(
           : {}),
       });
     } catch (e) {
+      if (generation !== _acpAllThreadsLoadGeneration) return;
       set({ threadsReady: true, error: String(e) });
     }
   },
@@ -1202,28 +1270,64 @@ export const useAcpStore = create<AcpStore>()(
 
   createThread: async (projectId, agentId, title) => {
     const draftKey = `draft:${projectId}:${agentId}`;
-    const thread = await invoke<AcpThread>('acp_create_thread', {
+    const selectionBeforeCreate = {
+      projectId: get().activeProjectId,
+      threadId: get().activeThreadId,
+    };
+    const claimingRecentDraft = get().projects.some(
+      (project) => project.id === projectId && project.kind === 'recent_draft',
+    );
+    set({ creatingThread: true });
+    let thread: AcpThread;
+    try {
+      thread = await invoke<AcpThread>('acp_create_thread', {
+        projectId,
+        agentId,
+        title: title ?? null,
+      });
+    } catch (error) {
+      set({ creatingThread: false });
+      throw error;
+    }
+    _acpThreadListLoadVersion.set(
       projectId,
-      agentId,
-      title: title ?? null,
-    });
+      (_acpThreadListLoadVersion.get(projectId) ?? 0) + 1,
+    );
+    if (claimingRecentDraft) _acpProjectsLoadGeneration += 1;
     set((state) => {
+      const activateCreatedThread = selectionBeforeCreate.projectId === projectId
+        && selectionBeforeCreate.threadId === null
+        && state.activeProjectId === selectionBeforeCreate.projectId
+        && state.activeThreadId === selectionBeforeCreate.threadId;
       const draftSnapshot = state.sessionByThread[draftKey];
       const { [draftKey]: _adoptedDraft, ...remainingSessions } = state.sessionByThread;
       const { [draftKey]: draftReasoning, ...remainingReasoning } =
         state.spawnReasoningByThread;
       const { [draftKey]: draftModel, ...remainingModels } = state.spawnModelByThread;
       return {
-        activeProjectId: projectId,
-        activeThreadId: thread.id,
-        threads: [
-          thread,
-          ...state.threads.filter((item) => (
-            item.id !== thread.id && item.project_id === projectId
-          )),
-        ],
+        ...(claimingRecentDraft
+          ? {
+              projects: state.projects.map((project) => (
+                project.id === projectId
+                  ? { ...project, kind: 'recent' as const, name: thread.title }
+                  : project
+              )),
+            }
+          : {}),
+        ...(activateCreatedThread
+          ? {
+              activeProjectId: projectId,
+              activeThreadId: thread.id,
+              threads: [
+                thread,
+                ...state.threads.filter((item) => (
+                  item.id !== thread.id && item.project_id === projectId
+                )),
+              ],
+              messages: [],
+            }
+          : {}),
         allThreads: [thread, ...state.allThreads.filter((item) => item.id !== thread.id)],
-        messages: [],
         sessionByThread: {
           ...remainingSessions,
           ...(draftSnapshot ? { [thread.id]: draftSnapshot } : {}),
@@ -1243,9 +1347,12 @@ export const useAcpStore = create<AcpStore>()(
     }
     // The create receipt is authoritative for the first turn. Sidebar caches
     // reconcile in the background and must not delay prompt scheduling.
-    void Promise.all([get().loadThreads(projectId), get().loadAllThreads()]).catch((error) => {
+    const refreshes = [get().loadThreads(projectId), get().loadAllThreads()];
+    if (claimingRecentDraft) refreshes.push(get().loadProjects());
+    void Promise.all(refreshes).catch((error) => {
       set({ error: String(error) });
     });
+    set({ creatingThread: false });
     return thread;
   },
 

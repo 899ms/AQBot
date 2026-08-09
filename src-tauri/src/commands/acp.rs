@@ -25,7 +25,7 @@ use aqbot_acp_client::{AcpPromptAttachment, AcpPromptInput};
 use aqbot_core::repo::acp as acp_repo;
 use aqbot_core::types::{AppSettings, Attachment, AttachmentInput};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicU64, Ordering as AtomicOrdering},
@@ -37,6 +37,7 @@ use tokio::sync::{mpsc, Mutex};
 /// Process-wide ACP runtime (permission channels + future process pool).
 static ACP_RUNTIME: std::sync::OnceLock<Arc<AcpRuntime>> = std::sync::OnceLock::new();
 static ACP_CONFIG_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+static ACP_RECENT_DRAFT_LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
 static ACP_LAUNCH_CONFIG_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,18 +63,85 @@ pub struct AcpRecentThreadReceipt {
     thread: aqbot_core::entity::acp_threads::Model,
 }
 
-fn create_recent_workspace_dir(settings: &AppSettings) -> Result<(PathBuf, String), String> {
+fn allocate_recent_workspace_path(settings: &AppSettings) -> Result<(PathBuf, String), String> {
     let workspace_id = aqbot_core::utils::gen_id();
     let created_at = chrono::Utc::now().timestamp();
     let workspace_dir =
         super::agent::resolve_agent_workspace_dir_for(settings, &workspace_id, created_at);
-    std::fs::create_dir_all(&workspace_dir)
-        .map_err(|error| format!("failed to create ACP workspace: {error}"))?;
     let root_path = workspace_dir
         .to_str()
         .ok_or_else(|| "invalid ACP workspace path encoding".to_string())?
         .to_string();
     Ok((workspace_dir, root_path))
+}
+
+async fn create_recent_workspace_project(
+    state: &AppState,
+    settings: &AppSettings,
+    title: &str,
+    draft: bool,
+) -> Result<aqbot_core::entity::acp_projects::Model, String> {
+    let (workspace_dir, root_path) = allocate_recent_workspace_path(settings)?;
+    let project = if draft {
+        acp_repo::create_recent_draft_workspace(&state.sea_db, title, &root_path).await
+    } else {
+        acp_repo::create_recent_workspace(&state.sea_db, title, &root_path).await
+    }
+    .map_err(|error| error.to_string())?;
+    if let Err(error) = std::fs::create_dir_all(&workspace_dir) {
+        let rollback = acp_repo::delete_project(&state.sea_db, &project.id).await;
+        return Err(match rollback {
+            Ok(()) => format!("failed to create ACP workspace: {error}"),
+            Err(rollback) => {
+                format!("failed to create ACP workspace: {error}; rollback failed: {rollback}")
+            }
+        });
+    }
+    Ok(project)
+}
+
+async fn reusable_recent_draft(
+    db: &sea_orm::DatabaseConnection,
+) -> Result<Option<aqbot_core::entity::acp_projects::Model>, String> {
+    let occupied_projects = acp_repo::list_all_threads(db)
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(|thread| thread.project_id)
+        .collect::<HashSet<_>>();
+    Ok(acp_repo::list_projects(db)
+        .await
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .find(|project| project.kind == "recent_draft" && !occupied_projects.contains(&project.id)))
+}
+
+#[cfg(test)]
+mod recent_draft_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn only_an_explicit_unoccupied_recent_draft_is_reusable() {
+        let db = aqbot_core::db::create_test_pool().await.unwrap().conn;
+        let residual = acp_repo::create_recent_workspace(&db, "Deleted conversation", "/tmp/old")
+            .await
+            .unwrap();
+        let draft =
+            acp_repo::create_recent_draft_workspace(&db, "New conversation", "/tmp/recent-draft")
+                .await
+                .unwrap();
+
+        assert_eq!(
+            reusable_recent_draft(&db).await.unwrap().unwrap().id,
+            draft.id
+        );
+        acp_repo::create_thread(&db, &draft.id, "codex", "Claimed")
+            .await
+            .unwrap();
+
+        assert!(reusable_recent_draft(&db).await.unwrap().is_none());
+        assert_eq!(residual.kind, "recent");
+    }
 }
 
 fn next_tool_sequence(
@@ -993,6 +1061,31 @@ pub async fn acp_create_project(
         .map_err(|e| e.to_string())
 }
 
+/// Reserve one hidden Recent workspace for the composer before its first prompt.
+/// Recent projects are only listed in the sidebar after they own a thread, so
+/// this gives ACP a real cwd/session without creating an empty conversation.
+#[tauri::command]
+pub async fn acp_ensure_recent_draft(
+    state: State<'_, AppState>,
+) -> Result<aqbot_core::entity::acp_projects::Model, String> {
+    let _guard = ACP_RECENT_DRAFT_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
+    if let Some(project) = reusable_recent_draft(&state.sea_db).await? {
+        std::fs::create_dir_all(&project.root_path)
+            .map_err(|error| format!("failed to restore ACP draft workspace: {error}"))?;
+        return Ok(project);
+    }
+
+    let mut settings = aqbot_core::repo::settings::get_settings(&state.sea_db)
+        .await
+        .map_err(|error| error.to_string())?;
+    settings.agent_workspace_root =
+        aqbot_core::path_vars::decode_path_opt(&settings.agent_workspace_root);
+    create_recent_workspace_project(&state, &settings, "New conversation", true).await
+}
+
 #[tauri::command]
 pub async fn acp_delete_project(
     state: State<'_, AppState>,
@@ -1067,14 +1160,49 @@ pub async fn acp_create_thread(
     let title = title
         .filter(|t| !t.trim().is_empty())
         .unwrap_or_else(|| "New conversation".into());
-    let thread = acp_repo::create_thread(&state.sea_db, &project_id, &agent_id, &title)
+    let project = acp_repo::get_project(&state.sea_db, &project_id)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "project not found".to_string())?;
     let runtime = runtime();
-    let adopted = runtime
-        .adopt_session(&draft_session_key(&project_id, &agent_id), &thread.id)
-        .await;
-    if !adopted {
+    let draft_key = draft_session_key(&project_id, &agent_id);
+    let (thread, draft_metadata_persisted) = match project.kind.as_str() {
+        "recent_draft" => {
+            let _guard = ACP_RECENT_DRAFT_LOCK
+                .get_or_init(|| Mutex::new(()))
+                .lock()
+                .await;
+            let snapshot = runtime
+                .session_snapshot(&draft_key)
+                .await
+                .map_err(|error| format!("failed to inspect ACP Recent draft: {error}"))?;
+            let mode_id = snapshot.as_ref().and_then(persisted_mode_id);
+            let thread = acp_repo::claim_recent_draft_thread(
+                &state.sea_db,
+                &project_id,
+                &agent_id,
+                &title,
+                snapshot.as_ref().map(|value| value.session_id.as_str()),
+                mode_id.as_deref(),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            (thread, snapshot.is_some())
+        }
+        "project" => (
+            acp_repo::create_thread(&state.sea_db, &project_id, &agent_id, &title)
+                .await
+                .map_err(|error| error.to_string())?,
+            false,
+        ),
+        _ => {
+            return Err(format!(
+                "ACP project `{project_id}` cannot accept another thread"
+            ));
+        }
+    };
+    let adopted = runtime.adopt_session(&draft_key, &thread.id).await;
+    if !adopted || draft_metadata_persisted {
         return Ok(thread);
     }
 
@@ -1110,6 +1238,10 @@ pub async fn acp_create_recent_thread(
     {
         return Err(format!("agent `{agent_id}` is not enabled"));
     }
+    let _guard = ACP_RECENT_DRAFT_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .await;
 
     let mut settings = aqbot_core::repo::settings::get_settings(&state.sea_db)
         .await
@@ -1117,24 +1249,23 @@ pub async fn acp_create_recent_thread(
     settings.agent_workspace_root =
         aqbot_core::path_vars::decode_path_opt(&settings.agent_workspace_root);
 
-    let (workspace_dir, root_path) = create_recent_workspace_dir(&settings)?;
     let title = title
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "New conversation".into());
-
-    let project = match acp_repo::create_recent_workspace(&state.sea_db, &title, &root_path).await {
-        Ok(project) => project,
-        Err(error) => {
-            let _ = std::fs::remove_dir(&workspace_dir);
-            return Err(error.to_string());
-        }
-    };
+    let project = create_recent_workspace_project(&state, &settings, &title, false).await?;
+    let workspace_dir = PathBuf::from(&project.root_path);
 
     match acp_repo::create_thread(&state.sea_db, &project.id, &agent_id, &title).await {
         Ok(thread) => Ok(AcpRecentThreadReceipt { project, thread }),
         Err(error) => {
-            let _ = acp_repo::delete_project(&state.sea_db, &project.id).await;
-            let _ = std::fs::remove_dir(&workspace_dir);
+            if let Err(rollback) = acp_repo::delete_project(&state.sea_db, &project.id).await {
+                return Err(format!(
+                    "{error}; failed to roll back ACP Recent project: {rollback}"
+                ));
+            }
+            std::fs::remove_dir(&workspace_dir).map_err(|cleanup| {
+                format!("{error}; failed to remove empty ACP workspace: {cleanup}")
+            })?;
             Err(error.to_string())
         }
     }

@@ -1,12 +1,21 @@
 import { App } from 'antd';
-import { act, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ACP_STATUS_CANCELLING,
   ACP_STATUS_FIRST_OUTPUT_SILENCE,
   useAcpStore,
 } from '@/stores/acpStore';
-import type { AcpSessionSnapshot } from '@/types/acp';
+import type { AcpSessionConfigSelectOption, AcpSessionSnapshot } from '@/types/acp';
 import { translateZhCN } from '@/test/i18nTestTranslator';
 import { AcpConversationPane, localizeAcpStatus } from '../AcpConversationPane';
 
@@ -228,6 +237,7 @@ describe('AcpConversationPane', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useAcpStore.setState(useAcpStore.getInitialState(), true);
     invokeMock.mockImplementation(async (command: string) => {
       if (command === 'acp_git_info') {
         return { branch: null, branches: [], isRepo: false };
@@ -585,13 +595,23 @@ describe('AcpConversationPane', () => {
       </App>,
     );
 
-    fireEvent.click(await screen.findByText('GPT-5.6 Codex'));
+    const modelTrigger = await screen.findByText('GPT-5.6 Codex');
+    fireEvent.click(modelTrigger);
     // Descriptions are intentionally omitted from the compact menu
     expect(screen.queryByText('Frontier coding model')).not.toBeInTheDocument();
-    expect(screen.getByText('Custom Unknown')).toBeInTheDocument();
+    const unknownChoice = screen.getByText('Custom Unknown');
+    expect(unknownChoice).toBeInTheDocument();
     // Known model uses SmartModelIcon; unknown falls back to agent icon in the list
     expect(screen.getAllByTestId('smart-model-icon').length).toBeGreaterThan(0);
     expect(screen.getAllByTestId('acp-agent-icon').length).toBeGreaterThan(0);
+
+    // Select an item so the portal-backed menu completes its normal close path.
+    fireEvent.click(unknownChoice);
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('acp_set_config_option', {
+      threadId: 'thread-1',
+      configId: 'model',
+      value: 'custom-unknown-model',
+    }));
   });
 
   it('toggles fast mode with a solid/outline icon button', async () => {
@@ -1786,12 +1806,12 @@ describe('AcpConversationPane', () => {
     expect(invokeMock).not.toHaveBeenCalledWith('acp_prepare_draft', expect.anything());
   });
 
-  it('creates a recent workspace when sending without a selected project', async () => {
+  it('prepares and adopts a Recent draft when sending without a selected project', async () => {
     const recentProject = {
       id: 'recent-project',
       name: 'hello anywhere',
       root_path: '/tmp/aqbot-workspace/recent-project',
-      kind: 'recent' as const,
+      kind: 'recent_draft' as const,
       sort_order: 1,
       created_at: '2026-08-08T00:00:00Z',
       updated_at: '2026-08-08T00:00:00Z',
@@ -1816,12 +1836,20 @@ describe('AcpConversationPane', () => {
       activeThreadId: null,
       runningByThread: {},
       sessionByThread: {},
+      projectsReady: true,
+      threadsReady: true,
     });
     invokeMock.mockImplementation(async (command: string) => {
-      if (command === 'acp_create_recent_thread') {
-        return { project: recentProject, thread: recentThread };
+      if (command === 'acp_ensure_recent_draft') return recentProject;
+      if (command === 'acp_prepare_draft') return sessionSnapshot;
+      if (command === 'acp_create_thread') return recentThread;
+      if (command === 'acp_git_info') return { branch: null, branches: [], isRepo: false };
+      if (command === 'acp_list_projects') {
+        return [{ ...recentProject, kind: 'recent', name: recentThread.title }];
       }
-      if (command === 'acp_prepare_session') return sessionSnapshot;
+      if (command === 'acp_list_threads' || command === 'acp_list_all_threads') {
+        return [recentThread];
+      }
       if (command === 'acp_prompt') {
         return {
           userMessage: {
@@ -1852,21 +1880,260 @@ describe('AcpConversationPane', () => {
         <AcpConversationPane />
       </App>,
     );
+    await screen.findByText('GPT-5.6 Codex');
     fireEvent.change(screen.getByPlaceholderText('做点什么…'), {
       target: { value: 'hello anywhere' },
     });
     fireEvent.click(container.querySelector('.lucide-arrow-up')!.closest('button')!);
 
-    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
-      'acp_create_recent_thread',
-      { agentId: 'codex', title: 'hello anywhere' },
-    ));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('acp_create_thread', {
+      projectId: recentProject.id,
+      agentId: 'codex',
+      title: 'hello anywhere',
+    }));
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith(
       'acp_prompt',
       expect.objectContaining({ threadId: recentThread.id, prompt: 'hello anywhere' }),
     ));
+    expect(invokeMock).not.toHaveBeenCalledWith('acp_create_recent_thread', expect.anything());
     expect(useAcpStore.getState().activeProjectId).toBe(recentProject.id);
     expect(useAcpStore.getState().activeThreadId).toBe(recentThread.id);
+    expect(useAcpStore.getState().sessionByThread[recentThread.id]).toEqual(sessionSnapshot);
+  });
+
+  it('shows adjustable permission, model, and reasoning controls before the first Recent prompt', async () => {
+    const recentDraftProject = {
+      id: 'recent-draft-project',
+      name: 'New conversation',
+      root_path: '/tmp/aqbot-workspace/recent-draft-project',
+      kind: 'recent_draft' as const,
+      sort_order: 1,
+      created_at: '2026-08-08T00:00:00Z',
+      updated_at: '2026-08-08T00:00:00Z',
+    };
+    const recentDraftSnapshot: AcpSessionSnapshot = {
+      ...sessionSnapshot,
+      configOptions: sessionSnapshot.configOptions.map((option) => {
+        const flatOptions = (option.options ?? []).filter(
+          (choice): choice is AcpSessionConfigSelectOption => 'value' in choice,
+        );
+        if (option.id === 'model') {
+          return {
+            ...option,
+            options: [
+              ...flatOptions,
+              { value: 'gpt-5.6-mini', name: 'GPT-5.6 Mini' },
+            ],
+          };
+        }
+        if (option.id === 'reasoning_effort') {
+          return {
+            ...option,
+            options: [
+              { value: 'medium', name: 'Medium' },
+              ...flatOptions,
+            ],
+          };
+        }
+        if (option.id === 'mode') {
+          return {
+            ...option,
+            options: [
+              ...flatOptions,
+              { value: 'dontAsk', name: "Don't ask" },
+            ],
+          };
+        }
+        return option;
+      }),
+    };
+    useAcpStore.setState({
+      projects: [],
+      threads: [],
+      allThreads: [],
+      messages: [],
+      activeProjectId: null,
+      activeThreadId: null,
+      runningByThread: {},
+      sessionByThread: {},
+      preparingByThread: {},
+      projectsReady: true,
+      threadsReady: true,
+    });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_ensure_recent_draft') return recentDraftProject;
+      if (command === 'acp_prepare_draft') return recentDraftSnapshot;
+      if (command === 'acp_set_config_option') return recentDraftSnapshot;
+      if (command === 'acp_git_info') {
+        return { branch: null, branches: [], isRepo: false };
+      }
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+
+    const { container } = render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+
+    const pane = within(container);
+    const user = userEvent.setup();
+    const permission = await pane.findByText('每次询问');
+    const model = pane.getByText('GPT-5.6 Codex');
+    const reasoning = pane.getByText('High');
+    const selectOpenMenuItem = async (label: string) => {
+      const item = await waitFor(() => {
+        const match = screen.queryAllByRole('menuitem').find(
+          (candidate) => candidate.textContent?.includes(label),
+        );
+        expect(match).toBeDefined();
+        return match!;
+      });
+      await user.click(item);
+    };
+
+    expect(permission.closest('button')).toBeEnabled();
+    expect(model.closest('button')).toBeEnabled();
+    expect(reasoning.closest('button')).toBeEnabled();
+    expect(invokeMock).toHaveBeenCalledWith('acp_ensure_recent_draft');
+    expect(invokeMock).toHaveBeenCalledWith('acp_prepare_draft', {
+      projectId: recentDraftProject.id,
+      agentId: 'codex',
+      modelId: null,
+      reasoningEffort: null,
+    });
+
+    await user.click(permission.closest('button')!);
+    await selectOpenMenuItem('不询问（拒绝）');
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('acp_set_config_option', {
+      threadId: `draft:${recentDraftProject.id}:codex`,
+      configId: 'mode',
+      value: 'dontAsk',
+    }));
+
+    await user.click(pane.getByText('GPT-5.6 Codex').closest('button')!);
+    await selectOpenMenuItem('GPT-5.6 Mini');
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('acp_set_config_option', {
+      threadId: `draft:${recentDraftProject.id}:codex`,
+      configId: 'model',
+      value: 'gpt-5.6-mini',
+    }));
+
+    await user.click(pane.getByText('High').closest('button')!);
+    await selectOpenMenuItem('Medium');
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('acp_set_config_option', {
+      threadId: `draft:${recentDraftProject.id}:codex`,
+      configId: 'reasoning_effort',
+      value: 'medium',
+    }));
+    expect(invokeMock).not.toHaveBeenCalledWith('acp_prompt', expect.anything());
+  });
+
+  it('preserves typed Recent draft text while its hidden workspace materializes', async () => {
+    let resolveRecentDraft!: (project: {
+      id: string;
+      name: string;
+      root_path: string;
+      kind: 'recent_draft';
+      sort_order: number;
+      created_at: string;
+      updated_at: string;
+    }) => void;
+    const recentDraftProject = {
+      id: 'delayed-recent-draft',
+      name: 'New conversation',
+      root_path: '/tmp/aqbot-workspace/delayed-recent-draft',
+      kind: 'recent_draft' as const,
+      sort_order: 1,
+      created_at: '2026-08-08T00:00:00Z',
+      updated_at: '2026-08-08T00:00:00Z',
+    };
+    const pendingRecentDraft = new Promise<typeof recentDraftProject>((resolve) => {
+      resolveRecentDraft = resolve;
+    });
+    useAcpStore.setState({
+      projects: [],
+      threads: [],
+      allThreads: [],
+      messages: [],
+      activeProjectId: null,
+      activeThreadId: null,
+      sessionByThread: {},
+      preparingByThread: {},
+      projectsReady: true,
+      threadsReady: true,
+    });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_ensure_recent_draft') return pendingRecentDraft;
+      if (command === 'acp_prepare_draft') return sessionSnapshot;
+      if (command === 'acp_git_info') {
+        return { branch: null, branches: [], isRepo: false };
+      }
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+
+    render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+    const input = screen.getByPlaceholderText('做点什么…');
+    fireEvent.change(input, { target: { value: 'keep this draft' } });
+
+    await act(async () => {
+      resolveRecentDraft(recentDraftProject);
+      await pendingRecentDraft;
+    });
+    await screen.findByText('GPT-5.6 Codex');
+
+    expect(input).toHaveValue('keep this draft');
+  });
+
+  it('offers a visible retry when the initial Recent draft preparation fails', async () => {
+    const recentDraftProject = {
+      id: 'retry-recent-draft',
+      name: 'New conversation',
+      root_path: '/tmp/aqbot-workspace/retry-recent-draft',
+      kind: 'recent_draft' as const,
+      sort_order: 1,
+      created_at: '2026-08-08T00:00:00Z',
+      updated_at: '2026-08-08T00:00:00Z',
+    };
+    let ensureCalls = 0;
+    useAcpStore.setState({
+      projects: [],
+      threads: [],
+      allThreads: [],
+      messages: [],
+      activeProjectId: null,
+      activeThreadId: null,
+      sessionByThread: {},
+      preparingByThread: {},
+      projectsReady: true,
+      threadsReady: true,
+    });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'acp_ensure_recent_draft') {
+        ensureCalls += 1;
+        if (ensureCalls === 1) throw new Error('workspace unavailable');
+        return recentDraftProject;
+      }
+      if (command === 'acp_prepare_draft') return sessionSnapshot;
+      if (command === 'acp_git_info') {
+        return { branch: null, branches: [], isRepo: false };
+      }
+      throw new Error(`Unexpected invoke: ${command}`);
+    });
+
+    render(
+      <App>
+        <AcpConversationPane />
+      </App>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: '重试连接' }));
+    expect(await screen.findByText('GPT-5.6 Codex')).toBeInTheDocument();
+    expect(ensureCalls).toBe(2);
   });
 
   it('does not restore a failed turn into a different thread composer', async () => {

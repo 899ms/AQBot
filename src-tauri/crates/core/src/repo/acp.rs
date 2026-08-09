@@ -160,6 +160,14 @@ pub async fn create_recent_workspace(
     create_project_with_kind(db, name, root_path, "recent").await
 }
 
+pub async fn create_recent_draft_workspace(
+    db: &DatabaseConnection,
+    name: &str,
+    root_path: &str,
+) -> Result<acp_projects::Model> {
+    create_project_with_kind(db, name, root_path, "recent_draft").await
+}
+
 async fn create_project_with_kind(
     db: &DatabaseConnection,
     name: &str,
@@ -355,7 +363,6 @@ pub async fn create_thread(
     agent_id: &str,
     title: &str,
 ) -> Result<acp_threads::Model> {
-    let now = now_str();
     // New threads appear at the top of the unpinned group
     let min_order = acp_threads::Entity::find()
         .filter(acp_threads::Column::ProjectId.eq(project_id))
@@ -365,7 +372,19 @@ pub async fn create_thread(
         .await?
         .map(|t| t.sort_order)
         .unwrap_or(0);
-    let model = acp_threads::ActiveModel {
+    Ok(new_thread_model(project_id, agent_id, title, min_order - 1)
+        .insert(db)
+        .await?)
+}
+
+fn new_thread_model(
+    project_id: &str,
+    agent_id: &str,
+    title: &str,
+    sort_order: i32,
+) -> acp_threads::ActiveModel {
+    let now = now_str();
+    acp_threads::ActiveModel {
         id: Set(gen_id()),
         project_id: Set(project_id.to_string()),
         agent_id: Set(agent_id.to_string()),
@@ -374,11 +393,65 @@ pub async fn create_thread(
         runtime_status: Set("idle".into()),
         mode_id: Set(None),
         is_pinned: Set(0),
-        sort_order: Set(min_order - 1),
+        sort_order: Set(sort_order),
         created_at: Set(now.clone()),
         updated_at: Set(now),
+    }
+}
+
+/// Atomically turn one hidden Recent draft workspace into a visible thread.
+/// The kind transition distinguishes intentional drafts from empty Recent
+/// projects left behind by an interrupted deletion.
+pub async fn claim_recent_draft_thread(
+    db: &DatabaseConnection,
+    project_id: &str,
+    agent_id: &str,
+    title: &str,
+    session_id: Option<&str>,
+    mode_id: Option<&str>,
+) -> Result<acp_threads::Model> {
+    let txn = db.begin().await?;
+    let operation = async {
+        let project = acp_projects::Entity::find_by_id(project_id)
+            .one(&txn)
+            .await?
+            .ok_or_else(|| AQBotError::NotFound(format!("ACP project {project_id}")))?;
+        if project.kind != "recent_draft" {
+            return Err(AQBotError::Validation(format!(
+                "ACP project {project_id} is no longer an unclaimed Recent draft"
+            )));
+        }
+        if acp_threads::Entity::find()
+            .filter(acp_threads::Column::ProjectId.eq(project_id))
+            .one(&txn)
+            .await?
+            .is_some()
+        {
+            return Err(AQBotError::Validation(format!(
+                "ACP Recent draft {project_id} already owns a thread"
+            )));
+        }
+
+        let mut project_update: acp_projects::ActiveModel = project.into();
+        project_update.kind = Set("recent".to_string());
+        project_update.name = Set(title.to_string());
+        project_update.updated_at = Set(now_str());
+        project_update.update(&txn).await?;
+        let mut thread = new_thread_model(project_id, agent_id, title, -1);
+        thread.acp_session_id = Set(session_id.map(str::to_string));
+        thread.mode_id = Set(mode_id.map(str::to_string));
+        Ok(thread.insert(&txn).await?)
+    }
+    .await;
+    let thread = match operation {
+        Ok(thread) => thread,
+        Err(error) => {
+            let rollback = txn.rollback().await.err();
+            return Err(transaction_failure(error, rollback));
+        }
     };
-    Ok(model.insert(db).await?)
+    txn.commit().await?;
+    Ok(thread)
 }
 
 pub async fn get_thread(db: &DatabaseConnection, id: &str) -> Result<Option<acp_threads::Model>> {
@@ -1001,6 +1074,46 @@ mod tests {
 
         assert_eq!(project.kind, "project");
         assert_eq!(recent.kind, "recent");
+    }
+
+    #[tokio::test]
+    async fn recent_draft_claim_is_atomic_and_cannot_be_reused() {
+        let db = crate::db::create_test_pool().await.unwrap().conn;
+        let draft = create_recent_draft_workspace(&db, "New conversation", "/tmp/recent-draft")
+            .await
+            .unwrap();
+
+        let thread = claim_recent_draft_thread(
+            &db,
+            &draft.id,
+            "codex",
+            "First prompt",
+            Some("session-1"),
+            Some("agent"),
+        )
+        .await
+        .unwrap();
+        let claimed = get_project(&db, &draft.id).await.unwrap().unwrap();
+
+        assert_eq!(thread.project_id, draft.id);
+        assert_eq!(thread.acp_session_id.as_deref(), Some("session-1"));
+        assert_eq!(thread.mode_id.as_deref(), Some("agent"));
+        assert_eq!(claimed.kind, "recent");
+        assert_eq!(claimed.name, "First prompt");
+        let duplicate =
+            claim_recent_draft_thread(&db, &draft.id, "codex", "Second prompt", None, None)
+                .await
+                .unwrap_err();
+        assert!(duplicate
+            .to_string()
+            .contains("no longer an unclaimed Recent draft"));
+        assert_eq!(
+            list_threads_for_project(&db, &draft.id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
