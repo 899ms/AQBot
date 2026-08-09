@@ -97,11 +97,13 @@ export function AcpToolCallNode(props: NodeComponentProps<{
   const isLoading = status === 'queued' || status === 'running';
   const output = tc?.output === 'aqbot:questionnaire:accepted'
     ? t('agentPage.interactionAnswersSubmitted')
-    : tc?.output === 'aqbot:questionnaire:chat_about_this'
-      ? t('agentPage.interactionChatAboutThis')
-      : tc?.output === 'aqbot:questionnaire:skip_interview'
-        ? t('agentPage.interactionSkipInterview')
-        : tc?.output;
+    : tc?.output === 'aqbot:questionnaire:declined'
+      ? t('agentPage.interactionDeclineAnswers')
+      : tc?.output === 'aqbot:questionnaire:chat_about_this'
+        ? t('agentPage.interactionChatAboutThis')
+        : tc?.output === 'aqbot:questionnaire:skip_interview'
+          ? t('agentPage.interactionSkipInterview')
+          : tc?.output;
   const hasDetails = !!(tc && (tc.input || output));
   const approvalLabel = tc?.approvalStatus === 'approved'
     ? t('agentPage.interactionApproved')

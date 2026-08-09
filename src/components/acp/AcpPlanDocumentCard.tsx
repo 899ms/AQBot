@@ -51,6 +51,7 @@ export function extractAcpPlanContent(
     extras?.description,
     source.planContent,
     source.plan_content,
+    source.plan,
     source.content,
     source.description,
     extras?.question,

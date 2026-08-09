@@ -87,12 +87,11 @@ describe('acpStore prompt ordering', () => {
     });
   });
 
-  it('maps session always-allow onto an agent allow option and auto-approves later matches', async () => {
+  it('keeps same-kind tools pending after selecting an agent-advertised AllowAlways option', async () => {
     invokeMock.mockResolvedValue(undefined);
     const { useAcpStore } = await import('../acpStore');
     await useAcpStore.getState().bindEvents();
     useAcpStore.setState({
-      alwaysAllowedToolsByThread: {},
       pendingPermissions: {
         'permission-1': {
           threadId: 'thread-1',
@@ -104,23 +103,24 @@ describe('acpStore prompt ordering', () => {
           status: 'pending',
           options: [
             { id: 'allow-once', label: 'Allow once', kind: 'AllowOnce', variant: 'primary' },
+            {
+              id: 'agent-allow-always',
+              label: 'Always allow from Agent',
+              kind: 'AllowAlways',
+            },
             { id: 'reject-once', label: 'Reject', kind: 'RejectOnce', variant: 'danger' },
           ],
         },
       },
     });
 
-    await useAcpStore.getState().respondPermission(
-      'permission-1',
-      '__aqbot_session_always_allow',
-    );
+    await useAcpStore.getState().respondPermission('permission-1', 'agent-allow-always');
 
     expect(invokeMock).toHaveBeenCalledWith('acp_respond_permission', {
       requestId: 'permission-1',
-      optionId: 'allow-once',
+      optionId: 'agent-allow-always',
       feedback: null,
     });
-    expect(useAcpStore.getState().alwaysAllowedToolsByThread['thread-1']).toEqual(['execute']);
     expect(useAcpStore.getState().pendingPermissions['permission-1']).toBeUndefined();
 
     invokeMock.mockClear();
@@ -140,144 +140,82 @@ describe('acpStore prompt ordering', () => {
         },
         options: [
           { optionId: 'allow-once', name: 'Allow once', kind: 'AllowOnce' },
+          {
+            optionId: 'agent-allow-always',
+            name: 'Always allow from Agent',
+            kind: 'AllowAlways',
+          },
           { optionId: 'reject-once', name: 'Reject', kind: 'RejectOnce' },
         ],
       },
     });
 
-    await vi.waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith('acp_respond_permission', {
-        requestId: 'permission-2',
-        optionId: 'allow-once',
-        feedback: null,
-      });
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      'acp_respond_permission',
+      expect.objectContaining({ requestId: 'permission-2' }),
+    );
+    expect(useAcpStore.getState().pendingPermissions['permission-2']).toMatchObject({
+      requestId: 'permission-2',
+      toolName: 'execute',
+      input: { command: 'pwd' },
+      status: 'pending',
     });
-    // Should not surface a second pending prompt for the remembered tool.
-    expect(useAcpStore.getState().pendingPermissions['permission-2']).toBeUndefined();
   });
 
-  it('re-surfaces a remembered permission when automatic approval fails', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    invokeMock.mockRejectedValueOnce(new Error('agent disconnected'));
+  it('keeps a no-tool-call permission manual and sends its advertised option unchanged', async () => {
+    invokeMock.mockResolvedValue(undefined);
     const { useAcpStore } = await import('../acpStore');
     await useAcpStore.getState().bindEvents();
-    useAcpStore.setState({
-      alwaysAllowedToolsByThread: { 'thread-1': ['execute'] },
-      pendingPermissions: {},
-    });
 
     eventHandlers.get('acp-permission-request')?.({
       payload: {
         threadId: 'thread-1',
-        messageId: 'assistant-1',
-        requestId: 'permission-failed-auto-approval',
+        messageId: 'assistant-autohand',
+        requestId: 'autohand-permission',
         interactionKind: 'permission',
+        toolCallId: null,
+        title: 'Allow Autohand to deploy this change?',
         raw: {
-          toolCall: {
-            toolCallId: 'tool-1',
-            kind: 'execute',
-            title: 'Run command',
-            rawInput: { command: 'pwd' },
+          sessionId: 'session-1',
+          title: 'Allow Autohand to deploy this change?',
+          prompt: 'Select how Autohand should continue.',
+          description: 'Autohand needs approval before deployment.',
+          tool: 'autohand_permission',
+          _meta: {
+            title: 'Allow Autohand to deploy this change?',
+            prompt: 'Select how Autohand should continue.',
+            description: 'Autohand needs approval before deployment.',
+            tool: 'autohand_permission',
           },
         },
         options: [
-          { optionId: 'allow-once', name: 'Allow once', kind: 'AllowOnce' },
-          { optionId: 'reject-once', name: 'Reject', kind: 'RejectOnce' },
+          { optionId: 'allow_once', name: 'Allow once', kind: 'AllowOnce' },
+          { optionId: 'allow_always', name: 'Allow always', kind: 'AllowAlways' },
+          { optionId: 'reject_once', name: 'Reject', kind: 'RejectOnce' },
         ],
       },
     });
 
-    await vi.waitFor(() => {
-      expect(
-        useAcpStore.getState().pendingPermissions['permission-failed-auto-approval'],
-      ).toMatchObject({
-        threadId: 'thread-1',
-        requestId: 'permission-failed-auto-approval',
-        toolName: 'execute',
-        status: 'pending',
-      });
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      'acp_respond_permission',
+      expect.objectContaining({ requestId: 'autohand-permission' }),
+    );
+    expect(useAcpStore.getState().pendingPermissions['autohand-permission']).toMatchObject({
+      title: 'Allow Autohand to deploy this change?',
+      toolName: 'autohand_permission',
+      kind: 'permission',
     });
-    errorSpy.mockRestore();
-  });
+    expect(
+      useAcpStore.getState().pendingPermissions['autohand-permission']?.toolCallId,
+    ).toBeUndefined();
 
-  it('does not re-surface automatic approval failures after a terminal event or deletion', async () => {
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    const rejectByRequest = new Map<string, (error: Error) => void>();
-    invokeMock.mockImplementation(async (command: string, args?: { requestId?: string }) => {
-      if (command === 'acp_respond_permission' && args?.requestId) {
-        return new Promise<never>((_, reject) => {
-          rejectByRequest.set(args.requestId!, reject);
-        });
-      }
-      if (command === 'acp_delete_thread') return undefined;
-      if (command === 'acp_list_all_threads') return [];
-      throw new Error(`Unexpected invoke: ${command}`);
+    await useAcpStore.getState().respondPermission('autohand-permission', 'allow_always');
+
+    expect(invokeMock).toHaveBeenCalledWith('acp_respond_permission', {
+      requestId: 'autohand-permission',
+      optionId: 'allow_always',
+      feedback: null,
     });
-    const { useAcpStore } = await import('../acpStore');
-    await useAcpStore.getState().bindEvents();
-    useAcpStore.setState({
-      activeProjectId: null,
-      activeThreadId: null,
-      threads: [],
-      allThreads: [],
-      messages: [],
-      alwaysAllowedToolsByThread: { 'thread-1': ['execute'] },
-      pendingPermissions: {},
-    });
-
-    const requestPermission = async (requestId: string) => {
-      eventHandlers.get('acp-permission-request')?.({
-        payload: {
-          threadId: 'thread-1',
-          messageId: 'assistant-1',
-          requestId,
-          interactionKind: 'permission',
-          raw: {
-            toolCall: {
-              toolCallId: `tool-${requestId}`,
-              kind: 'execute',
-              title: 'Run command',
-            },
-          },
-          options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'AllowOnce' }],
-        },
-      });
-      await vi.waitFor(() => expect(rejectByRequest.has(requestId)).toBe(true));
-    };
-    const rejectAndExpectHidden = async (requestId: string, expectedErrors: number) => {
-      rejectByRequest.get(requestId)?.(new Error('late transport failure'));
-      await vi.waitFor(() => expect(errorSpy).toHaveBeenCalledTimes(expectedErrors));
-      expect(useAcpStore.getState().pendingPermissions[requestId]).toBeUndefined();
-    };
-
-    await requestPermission('permission-closed');
-    eventHandlers.get('acp-interaction-closed')?.({
-      payload: {
-        threadId: 'thread-1',
-        messageId: 'assistant-1',
-        requestId: 'permission-closed',
-        interactionKind: 'permission',
-        reason: 'cancelled',
-      },
-    });
-    await rejectAndExpectHidden('permission-closed', 1);
-
-    await requestPermission('permission-done');
-    eventHandlers.get('acp-done')?.({
-      payload: { threadId: 'thread-1', messageId: 'assistant-1', text: '' },
-    });
-    await rejectAndExpectHidden('permission-done', 2);
-
-    await requestPermission('permission-error');
-    eventHandlers.get('acp-error')?.({
-      payload: { threadId: 'thread-1', messageId: 'assistant-1', message: 'turn failed' },
-    });
-    await rejectAndExpectHidden('permission-error', 3);
-
-    await requestPermission('permission-deleted');
-    await useAcpStore.getState().deleteThread('thread-1');
-    await rejectAndExpectHidden('permission-deleted', 4);
-    errorSpy.mockRestore();
   });
 
   it('ignores plan-review documents when updating session plan progress', async () => {
@@ -453,6 +391,124 @@ describe('acpStore prompt ordering', () => {
     });
   });
 
+  it('surfaces the real Codex plan review even when the legacy bridge labels it permission', async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const { useAcpStore } = await import('../acpStore');
+    await useAcpStore.getState().bindEvents();
+
+    eventHandlers.get('acp-permission-request')?.({
+      payload: {
+        threadId: 'thread-1',
+        messageId: 'assistant-codex-plan',
+        requestId: 'codex-plan-review',
+        interactionKind: 'permission',
+        raw: {
+          sessionId: 'session-1',
+          toolCall: {
+            toolCallId: 'plan-review:item-1',
+            title: 'Implement this plan?',
+            kind: 'switch_mode',
+            status: 'pending',
+            rawInput: { plan: '## Codex plan\n1. Inspect\n2. Ship' },
+          },
+          _meta: { codex: { kind: 'plan_review', planItemId: 'item-1' } },
+        },
+        options: [
+          { optionId: 'implement_plan', name: 'Yes, implement this plan', kind: 'AllowOnce' },
+          {
+            optionId: 'revise_plan',
+            name: 'No, and tell Codex what to do differently',
+            kind: 'RejectOnce',
+          },
+        ],
+      },
+    });
+
+    const state = useAcpStore.getState();
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      'acp_respond_permission',
+      expect.objectContaining({ requestId: 'codex-plan-review' }),
+    );
+    expect(state.pendingPermissions['codex-plan-review']).toMatchObject({
+      kind: 'plan_review',
+      toolName: 'switch_mode',
+      input: {
+        plan: '## Codex plan\n1. Inspect\n2. Ship',
+        supportsFeedback: false,
+      },
+    });
+    expect(state.planDocumentsByThread['thread-1']).toEqual([
+      expect.objectContaining({
+        id: 'codex-plan-review',
+        content: '## Codex plan\n1. Inspect\n2. Ship',
+        status: 'pending',
+      }),
+    ]);
+
+    await useAcpStore.getState().respondPermission('codex-plan-review', 'revise_plan');
+
+    expect(invokeMock).toHaveBeenCalledWith('acp_respond_permission', {
+      requestId: 'codex-plan-review',
+      optionId: 'revise_plan',
+      feedback: null,
+    });
+    expect(useAcpStore.getState().planDocumentsByThread['thread-1']?.[0]).toMatchObject({
+      status: 'cancelled',
+      content: '## Codex plan\n1. Inspect\n2. Ship',
+    });
+  });
+
+  it('recognizes a metadata-free Claude switch-mode plan and cancels it by option kind', async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const { useAcpStore } = await import('../acpStore');
+    await useAcpStore.getState().bindEvents();
+
+    eventHandlers.get('acp-permission-request')?.({
+      payload: {
+        threadId: 'thread-1',
+        messageId: 'assistant-claude-plan',
+        requestId: 'claude-plan-review',
+        interactionKind: 'permission',
+        raw: {
+          sessionId: 'session-1',
+          toolCall: {
+            toolCallId: 'claude-plan-review',
+            title: 'Claude plan',
+            kind: 'switch_mode',
+            status: 'pending',
+            rawInput: { plan: '## Claude plan\n1. Inspect\n2. Ship' },
+          },
+        },
+        options: [
+          { optionId: 'auto', name: 'Auto mode', kind: 'AllowAlways' },
+          { optionId: 'acceptEdits', name: 'Accept edits', kind: 'AllowAlways' },
+          { optionId: 'default', name: 'Default mode', kind: 'AllowOnce' },
+          { optionId: 'plan', name: 'Keep planning', kind: 'RejectOnce' },
+        ],
+      },
+    });
+
+    expect(invokeMock).not.toHaveBeenCalledWith(
+      'acp_respond_permission',
+      expect.objectContaining({ requestId: 'claude-plan-review' }),
+    );
+    expect(useAcpStore.getState().pendingPermissions['claude-plan-review']).toMatchObject({
+      kind: 'plan_review',
+      toolName: 'switch_mode',
+      input: {
+        plan: '## Claude plan\n1. Inspect\n2. Ship',
+        supportsFeedback: false,
+      },
+    });
+
+    await useAcpStore.getState().respondPermission('claude-plan-review', 'plan');
+
+    expect(useAcpStore.getState().planDocumentsByThread['thread-1']?.[0]).toMatchObject({
+      status: 'cancelled',
+      content: '## Claude plan\n1. Inspect\n2. Ship',
+    });
+  });
+
   it('keeps a cancelled plan review distinct from an expired request', async () => {
     invokeMock.mockResolvedValue(undefined);
     const { useAcpStore } = await import('../acpStore');
@@ -543,6 +599,65 @@ describe('acpStore prompt ordering', () => {
       status: 'queued',
       output: 'Which layers?: Frontend, Backend',
     });
+  });
+
+  it('never records a secret questionnaire answer in the tool summary', async () => {
+    invokeMock.mockResolvedValue('API token: super-secret-value');
+    const { useAcpStore } = await import('../acpStore');
+    useAcpStore.setState({
+      pendingPermissions: {
+        'questionnaire-secret': {
+          threadId: 'thread-1',
+          messageId: 'assistant-1',
+          requestId: 'questionnaire-secret',
+          toolCallId: 'tool-questionnaire-secret',
+          toolName: 'elicitation_form',
+          kind: 'question',
+          input: {
+            kind: 'elicitation_form',
+            questions: [{
+              id: 'api_token',
+              question: 'API token',
+              inputType: 'secret',
+              secret: true,
+            }],
+          },
+          status: 'pending',
+          options: [],
+        },
+      },
+      toolCalls: {
+        'thread-1:assistant-1:tool-questionnaire-secret': {
+          threadId: 'thread-1',
+          messageId: 'assistant-1',
+          toolCallId: 'tool-questionnaire-secret',
+          toolName: 'elicitation_form',
+          status: 'queued',
+        },
+      },
+    });
+
+    await useAcpStore.getState().respondQuestionnaire('questionnaire-secret', {
+      outcome: 'accepted',
+      answers: [{
+        questionIndex: 0,
+        selectedOptionIndexes: [],
+        otherText: 'super-secret-value',
+      }],
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith('acp_respond_questionnaire', {
+      requestId: 'questionnaire-secret',
+      outcome: 'accepted',
+      answers: [{
+        questionIndex: 0,
+        selectedOptionIndexes: [],
+        otherText: 'super-secret-value',
+      }],
+    });
+    expect(
+      useAcpStore.getState().toolCalls['thread-1:assistant-1:tool-questionnaire-secret']?.output,
+    ).toBe('aqbot:questionnaire:accepted');
   });
 
   it('hydrates chronological tool results from persisted assistant metadata', async () => {

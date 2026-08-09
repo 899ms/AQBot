@@ -38,68 +38,8 @@ export type AcpInteractionSubmission =
   | { questionnaire: AcpQuestionnaireSubmission };
 type Translate = (key: string) => string;
 
-/** Synthetic option: allow this tool for the rest of the AQBot thread/session. */
-export const ACP_SESSION_ALWAYS_ALLOW_OPTION_ID = '__aqbot_session_always_allow';
-
 function normalizedToken(value: unknown): string {
   return String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
-export function isAllowAlwaysOption(option: Pick<AcpInteractionOption, 'id' | 'kind'>): boolean {
-  const identity = `${normalizedToken(option.id)} ${normalizedToken(option.kind)}`;
-  return identity.includes('allowalways')
-    || option.id === ACP_SESSION_ALWAYS_ALLOW_OPTION_ID;
-}
-
-export function isAllowOnceOption(option: Pick<AcpInteractionOption, 'id' | 'kind'>): boolean {
-  const identity = `${normalizedToken(option.id)} ${normalizedToken(option.kind)}`;
-  return identity.includes('allowonce')
-    || identity === 'allow'
-    || identity === 'approved'
-    || identity === 'approve';
-}
-
-export function findAgentAllowOption(
-  options: AcpInteractionOption[],
-): AcpInteractionOption | undefined {
-  return options.find((option) => isAllowAlwaysOption(option)
-    && option.id !== ACP_SESSION_ALWAYS_ALLOW_OPTION_ID)
-    ?? options.find((option) => isAllowOnceOption(option))
-    ?? options.find((option) => {
-      const identity = `${normalizedToken(option.id)} ${normalizedToken(option.kind)}`;
-      return identity.includes('allow') && !identity.includes('reject') && !identity.includes('deny');
-    });
-}
-
-/**
- * Ensure permission prompts always expose "始终允许" (session-scoped).
- * Agents often only advertise allow_once + reject; we inject a synthetic option
- * that the store maps onto a real agent allow option and remembers for the thread.
- */
-export function ensureSessionAlwaysAllowOption(
-  options: AcpInteractionOption[],
-  kind: AcpInteractionKind = 'permission',
-): AcpInteractionOption[] {
-  if (kind !== 'permission') return options;
-  if (options.some((option) => isAllowAlwaysOption(option))) return options;
-  if (!findAgentAllowOption(options)) return options;
-
-  const alwaysOption: AcpInteractionOption = {
-    id: ACP_SESSION_ALWAYS_ALLOW_OPTION_ID,
-    label: ACP_SESSION_ALWAYS_ALLOW_OPTION_ID,
-    kind: 'AllowAlways',
-    variant: 'default',
-  };
-
-  const allowIndex = options.findIndex((option) => isAllowOnceOption(option));
-  if (allowIndex >= 0) {
-    return [
-      ...options.slice(0, allowIndex + 1),
-      alwaysOption,
-      ...options.slice(allowIndex + 1),
-    ];
-  }
-  return [alwaysOption, ...options];
 }
 
 function interactionTitle(kind: AcpInteractionKind, translate: Translate): string {
@@ -170,9 +110,9 @@ function promptText(request: AcpInteractionRequest, kind: AcpInteractionKind): s
     });
     return value.trim() ? value : null;
   }
-  return typeof request.description === 'string' && request.description.trim()
-    ? request.description
-    : null;
+  const value = [request.description, request.title]
+    .find((candidate) => typeof candidate === 'string' && candidate.trim());
+  return typeof value === 'string' ? value : null;
 }
 
 function optionAppearance(
@@ -197,11 +137,29 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function findPlanOption(
-  options: AcpInteractionOption[],
-  id: 'approved' | 'cancelled' | 'abandoned',
-): AcpInteractionOption | undefined {
-  return options.find((option) => normalizedToken(option.id) === id);
+function planOptions(options: AcpInteractionOption[]): {
+  approve?: AcpInteractionOption;
+  change?: AcpInteractionOption;
+  cancel?: AcpInteractionOption;
+  additional: AcpInteractionOption[];
+} {
+  const byId = (ids: string[]) => options.find(
+    (option) => ids.includes(normalizedToken(option.id)),
+  );
+  const approve = byId(['approved', 'approve', 'implementplan'])
+    ?? options.find((option) => normalizedToken(option.kind).includes('allowonce'));
+  const cancel = byId(['abandoned', 'abandon']);
+  const change = byId(['cancelled', 'cancel', 'reviseplan'])
+    ?? options.find((option) => (
+      option !== cancel && normalizedToken(option.kind).includes('rejectonce')
+    ));
+  const selected = new Set([approve, change, cancel].filter(Boolean));
+  return {
+    approve,
+    change,
+    cancel,
+    additional: options.filter((option) => !selected.has(option)),
+  };
 }
 
 export function AcpInteractionComposer({
@@ -268,7 +226,7 @@ export function AcpInteractionComposer({
   const prompt = promptText(request, kind);
   const inputJson = JSON.stringify(request.input ?? {}, null, 2);
   const submitting = loadingOptionId !== null;
-  const displayOptions = ensureSessionAlwaysAllowOption(request.options, kind);
+  const displayOptions = request.options;
 
   const submitOption = async (optionId: string, feedback?: string) => {
     const requestId = request.requestId;
@@ -287,13 +245,20 @@ export function AcpInteractionComposer({
     }
   };
 
-  // ── Plan review: content in composer with max height + 3 action buttons ──
+  // ── Plan review: content in composer with max height + responsive actions ──
   if (kind === 'plan_review') {
-    const approveOption = findPlanOption(request.options, 'approved');
-    const changeOption = findPlanOption(request.options, 'cancelled');
-    const cancelOption = findPlanOption(request.options, 'abandoned');
+    const {
+      approve: approveOption,
+      change: changeOption,
+      cancel: cancelOption,
+      additional: additionalPlanOptions,
+    } = planOptions(request.options);
     const planBody = prompt ?? '';
-
+    const supportsPlanFeedback = request.input?.supportsFeedback === true;
+    const firstPlanOptionId = approveOption?.id
+      ?? changeOption?.id
+      ?? cancelOption?.id
+      ?? additionalPlanOptions[0]?.id;
     const submitPlanFeedback = () => {
       if (!changeOption) return;
       const text = planFeedback.trim();
@@ -444,43 +409,75 @@ export function AcpInteractionComposer({
               style={{
                 display: 'grid',
                 flexShrink: 0,
-                gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 132px), 1fr))',
                 gap: 8,
               }}
             >
-              <Button
-                ref={expanded ? undefined : firstOptionRef}
-                className="aqbot-acp-interaction-option"
-                type="primary"
-                disabled={submitting || !approveOption}
-                loading={loadingOptionId === approveOption?.id}
-                onClick={() => approveOption && void submitOption(approveOption.id)}
-                style={{ height: 'auto', paddingBlock: 8, whiteSpace: 'normal' }}
-              >
-                {t('agentPage.interactionPlanExecute')}
-              </Button>
-              <Button
-                className="aqbot-acp-interaction-option"
-                disabled={submitting || !changeOption}
-                onClick={() => {
-                  setPlanFeedbackMode(true);
-                  setSubmissionError(null);
-                }}
-                style={{ height: 'auto', paddingBlock: 8, whiteSpace: 'normal' }}
-              >
-                {t('agentPage.interactionPlanRequestChanges')}
-              </Button>
-              <Button
-                className="aqbot-acp-interaction-option"
-                danger
-                disabled={submitting || !cancelOption}
-                loading={loadingOptionId === cancelOption?.id}
-                onClick={() => cancelOption && void submitOption(cancelOption.id)}
-                aria-label={t('agentPage.interactionPlanCancel')}
-                style={{ height: 'auto', paddingBlock: 8, whiteSpace: 'normal' }}
-              >
-                {t('agentPage.interactionPlanCancel')}
-              </Button>
+              {approveOption ? (
+                <Button
+                  ref={!expanded && firstPlanOptionId === approveOption.id ? firstOptionRef : undefined}
+                  className="aqbot-acp-interaction-option"
+                  type="primary"
+                  disabled={submitting}
+                  loading={loadingOptionId === approveOption.id}
+                  onClick={() => void submitOption(approveOption.id)}
+                  style={{ height: 'auto', paddingBlock: 8, whiteSpace: 'normal' }}
+                >
+                  {t('agentPage.interactionPlanExecute')}
+                </Button>
+              ) : null}
+              {changeOption ? (
+                <Button
+                  ref={!expanded && firstPlanOptionId === changeOption.id ? firstOptionRef : undefined}
+                  className="aqbot-acp-interaction-option"
+                  disabled={submitting}
+                  loading={loadingOptionId === changeOption.id}
+                  onClick={() => {
+                    if (!supportsPlanFeedback) {
+                      void submitOption(changeOption.id);
+                      return;
+                    }
+                    setPlanFeedbackMode(true);
+                    setSubmissionError(null);
+                  }}
+                  style={{ height: 'auto', paddingBlock: 8, whiteSpace: 'normal' }}
+                >
+                  {t('agentPage.interactionPlanRequestChanges')}
+                </Button>
+              ) : null}
+              {cancelOption ? (
+                <Button
+                  ref={!expanded && firstPlanOptionId === cancelOption.id ? firstOptionRef : undefined}
+                  className="aqbot-acp-interaction-option"
+                  danger
+                  disabled={submitting}
+                  loading={loadingOptionId === cancelOption.id}
+                  onClick={() => void submitOption(cancelOption.id)}
+                  aria-label={t('agentPage.interactionPlanCancel')}
+                  style={{ height: 'auto', paddingBlock: 8, whiteSpace: 'normal' }}
+                >
+                  {t('agentPage.interactionPlanCancel')}
+                </Button>
+              ) : null}
+              {additionalPlanOptions.map((option) => {
+                const appearance = optionAppearance('plan_review', option);
+                return (
+                  <Button
+                    key={option.id}
+                    ref={!expanded && firstPlanOptionId === option.id ? firstOptionRef : undefined}
+                    className="aqbot-acp-interaction-option"
+                    type={appearance.primary ? 'primary' : 'default'}
+                    danger={appearance.danger}
+                    disabled={submitting}
+                    loading={loadingOptionId === option.id}
+                    translate="no"
+                    onClick={() => void submitOption(option.id)}
+                    style={{ height: 'auto', paddingBlock: 8, whiteSpace: 'normal' }}
+                  >
+                    {option.label}
+                  </Button>
+                );
+              })}
             </div>
           )}
 

@@ -15,13 +15,30 @@ const QUESTION_CONTENT_MAX_HEIGHT = 280;
 const OTHER_VALUE = '__aqbot_other__';
 
 interface QuestionnaireOption {
+  value?: string;
   label: string;
   description?: string;
   preview?: string;
 }
 
 interface QuestionnaireQuestion {
+  id?: string;
+  title?: string;
   question: string;
+  description?: string;
+  required: boolean;
+  allowOther: boolean;
+  inputType: string;
+  format?: string;
+  secret: boolean;
+  defaultValue?: unknown;
+  minLength?: number;
+  maxLength?: number;
+  pattern?: string;
+  minimum?: number;
+  maximum?: number;
+  minItems?: number;
+  maxItems?: number;
   multiSelect: boolean;
   options: QuestionnaireOption[];
 }
@@ -29,6 +46,7 @@ interface QuestionnaireQuestion {
 interface Questionnaire {
   questions: QuestionnaireQuestion[];
   mode: 'default' | 'plan';
+  standardForm: boolean;
 }
 
 interface AnswerDraft {
@@ -48,15 +66,26 @@ function optionalText(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 export function parseAcpQuestionnaire(
   input: Record<string, unknown>,
 ): Questionnaire | null {
   if (!Array.isArray(input.questions) || input.questions.length === 0) return null;
+  const normalizedForm = input.kind === 'elicitation_form';
   const questions = input.questions.flatMap((entry): QuestionnaireQuestion[] => {
     if (!entry || typeof entry !== 'object') return [];
     const raw = entry as Record<string, unknown>;
     const question = optionalText(raw.question);
     if (!question) return [];
+    const rawInputType = optionalText(raw.inputType) ?? 'text';
+    const format = optionalText(raw.format);
+    const inputType = (rawInputType === 'string' || rawInputType === 'text')
+      && ['email', 'uri', 'date', 'date-time'].includes(format ?? '')
+      ? format!
+      : rawInputType;
     const options = Array.isArray(raw.options)
       ? raw.options.flatMap((option): QuestionnaireOption[] => {
           if (!option || typeof option !== 'object') return [];
@@ -64,6 +93,7 @@ export function parseAcpQuestionnaire(
           const label = optionalText(value.label);
           if (!label) return [];
           return [{
+            value: optionalText(value.value),
             label,
             description: optionalText(value.description),
             preview: optionalText(value.preview),
@@ -71,32 +101,90 @@ export function parseAcpQuestionnaire(
         })
       : [];
     return [{
+      id: optionalText(raw.id),
+      title: optionalText(raw.title),
       question,
+      description: optionalText(raw.description),
+      required: raw.required === true,
+      allowOther: raw.allowOther === true || (!normalizedForm && raw.allowOther !== false),
+      inputType,
+      format,
+      secret: raw.secret === true || raw.inputType === 'secret',
+      ...(raw.default !== undefined ? { defaultValue: raw.default } : {}),
+      minLength: optionalNumber(raw.minLength),
+      maxLength: optionalNumber(raw.maxLength),
+      pattern: optionalText(raw.pattern),
+      minimum: optionalNumber(raw.minimum),
+      maximum: optionalNumber(raw.maximum),
+      minItems: optionalNumber(raw.minItems),
+      maxItems: optionalNumber(raw.maxItems),
       multiSelect: raw.multiSelect === true || raw.multi_select === true,
       options,
     }];
   });
   return questions.length === 0
     ? null
-    : { questions, mode: input.mode === 'plan' ? 'plan' : 'default' };
+    : {
+        questions,
+        mode: input.mode === 'plan' ? 'plan' : 'default',
+        standardForm: normalizedForm,
+      };
+}
+
+function localDateTimeValue(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return localDate.toISOString().slice(0, 16);
 }
 
 function initialDrafts(questionnaire: Questionnaire): AnswerDraft[] {
-  return questionnaire.questions.map(() => ({
-    selectedOptionIndexes: [],
-    otherSelected: false,
-    otherText: '',
-  }));
+  return questionnaire.questions.map((question) => {
+    const defaults = Array.isArray(question.defaultValue)
+      ? question.defaultValue.map(String)
+      : question.defaultValue === undefined || question.defaultValue === null
+        ? []
+        : [String(question.defaultValue)];
+    const selectedOptionIndexes = question.options.flatMap((option, index) => (
+      option.value !== undefined && defaults.includes(option.value) ? [index] : []
+    ));
+    const rawDirectDefault = !question.secret && question.options.length === 0
+      ? defaults[0] ?? ''
+      : '';
+    const directDefault = question.inputType === 'date-time' && rawDirectDefault
+      ? localDateTimeValue(rawDirectDefault)
+      : rawDirectDefault;
+    return {
+      selectedOptionIndexes,
+      otherSelected: !!directDefault,
+      otherText: directDefault,
+    };
+  });
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function answersFromDrafts(drafts: AnswerDraft[]): AcpQuestionnaireAnswer[] {
+function normalizedAnswerText(
+  question: QuestionnaireQuestion | undefined,
+  value: string,
+): string {
+  if (question?.inputType !== 'date-time') return value;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toISOString();
+}
+
+function answersFromDrafts(
+  drafts: AnswerDraft[],
+  questions: QuestionnaireQuestion[],
+): AcpQuestionnaireAnswer[] {
   return drafts.flatMap((entry, questionIndex) => {
-    const otherText = entry.otherSelected && entry.otherText.trim()
+    const rawOtherText = entry.otherSelected && entry.otherText.trim()
       ? entry.otherText
+      : '';
+    const otherText = rawOtherText
+      ? normalizedAnswerText(questions[questionIndex], rawOtherText)
       : '';
     if (entry.selectedOptionIndexes.length === 0 && !otherText) return [];
     return [{
@@ -105,6 +193,66 @@ function answersFromDrafts(drafts: AnswerDraft[]): AcpQuestionnaireAnswer[] {
       ...(otherText ? { otherText } : {}),
     }];
   });
+}
+
+type QuestionValidationIssue = 'required' | 'invalid' | 'unsupported';
+
+const SUPPORTED_INPUT_TYPES = new Set([
+  'string', 'text', 'secret', 'email', 'uri', 'date', 'date-time',
+  'integer', 'number', 'boolean', 'array',
+]);
+
+function validateQuestionDraft(
+  question: QuestionnaireQuestion,
+  draft: AnswerDraft | undefined,
+): QuestionValidationIssue | null {
+  if (!SUPPORTED_INPUT_TYPES.has(question.inputType)) return 'unsupported';
+  const selectedCount = draft?.selectedOptionIndexes.length ?? 0;
+  const otherText = draft?.otherText.trim() ?? '';
+  if (question.required && selectedCount === 0 && !otherText) return 'required';
+  if (!otherText) {
+    if (question.minItems !== undefined && selectedCount < question.minItems) return 'invalid';
+    return question.maxItems !== undefined && selectedCount > question.maxItems ? 'invalid' : null;
+  }
+  if (question.inputType === 'integer' || question.inputType === 'number') {
+    const numeric = Number(otherText);
+    if (!Number.isFinite(numeric)) return 'invalid';
+    if (question.inputType === 'integer' && !Number.isInteger(numeric)) return 'invalid';
+    if (question.minimum !== undefined && numeric < question.minimum) return 'invalid';
+    if (question.maximum !== undefined && numeric > question.maximum) return 'invalid';
+  }
+  if (question.inputType === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(otherText)) {
+    return 'invalid';
+  }
+  if (question.inputType === 'uri') {
+    try {
+      // ACP's URI format requires an absolute URI rather than a relative path.
+      if (!new URL(otherText).protocol) return 'invalid';
+    } catch {
+      return 'invalid';
+    }
+  }
+  if (question.inputType === 'date') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(otherText) || Number.isNaN(Date.parse(otherText))) {
+      return 'invalid';
+    }
+  }
+  if (question.inputType === 'date-time' && Number.isNaN(Date.parse(otherText))) {
+    return 'invalid';
+  }
+  if (question.minLength !== undefined && otherText.length < question.minLength) return 'invalid';
+  if (question.maxLength !== undefined && otherText.length > question.maxLength) return 'invalid';
+  if (question.pattern) {
+    try {
+      if (!new RegExp(question.pattern).test(otherText)) return 'invalid';
+    } catch {
+      return 'unsupported';
+    }
+  }
+  const itemCount = selectedCount + (draft?.otherSelected && otherText ? 1 : 0);
+  if (question.minItems !== undefined && itemCount < question.minItems) return 'invalid';
+  if (question.maxItems !== undefined && itemCount > question.maxItems) return 'invalid';
+  return null;
 }
 
 function OptionLabel({
@@ -180,6 +328,9 @@ export function AcpQuestionnaireComposer({
     ?? { selectedOptionIndexes: [], otherSelected: false, otherText: '' };
   const isLast = safeIndex >= total - 1;
   const isFirst = safeIndex <= 0;
+  const hasUnsupportedQuestion = questionnaire.questions.some(
+    (entry) => !SUPPORTED_INPUT_TYPES.has(entry.inputType),
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -218,11 +369,26 @@ export function AcpQuestionnaireComposer({
     outcome: AcpQuestionnaireSubmission['outcome'],
   ) => {
     const requestId = request.requestId;
-    const answers = answersFromDrafts(nextDrafts);
+    const answers = answersFromDrafts(nextDrafts, questionnaire.questions);
     if (outcome === 'accepted') {
-      const emptyOther = nextDrafts.some((entry) => entry.otherSelected && !entry.otherText.trim());
-      if (emptyOther || answers.length === 0) {
+      if (!questionnaire.standardForm && answers.length === 0) {
         setValidationError(t('agentPage.interactionAnswerRequired'));
+        return;
+      }
+      const invalidIndex = questionnaire.questions.findIndex(
+        (entry, index) => validateQuestionDraft(entry, nextDrafts[index]) !== null,
+      );
+      if (invalidIndex >= 0) {
+        const issue = validateQuestionDraft(
+          questionnaire.questions[invalidIndex],
+          nextDrafts[invalidIndex],
+        );
+        setCurrentIndex(invalidIndex);
+        setValidationError(t(issue === 'required'
+          ? 'agentPage.interactionAnswerRequired'
+          : issue === 'unsupported'
+            ? 'agentPage.interactionUnsupportedField'
+            : 'agentPage.interactionAnswerInvalid'));
         return;
       }
     }
@@ -315,8 +481,13 @@ export function AcpQuestionnaireComposer({
     }
     setSubmissionError(null);
     setValidationError(null);
-    if (draft.otherSelected && !draft.otherText.trim()) {
-      setValidationError(t('agentPage.interactionAnswerRequired'));
+    const issue = validateQuestionDraft(question, draft);
+    if (issue) {
+      setValidationError(t(issue === 'required'
+        ? 'agentPage.interactionAnswerRequired'
+        : issue === 'unsupported'
+          ? 'agentPage.interactionUnsupportedField'
+          : 'agentPage.interactionAnswerInvalid'));
       return;
     }
     setCurrentIndex((index) => Math.min(total - 1, index + 1));
@@ -328,19 +499,23 @@ export function AcpQuestionnaireComposer({
 
   if (!question) return null;
 
-  const hint = question.multiSelect
-    ? t('agentPage.interactionSelectMany')
-    : t('agentPage.interactionSelectOne');
+  const hint = questionnaire.standardForm && question.options.length === 0
+    ? t('agentPage.interactionEnterAnswer')
+    : question.multiSelect
+      ? t('agentPage.interactionSelectMany')
+      : t('agentPage.interactionSelectOne');
 
   const radioValue = draft.otherSelected
     ? OTHER_VALUE
     : draft.selectedOptionIndexes[0] ?? undefined;
+  const OtherAnswerInput = question.secret ? Input.Password : Input;
 
   return (
     <ConfigProvider button={{ autoInsertSpace: false }}>
       <form
         aria-labelledby={titleId}
         aria-busy={submitting}
+        noValidate
         onSubmit={(event) => {
           event.preventDefault();
           if (submitting) return;
@@ -464,8 +639,22 @@ export function AcpQuestionnaireComposer({
           }}
         >
           <legend translate="no" style={{ maxWidth: '100%', paddingInline: 4, overflowWrap: 'anywhere' }}>
-            {question.question}
+            {question.title ?? question.question}
           </legend>
+          {question.title && question.title !== question.question ? (
+            <Text translate="no" style={{ display: 'block', flexShrink: 0, overflowWrap: 'anywhere' }}>
+              {question.question}
+            </Text>
+          ) : null}
+          {question.description && question.description !== question.question ? (
+            <Text
+              type="secondary"
+              translate="no"
+              style={{ display: 'block', flexShrink: 0, fontSize: 12, overflowWrap: 'anywhere' }}
+            >
+              {question.description}
+            </Text>
+          ) : null}
           <Text type="secondary" style={{ display: 'block', flexShrink: 0, fontSize: 12 }}>
             {hint}
           </Text>
@@ -482,7 +671,61 @@ export function AcpQuestionnaireComposer({
               overflowY: 'auto',
             }}
           >
-            {question.multiSelect ? (
+            {!SUPPORTED_INPUT_TYPES.has(question.inputType) ? (
+              <Text type="danger" role="alert">
+                {t('agentPage.interactionUnsupportedField', { type: question.inputType })}
+              </Text>
+            ) : questionnaire.standardForm && question.options.length === 0 ? (
+              question.secret ? (
+                <Input.Password
+                  ref={(node) => {
+                    firstControlRef.current = node?.input ?? null;
+                  }}
+                  value={draft.otherText}
+                  disabled={submitting}
+                  minLength={question.minLength}
+                  maxLength={question.maxLength}
+                  pattern={question.pattern}
+                  aria-label={question.title ?? question.question}
+                  onChange={(event) => updateDraft(safeIndex, (entry) => ({
+                    ...entry,
+                    otherSelected: true,
+                    otherText: event.target.value,
+                  }))}
+                />
+              ) : (
+                <Input
+                  ref={(node) => {
+                    firstControlRef.current = node?.input ?? null;
+                  }}
+                  value={draft.otherText}
+                  disabled={submitting}
+                  type={question.inputType === 'integer' || question.inputType === 'number'
+                    ? 'number'
+                    : question.inputType === 'email'
+                      ? 'email'
+                      : question.inputType === 'uri'
+                        ? 'url'
+                        : question.inputType === 'date'
+                          ? 'date'
+                          : question.inputType === 'date-time'
+                            ? 'datetime-local'
+                            : 'text'}
+                  min={question.minimum}
+                  max={question.maximum}
+                  step={question.inputType === 'integer' ? 1 : question.inputType === 'number' ? 'any' : undefined}
+                  minLength={question.minLength}
+                  maxLength={question.maxLength}
+                  pattern={question.pattern}
+                  aria-label={question.title ?? question.question}
+                  onChange={(event) => updateDraft(safeIndex, (entry) => ({
+                    ...entry,
+                    otherSelected: true,
+                    otherText: event.target.value,
+                  }))}
+                />
+              )
+            ) : question.multiSelect ? (
               <>
                 <Checkbox.Group
                   value={draft.selectedOptionIndexes.map(String)}
@@ -525,39 +768,43 @@ export function AcpQuestionnaireComposer({
                     );
                   })}
                 </Checkbox.Group>
-                <div style={{ display: 'flex', minWidth: 0, alignItems: 'center', gap: 8, width: '100%' }}>
-                  <Checkbox
-                    ref={question.options.length === 0
-                      ? (node) => {
-                          firstControlRef.current = node as unknown as HTMLElement | null;
-                        }
-                      : undefined}
-                    className="aqbot-acp-question-option"
-                    checked={draft.otherSelected}
-                    disabled={submitting}
-                    onChange={(event) => {
-                      const checked = event.target.checked;
-                      updateDraft(safeIndex, (entry) => ({
-                        ...entry,
-                        otherSelected: checked,
-                      }));
-                    }}
+                {question.allowOther ? (
+                  <div
+                    style={{ display: 'flex', minWidth: 0, alignItems: 'center', gap: 8, width: '100%' }}
                   >
-                    {t('agentPage.interactionOther')}
-                  </Checkbox>
-                  <Input
-                    value={draft.otherText}
-                    disabled={submitting}
-                    aria-label={`${t('agentPage.interactionOther')}: ${question.question}`}
-                    onFocus={() => ensureOtherSelected(safeIndex, true)}
-                    onChange={(event) => updateDraft(safeIndex, (current) => ({
-                      ...current,
-                      otherSelected: true,
-                      otherText: event.target.value,
-                    }))}
-                    style={{ minWidth: 0, flex: 1 }}
-                  />
-                </div>
+                    <Checkbox
+                      ref={question.options.length === 0
+                        ? (node) => {
+                            firstControlRef.current = node as unknown as HTMLElement | null;
+                          }
+                        : undefined}
+                      className="aqbot-acp-question-option"
+                      checked={draft.otherSelected}
+                      disabled={submitting}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        updateDraft(safeIndex, (entry) => ({
+                          ...entry,
+                          otherSelected: checked,
+                        }));
+                      }}
+                    >
+                      {t('agentPage.interactionOther')}
+                    </Checkbox>
+                    <OtherAnswerInput
+                      value={draft.otherText}
+                      disabled={submitting}
+                      aria-label={`${t('agentPage.interactionOther')}: ${question.question}`}
+                      onFocus={() => ensureOtherSelected(safeIndex, true)}
+                      onChange={(event) => updateDraft(safeIndex, (current) => ({
+                        ...current,
+                        otherSelected: true,
+                        otherText: event.target.value,
+                      }))}
+                      style={{ minWidth: 0, flex: 1 }}
+                    />
+                  </div>
+                ) : null}
               </>
             ) : (
               <Radio.Group
@@ -597,32 +844,36 @@ export function AcpQuestionnaireComposer({
                     </Radio>
                   );
                 })}
-                <div style={{ display: 'flex', minWidth: 0, alignItems: 'center', gap: 8, width: '100%' }}>
-                  <Radio
-                    ref={question.options.length === 0
-                      ? (node) => {
-                          firstControlRef.current = node as unknown as HTMLElement | null;
-                        }
-                      : undefined}
-                    className="aqbot-acp-question-option"
-                    value={OTHER_VALUE}
+                {question.allowOther ? (
+                  <div
+                    style={{ display: 'flex', minWidth: 0, alignItems: 'center', gap: 8, width: '100%' }}
                   >
-                    {t('agentPage.interactionOther')}
-                  </Radio>
-                  <Input
-                    value={draft.otherText}
-                    disabled={submitting}
-                    aria-label={`${t('agentPage.interactionOther')}: ${question.question}`}
-                    onFocus={() => ensureOtherSelected(safeIndex, false)}
-                    onChange={(event) => updateDraft(safeIndex, (current) => ({
-                      ...current,
-                      selectedOptionIndexes: [],
-                      otherSelected: true,
-                      otherText: event.target.value,
-                    }))}
-                    style={{ minWidth: 0, flex: 1 }}
-                  />
-                </div>
+                    <Radio
+                      ref={question.options.length === 0
+                        ? (node) => {
+                            firstControlRef.current = node as unknown as HTMLElement | null;
+                          }
+                        : undefined}
+                      className="aqbot-acp-question-option"
+                      value={OTHER_VALUE}
+                    >
+                      {t('agentPage.interactionOther')}
+                    </Radio>
+                    <OtherAnswerInput
+                      value={draft.otherText}
+                      disabled={submitting}
+                      aria-label={`${t('agentPage.interactionOther')}: ${question.question}`}
+                      onFocus={() => ensureOtherSelected(safeIndex, false)}
+                      onChange={(event) => updateDraft(safeIndex, (current) => ({
+                        ...current,
+                        selectedOptionIndexes: [],
+                        otherSelected: true,
+                        otherText: event.target.value,
+                      }))}
+                      style={{ minWidth: 0, flex: 1 }}
+                    />
+                  </div>
+                ) : null}
               </Radio.Group>
             )}
           </div>
@@ -650,6 +901,11 @@ export function AcpQuestionnaireComposer({
           <Button disabled={submitting} onClick={() => void submit('cancelled')}>
             {t('common.cancel')}
           </Button>
+          {questionnaire.standardForm ? (
+            <Button disabled={submitting} onClick={() => void submit('declined')}>
+              {t('agentPage.interactionDeclineAnswers')}
+            </Button>
+          ) : null}
           {questionnaire.mode === 'plan' ? (
             <>
               <Button disabled={submitting} onClick={() => void submit('chat_about_this')}>
@@ -665,7 +921,7 @@ export function AcpQuestionnaireComposer({
               {t('agentPage.interactionContinue')}
             </Button>
           ) : (
-            <Button type="primary" htmlType="submit" disabled={submitting}>
+            <Button type="primary" htmlType="submit" disabled={submitting || hasUnsupportedQuestion}>
               {submitting
                 ? t('agentPage.interactionSubmitting')
                 : t('agentPage.interactionSubmitAnswers')}

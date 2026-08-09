@@ -1,5 +1,6 @@
 import { App } from 'antd';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { translateZhCN } from '@/test/i18nTestTranslator';
 import {
@@ -97,6 +98,393 @@ describe('AcpQuestionnaireComposer', () => {
     expect(screen.getByText('Which store?')).toBeInTheDocument();
   });
 
+  it('renders a normalized Codex enum without inventing an Other answer', async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    renderQuestionnaire({
+      ...questionnaireRequest,
+      requestId: 'codex-elicitation-enum',
+      input: {
+        kind: 'elicitation_form',
+        questions: [{
+          id: 'scope',
+          title: 'Work scope',
+          question: 'Which area should the plan cover?',
+          description: 'Choose the narrowest useful scope.',
+          required: true,
+          inputType: 'text',
+          default: 'toolbar',
+          allowOther: false,
+          options: [
+            { value: 'toolbar', label: 'Toolbar only', description: 'Only change the toolbar.' },
+            { value: 'full-app', label: 'Entire app', description: 'Cover every surface.' },
+          ],
+        }],
+      },
+    }, onSubmit);
+
+    expect(screen.getByText('Work scope')).toBeInTheDocument();
+    expect(screen.getByText('Which area should the plan cover?')).toBeInTheDocument();
+    expect(screen.getByText('Choose the narrowest useful scope.')).toBeInTheDocument();
+    expect(screen.queryByText('其他')).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Toolbar only/i })).toBeChecked();
+
+    fireEvent.click(screen.getByRole('radio', { name: /Entire app/i }));
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith({
+        questionnaire: {
+          outcome: 'accepted',
+          answers: [{ questionIndex: 0, selectedOptionIndexes: [1] }],
+        },
+      });
+    });
+  });
+
+  it('requires normalized secret input, masks it, and never shows it in request details', async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    renderQuestionnaire({
+      ...questionnaireRequest,
+      requestId: 'codex-elicitation-secret',
+      input: {
+        kind: 'elicitation_form',
+        questions: [{
+          id: 'api_token',
+          title: 'API token',
+          question: 'Enter the temporary API token.',
+          required: true,
+          inputType: 'secret',
+          secret: true,
+          allowOther: false,
+          options: [],
+        }],
+      },
+    }, onSubmit);
+
+    const secret = screen.getByLabelText('API token');
+    expect(secret).toHaveAttribute('type', 'password');
+    expect(screen.queryByText('其他')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /提\s*交回答/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('请回答此问题');
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.change(secret, { target: { value: 'super-secret-value' } });
+    fireEvent.click(screen.getByRole('button', { name: /提\s*交回答/ }));
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith({
+        questionnaire: {
+          outcome: 'accepted',
+          answers: [{
+            questionIndex: 0,
+            selectedOptionIndexes: [],
+            otherText: 'super-secret-value',
+          }],
+        },
+      });
+    });
+    expect(screen.getByText('请求详情').closest('details')).not.toHaveTextContent('super-secret-value');
+  });
+
+  it('applies normalized integer defaults and bounds before submitting', async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    renderQuestionnaire({
+      ...questionnaireRequest,
+      requestId: 'codex-elicitation-integer',
+      input: {
+        kind: 'elicitation_form',
+        questions: [{
+          id: 'variant_count',
+          title: 'Variant count',
+          question: 'How many variants should be compared?',
+          required: true,
+          inputType: 'integer',
+          default: 2,
+          minimum: 1,
+          maximum: 5,
+          allowOther: false,
+          options: [],
+        }],
+      },
+    }, onSubmit);
+
+    const count = screen.getByRole('spinbutton', { name: 'Variant count' });
+    expect(count).toHaveValue(2);
+    expect(count).toHaveAttribute('min', '1');
+    expect(count).toHaveAttribute('max', '5');
+    expect(count).toHaveAttribute('step', '1');
+
+    fireEvent.change(count, { target: { value: '6' } });
+    fireEvent.click(screen.getByRole('button', { name: /提\s*交回答/ }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.change(count, { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: /提\s*交回答/ }));
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith({
+        questionnaire: {
+          outcome: 'accepted',
+          answers: [{
+            questionIndex: 0,
+            selectedOptionIndexes: [],
+            otherText: '3',
+          }],
+        },
+      });
+    });
+  });
+
+  it('enforces normalized array bounds using stable option values', async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    renderQuestionnaire({
+      ...questionnaireRequest,
+      requestId: 'standard-form-array',
+      input: {
+        kind: 'elicitation_form',
+        questions: [{
+          id: 'layers',
+          title: 'Layers',
+          question: 'Which layers should change?',
+          required: true,
+          inputType: 'array',
+          default: ['frontend'],
+          minItems: 2,
+          maxItems: 2,
+          multiSelect: true,
+          allowOther: false,
+          options: [
+            { value: 'frontend', label: 'Frontend' },
+            { value: 'backend', label: 'Backend' },
+            { value: 'database', label: 'Database' },
+          ],
+        }],
+      },
+    }, onSubmit);
+
+    expect(screen.getByRole('checkbox', { name: 'Frontend' })).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: /提\s*交回答/ }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Backend' }));
+    fireEvent.click(screen.getByRole('button', { name: /提\s*交回答/ }));
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith({
+        questionnaire: {
+          outcome: 'accepted',
+          answers: [{ questionIndex: 0, selectedOptionIndexes: [0, 1] }],
+        },
+      });
+    });
+  });
+
+  it('uses a password field for an explicitly allowed secret Other answer', async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    renderQuestionnaire({
+      ...questionnaireRequest,
+      requestId: 'standard-form-secret-other',
+      input: {
+        kind: 'elicitation_form',
+        questions: [{
+          id: 'credential',
+          title: 'Credential',
+          question: 'Which credential should be used?',
+          required: true,
+          inputType: 'secret',
+          secret: true,
+          allowOther: true,
+          options: [{ value: 'keychain', label: 'Use keychain' }],
+        }],
+      },
+    }, onSubmit);
+
+    const other = screen.getByLabelText('其他: Which credential should be used?');
+    expect(other).toHaveAttribute('type', 'password');
+    fireEvent.change(other, { target: { value: 'temporary-secret' } });
+    fireEvent.click(screen.getByRole('button', { name: /提\s*交回答/ }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith({
+        questionnaire: {
+          outcome: 'accepted',
+          answers: [{
+            questionIndex: 0,
+            selectedOptionIndexes: [],
+            otherText: 'temporary-secret',
+          }],
+        },
+      });
+    });
+    expect(screen.getByText('请求详情').closest('details')).not.toHaveTextContent('temporary-secret');
+  });
+
+  it('shows an unsupported normalized field without pretending it is a text input', () => {
+    renderQuestionnaire({
+      ...questionnaireRequest,
+      requestId: 'future-elicitation-field',
+      input: {
+        kind: 'elicitation_form',
+        questions: [{
+          id: 'future',
+          title: 'Future field',
+          question: 'Use the future control.',
+          required: false,
+          inputType: 'future-widget',
+          allowOther: false,
+          options: [],
+        }],
+      },
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent('future-widget');
+    expect(screen.queryByRole('textbox', { name: 'Future field' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /提\s*交回答/ })).toBeDisabled();
+  });
+
+  it('keeps standard form decline separate from cancelling the interaction', async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    renderQuestionnaire({
+      ...questionnaireRequest,
+      requestId: 'standard-form-decline',
+      input: {
+        kind: 'elicitation_form',
+        questions: [{
+          id: 'optional_note',
+          title: 'Optional note',
+          question: 'Add an optional note.',
+          required: false,
+          inputType: 'text',
+          allowOther: false,
+          options: [],
+        }],
+      },
+    }, onSubmit);
+
+    expect(screen.getByRole('button', { name: '拒绝回答' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '拒绝回答' }));
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith({
+        questionnaire: { outcome: 'declined', answers: [] },
+      });
+    });
+  });
+
+  it('uses normalized string format and constraints for free-form input', async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    renderQuestionnaire({
+      ...questionnaireRequest,
+      requestId: 'standard-form-email',
+      input: {
+        kind: 'elicitation_form',
+        questions: [{
+          id: 'contact',
+          title: 'Contact email',
+          question: 'Where should the summary be sent?',
+          required: true,
+          inputType: 'string',
+          format: 'email',
+          minLength: 6,
+          maxLength: 80,
+          pattern: '^[^@]+@[^@]+\\.[^@]+$',
+          allowOther: false,
+          options: [],
+        }],
+      },
+    }, onSubmit);
+
+    const email = screen.getByRole('textbox', { name: 'Contact email' });
+    expect(email).toHaveAttribute('type', 'email');
+    expect(email).toHaveAttribute('minlength', '6');
+    expect(email).toHaveAttribute('maxlength', '80');
+    expect(email).toHaveAttribute('pattern', '^[^@]+@[^@]+\\.[^@]+$');
+
+    fireEvent.change(email, { target: { value: 'invalid' } });
+    fireEvent.click(screen.getByRole('button', { name: /提\s*交回答/ }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.change(email, { target: { value: 'team@example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /提\s*交回答/ }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+  });
+
+  it('rejects an invalid normalized URI before sending it to the agent', async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    renderQuestionnaire({
+      ...questionnaireRequest,
+      requestId: 'standard-form-uri',
+      input: {
+        kind: 'elicitation_form',
+        questions: [{
+          id: 'docs_url',
+          title: 'Documentation URL',
+          question: 'Which documentation should be used?',
+          required: true,
+          inputType: 'string',
+          format: 'uri',
+          allowOther: false,
+          options: [],
+        }],
+      },
+    }, onSubmit);
+
+    const uri = screen.getByRole('textbox', { name: 'Documentation URL' });
+    fireEvent.change(uri, { target: { value: 'not a URL' } });
+    fireEvent.click(screen.getByRole('button', { name: /提\s*交回答/ }));
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.change(uri, { target: { value: 'https://example.com/docs' } });
+    fireEvent.click(screen.getByRole('button', { name: /提\s*交回答/ }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalled());
+  });
+
+  it('converts datetime-local answers to RFC 3339 before submission', async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    renderQuestionnaire({
+      ...questionnaireRequest,
+      requestId: 'standard-form-date-time',
+      input: {
+        kind: 'elicitation_form',
+        questions: [{
+          id: 'deadline',
+          title: 'Deadline',
+          question: 'When should this be finished?',
+          required: true,
+          inputType: 'string',
+          format: 'date-time',
+          default: '2026-08-09T06:30:00.000Z',
+          allowOther: false,
+          options: [],
+        }],
+      },
+    }, onSubmit);
+
+    const defaultValue = '2026-08-09T06:30:00.000Z';
+    const defaultDate = new Date(defaultValue);
+    const expectedLocalValue = new Date(
+      defaultDate.getTime() - defaultDate.getTimezoneOffset() * 60_000,
+    ).toISOString().slice(0, 16);
+    const deadline = screen.getByLabelText('Deadline');
+    expect(deadline).toHaveAttribute('type', 'datetime-local');
+    expect(deadline).toHaveValue(expectedLocalValue);
+    fireEvent.click(screen.getByRole('button', { name: /提\s*交回答/ }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith({
+        questionnaire: {
+          outcome: 'accepted',
+          answers: [{
+            questionIndex: 0,
+            selectedOptionIndexes: [],
+            otherText: defaultValue,
+          }],
+        },
+      });
+    });
+  });
+
   it('auto-advances after a single-select choice', async () => {
     renderQuestionnaire();
 
@@ -107,17 +495,16 @@ describe('AcpQuestionnaireComposer', () => {
   });
 
   it('submits single, multi-select, and Other answers by stable indexes', async () => {
+    const user = userEvent.setup();
     const onSubmit = vi.fn(async () => undefined);
     renderQuestionnaire(questionnaireRequest, onSubmit);
 
-    fireEvent.click(screen.getByRole('radio', { name: /Postgres/i }));
+    await user.click(screen.getByRole('radio', { name: /Postgres/i }));
     expect(await screen.findByText('Which layers?', {}, { timeout: 1500 })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Frontend' }));
-    await waitFor(() => expect(
-      screen.getByRole('checkbox', { name: 'Frontend' }),
-    ).toBeChecked());
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Backend' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Frontend' }));
+    expect(screen.getByRole('checkbox', { name: 'Frontend' })).toBeChecked();
+    await user.click(screen.getByRole('checkbox', { name: 'Backend' }));
     fireEvent.change(screen.getByRole('textbox', { name: '其他: Which layers?' }), {
       target: { value: '  Keep mobile unchanged  ' },
     });
@@ -207,7 +594,7 @@ describe('AcpQuestionnaireComposer', () => {
     fireEvent.click(screen.getByRole('button', { name: '下一题' }));
     fireEvent.click(screen.getByRole('button', { name: /提交回答/ }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('请至少回答一个问题');
+    expect(await screen.findByRole('alert')).toHaveTextContent('请回答此问题');
     expect(onSubmit).not.toHaveBeenCalled();
   });
 

@@ -3,7 +3,9 @@ use aqbot_acp_client::proxy::{
     configured_agent_with_proxy, ProcessProxySettings, ProxyEnvironment,
 };
 use aqbot_acp_client::runtime::{
-    AcpEvent, AcpRuntime, RuntimeLimits, ACP_STATUS_GROK_RETRY_PREFIX, ACP_STATUS_SENDING_PROMPT,
+    AcpEvent, AcpInteractionKind, AcpQuestionnaireAnswer, AcpQuestionnaireOutcome,
+    AcpQuestionnaireSubmission, AcpRuntime, RuntimeLimits, ACP_STATUS_GROK_RETRY_PREFIX,
+    ACP_STATUS_SENDING_PROMPT,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-const FAKE_AGENT: &str = r#"
+const FAKE_AGENT: &str = r##"
 import json
 import os
 import sys
@@ -21,7 +23,12 @@ log_path = sys.argv[1]
 session_number = 0
 pending_prompts = {}
 pending_permissions = {}
+pending_elicitations = {}
+pending_plan_reviews = {}
+pending_qwen_questions = {}
+pending_claude_plans = {}
 current_permission_mode = "unset"
+supports_form_elicitation = False
 
 if "help" in sys.argv[2:]:
     print('`model`:\n- "model-a"\n- "model-b"\n`next`:', flush=True)
@@ -61,12 +68,31 @@ for line in sys.stdin:
     message = json.loads(line)
     method = message.get("method")
     params = message.get("params") or {}
-    if method is None and message.get("id") in pending_permissions:
+    if method is None and message.get("id") in pending_elicitations:
+        prompt_id, session_id = pending_elicitations.pop(message["id"])
+        record("elicitation/response", f"{session_id}:{json.dumps(message.get('result'), sort_keys=True)}")
+        respond(prompt_id, {"stopReason": "end_turn"})
+    elif method is None and message.get("id") in pending_plan_reviews:
+        prompt_id, session_id = pending_plan_reviews.pop(message["id"])
+        record("plan-review/response", f"{session_id}:{json.dumps(message.get('result'), sort_keys=True)}")
+        respond(prompt_id, {"stopReason": "end_turn"})
+    elif method is None and message.get("id") in pending_qwen_questions:
+        prompt_id, session_id = pending_qwen_questions.pop(message["id"])
+        record("qwen-question/response", f"{session_id}:{json.dumps(message.get('result'), sort_keys=True)}")
+        respond(prompt_id, {"stopReason": "end_turn"})
+    elif method is None and message.get("id") in pending_claude_plans:
+        prompt_id, session_id = pending_claude_plans.pop(message["id"])
+        record("claude-plan/response", f"{session_id}:{json.dumps(message.get('result'), sort_keys=True)}")
+        respond(prompt_id, {"stopReason": "end_turn"})
+    elif method is None and message.get("id") in pending_permissions:
         prompt_id, session_id = pending_permissions.pop(message["id"])
         record("permission/response", f"{session_id}:{json.dumps(message.get('result'), sort_keys=True)}")
         respond(prompt_id, {"stopReason": "end_turn"})
     elif method == "initialize":
-        record("initialize")
+        client_capabilities = params.get("clientCapabilities") or {}
+        form_capabilities = (client_capabilities.get("elicitation") or {}).get("form")
+        supports_form_elicitation = isinstance(form_capabilities, dict)
+        record("initialize", json.dumps(client_capabilities, sort_keys=True))
         fail_replacement_initialize = (
             "fail-first-replacement-initialize" in sys.argv[2:]
             and "--reasoning-effort" in sys.argv[2:]
@@ -173,6 +199,217 @@ for line in sys.stdin:
                     ]
                 }
             }), flush=True)
+        elif prompt_text == "codex-form-elicitation":
+            if not supports_form_elicitation:
+                record("elicitation/unsupported", session_id)
+                respond(message["id"], {"stopReason": "end_turn"})
+                continue
+            elicitation_id = 300000 + session_number
+            pending_elicitations[elicitation_id] = (message["id"], session_id)
+            print(json.dumps({
+                "jsonrpc": "2.0",
+                "id": elicitation_id,
+                "method": "elicitation/create",
+                "params": {
+                    "sessionId": session_id,
+                    "toolCallId": f"question-{session_id}",
+                    "mode": "form",
+                    "message": "请选择工作范围并填写数量",
+                    "requestedSchema": {
+                        "type": "object",
+                        "properties": {
+                            "scope": {
+                                "type": "string",
+                                "title": "工作范围",
+                                "description": "选择计划覆盖的范围",
+                                "_meta": {
+                                    "codex": {"isOther": True, "isSecret": False}
+                                },
+                                "oneOf": [
+                                    {
+                                        "const": "toolbar",
+                                        "title": "仅工具栏",
+                                        "description": "只处理工具栏"
+                                    },
+                                    {
+                                        "const": "full-app",
+                                        "title": "整个应用",
+                                        "description": "覆盖整个应用"
+                                    }
+                                ]
+                            },
+                            "scope__other": {
+                                "type": "string",
+                                "title": "Other",
+                                "description": "Type your own answer instead.",
+                                "_meta": {
+                                    "codex": {
+                                        "questionId": "scope",
+                                        "isOtherAnswer": True,
+                                        "isSecret": False
+                                    }
+                                }
+                            },
+                            "variant_count": {
+                                "type": "integer",
+                                "title": "方案数量",
+                                "description": "填写要比较的方案数量",
+                                "minimum": 1,
+                                "maximum": 5
+                            }
+                        },
+                        "required": ["variant_count"]
+                    },
+                    "_meta": {"codex": {"autoResolutionMs": None}}
+                }
+            }), flush=True)
+        elif prompt_text == "codex-plan-review":
+            review_id = 400000 + session_number
+            pending_plan_reviews[review_id] = (message["id"], session_id)
+            print(json.dumps({
+                "jsonrpc": "2.0",
+                "id": review_id,
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": session_id,
+                    "toolCall": {
+                        "toolCallId": f"plan-{session_id}",
+                        "title": "Review plan",
+                        "kind": "switch_mode",
+                        "status": "pending",
+                        "rawInput": {"plan": "# Test Plan\n\n- Step one"}
+                    },
+                    "options": [
+                        {
+                            "optionId": "implement_plan",
+                            "name": "Implement the plan",
+                            "kind": "allow_once"
+                        },
+                        {
+                            "optionId": "revise_plan",
+                            "name": "Revise the plan",
+                            "kind": "reject_once"
+                        }
+                    ],
+                    "_meta": {
+                        "codex": {
+                            "kind": "plan_review",
+                            "planItemId": f"plan-{session_id}"
+                        }
+                    }
+                }
+            }), flush=True)
+        elif prompt_text == "qwen-user-question":
+            question_id = 500000 + session_number
+            pending_qwen_questions[question_id] = (message["id"], session_id)
+            questions = [
+                {
+                    "header": "Language",
+                    "question": "Which language should the project use?",
+                    "multiSelect": False,
+                    "options": [
+                        {
+                            "label": "TypeScript",
+                            "description": "Use TypeScript throughout."
+                        },
+                        {
+                            "label": "Rust",
+                            "description": "Use Rust throughout."
+                        }
+                    ]
+                },
+                {
+                    "header": "Checks",
+                    "question": "Which checks should be enabled?",
+                    "multiSelect": True,
+                    "options": [
+                        {
+                            "label": "Unit tests",
+                            "description": "Run focused unit tests."
+                        },
+                        {
+                            "label": "Lint",
+                            "description": "Run the linter."
+                        }
+                    ]
+                }
+            ]
+            print(json.dumps({
+                "jsonrpc": "2.0",
+                "id": question_id,
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": session_id,
+                    "toolCall": {
+                        "toolCallId": f"qwen-question-{session_id}",
+                        "status": "pending",
+                        "title": "Ask user 2 questions",
+                        "kind": "think",
+                        "rawInput": {"questions": questions},
+                        "_meta": {
+                            "toolName": "ask_user_question",
+                            "qwenInteractionKind": "user_question",
+                            "qwenQuestions": questions
+                        }
+                    },
+                    "options": [
+                        {
+                            "optionId": "proceed_once",
+                            "name": "Submit",
+                            "kind": "allow_once"
+                        },
+                        {
+                            "optionId": "cancel",
+                            "name": "Cancel",
+                            "kind": "reject_once"
+                        }
+                    ]
+                }
+            }), flush=True)
+        elif prompt_text == "claude-plan-review":
+            review_id = 600000 + session_number
+            pending_claude_plans[review_id] = (message["id"], session_id)
+            print(json.dumps({
+                "jsonrpc": "2.0",
+                "id": review_id,
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": session_id,
+                    "toolCall": {
+                        "toolCallId": f"claude-plan-{session_id}",
+                        "title": "Ready to code?",
+                        "kind": "switch_mode",
+                        "status": "pending",
+                        "rawInput": {"plan": "# Claude Plan\n\n- Keep the API stable"},
+                        "content": [
+                            {
+                                "type": "content",
+                                "content": {
+                                    "type": "text",
+                                    "text": "# Claude Plan\n\n- Keep the API stable"
+                                }
+                            }
+                        ]
+                    },
+                    "options": [
+                        {
+                            "optionId": "acceptEdits",
+                            "name": "Yes, and auto-accept edits",
+                            "kind": "allow_always"
+                        },
+                        {
+                            "optionId": "default",
+                            "name": "Yes, and manually approve edits",
+                            "kind": "allow_once"
+                        },
+                        {
+                            "optionId": "plan",
+                            "name": "No, keep planning",
+                            "kind": "reject_once"
+                        }
+                    ]
+                }
+            }), flush=True)
         elif prompt_text in ("wait-for-cancel", "ignore-cancel", "cancel-then-permission"):
             pending_prompts[session_id] = (
                 message["id"],
@@ -216,7 +453,7 @@ for line in sys.stdin:
         elif pending is not None and not pending[1]:
             prompt_id = pending[0]
             respond(prompt_id, {"stopReason": "cancelled"})
-"#;
+"##;
 
 fn fake_agent(log_path: &Path) -> ConfiguredAgent {
     ConfiguredAgent {
@@ -2258,6 +2495,398 @@ async fn permission_request_is_routed_to_its_thread_session() {
         .expect("permission response log");
     assert!(response.contains(&snapshot_a.session_id), "{log}");
     assert!(response.contains("allow-once"), "{log}");
+
+    std::fs::remove_file(log_path).expect("remove fake agent log");
+}
+
+#[tokio::test]
+async fn codex_form_elicitation_is_exposed_as_question_and_returns_typed_content() {
+    let log_path = unique_log_path("codex-form-elicitation");
+    let runtime = AcpRuntime::new();
+    let agent = fake_agent(&log_path);
+    let limits = RuntimeLimits::new(60, 8);
+    let cwd = std::env::current_dir().expect("current directory");
+    let (event_tx, mut received) = mpsc::unbounded_channel();
+    let snapshot = runtime
+        .prepare(
+            "thread-codex-form",
+            &agent,
+            cwd.clone(),
+            None,
+            false,
+            limits,
+            events(),
+        )
+        .await
+        .expect("prepare Codex form session");
+    let handle = runtime
+        .schedule_prompt(
+            "thread-codex-form",
+            &agent,
+            cwd,
+            prompt("codex-form-elicitation"),
+            Some(snapshot.session_id.clone()),
+            false,
+            limits,
+            event_tx,
+        )
+        .await
+        .expect("schedule Codex form prompt");
+
+    let expected_tool_call_id = format!("question-{}", snapshot.session_id);
+    let request_id = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match received.recv().await {
+                Some(AcpEvent::PermissionRequest {
+                    request_id,
+                    interaction_kind,
+                    tool_call_id,
+                    raw,
+                    ..
+                }) => {
+                    assert_eq!(interaction_kind, AcpInteractionKind::Question);
+                    assert_eq!(
+                        tool_call_id.as_deref(),
+                        Some(expected_tool_call_id.as_str())
+                    );
+                    assert_eq!(raw["kind"], "elicitation_form");
+                    assert_eq!(raw["questions"][0]["id"], "scope");
+                    assert_eq!(raw["questions"][0]["options"][0]["value"], "toolbar");
+                    assert_eq!(raw["questions"][0]["allowOther"], true);
+                    assert_eq!(raw["questions"][1]["id"], "variant_count");
+                    assert_eq!(raw["questions"][1]["inputType"], "integer");
+                    break request_id;
+                }
+                Some(_) => {}
+                None => panic!("ACP event stream closed before Codex form elicitation"),
+            }
+        }
+    })
+    .await
+    .expect("Codex form elicitation must reach the question UI");
+
+    runtime
+        .resolve_questionnaire(
+            &request_id,
+            AcpQuestionnaireSubmission {
+                outcome: AcpQuestionnaireOutcome::Accepted,
+                answers: vec![
+                    AcpQuestionnaireAnswer {
+                        question_index: 0,
+                        selected_option_indexes: vec![0],
+                        other_text: None,
+                    },
+                    AcpQuestionnaireAnswer {
+                        question_index: 1,
+                        selected_option_indexes: Vec::new(),
+                        other_text: Some("2".into()),
+                    },
+                ],
+            },
+        )
+        .await
+        .expect("resolve Codex form elicitation");
+    handle.wait().await.expect("Codex form prompt completes");
+
+    let log = std::fs::read_to_string(&log_path).expect("fake agent log");
+    let response = log
+        .lines()
+        .find(|line| line.starts_with("elicitation/response\t"))
+        .expect("elicitation response log");
+    assert!(response.contains(r#""action": "accept""#), "{log}");
+    assert!(response.contains(r#""scope": "toolbar""#), "{log}");
+    assert!(response.contains(r#""variant_count": 2"#), "{log}");
+
+    std::fs::remove_file(log_path).expect("remove fake agent log");
+}
+
+#[tokio::test]
+async fn codex_plan_review_is_never_auto_approved_and_uses_plan_review_interaction() {
+    let log_path = unique_log_path("codex-plan-review");
+    let runtime = AcpRuntime::new();
+    let agent = fake_agent(&log_path);
+    let limits = RuntimeLimits::new(60, 8);
+    let cwd = std::env::current_dir().expect("current directory");
+    let (event_tx, mut received) = mpsc::unbounded_channel();
+    let snapshot = runtime
+        .prepare(
+            "thread-codex-plan",
+            &agent,
+            cwd.clone(),
+            None,
+            true,
+            limits,
+            events(),
+        )
+        .await
+        .expect("prepare Codex plan session");
+    let handle = runtime
+        .schedule_prompt(
+            "thread-codex-plan",
+            &agent,
+            cwd,
+            prompt("codex-plan-review"),
+            Some(snapshot.session_id.clone()),
+            true,
+            limits,
+            event_tx,
+        )
+        .await
+        .expect("schedule Codex plan prompt");
+
+    let request_id = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match received.recv().await {
+                Some(AcpEvent::PermissionRequest {
+                    request_id,
+                    interaction_kind,
+                    raw,
+                    options,
+                    ..
+                }) => {
+                    assert_eq!(interaction_kind, AcpInteractionKind::PlanReview);
+                    assert_eq!(raw["kind"], "plan_review");
+                    assert_eq!(raw["plan"], "# Test Plan\n\n- Step one");
+                    assert_eq!(
+                        options
+                            .iter()
+                            .map(|option| option.option_id.as_str())
+                            .collect::<Vec<_>>(),
+                        ["implement_plan", "revise_plan"]
+                    );
+                    break request_id;
+                }
+                Some(AcpEvent::ToolCall { tool_call_id, .. })
+                    if tool_call_id == format!("plan-{}", snapshot.session_id) =>
+                {
+                    panic!("plan review must not create a duplicate generic tool row");
+                }
+                Some(_) => {}
+                None => panic!("ACP event stream closed before Codex plan review"),
+            }
+        }
+    })
+    .await
+    .expect("Codex plan review must not be consumed by auto approval");
+
+    assert!(
+        runtime
+            .resolve_permission(&request_id, "implement_plan".into(), None)
+            .await
+    );
+    handle
+        .wait()
+        .await
+        .expect("Codex plan review prompt completes");
+
+    let log = std::fs::read_to_string(&log_path).expect("fake agent log");
+    let response = log
+        .lines()
+        .find(|line| line.starts_with("plan-review/response\t"))
+        .expect("plan review response log");
+    assert!(response.contains("implement_plan"), "{log}");
+
+    std::fs::remove_file(log_path).expect("remove fake agent log");
+}
+
+#[tokio::test]
+async fn qwen_question_extension_bypasses_auto_approval_and_returns_answers() {
+    let log_path = unique_log_path("qwen-user-question");
+    let runtime = AcpRuntime::new();
+    let agent = fake_agent(&log_path);
+    let limits = RuntimeLimits::new(60, 8);
+    let cwd = std::env::current_dir().expect("current directory");
+    let (event_tx, mut received) = mpsc::unbounded_channel();
+    let snapshot = runtime
+        .prepare(
+            "thread-qwen-question",
+            &agent,
+            cwd.clone(),
+            None,
+            true,
+            limits,
+            events(),
+        )
+        .await
+        .expect("prepare Qwen question session");
+    let handle = runtime
+        .schedule_prompt(
+            "thread-qwen-question",
+            &agent,
+            cwd,
+            prompt("qwen-user-question"),
+            Some(snapshot.session_id.clone()),
+            true,
+            limits,
+            event_tx,
+        )
+        .await
+        .expect("schedule Qwen question prompt");
+
+    let expected_tool_call_id = format!("qwen-question-{}", snapshot.session_id);
+    let request_id = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match received.recv().await {
+                Some(AcpEvent::PermissionRequest {
+                    request_id,
+                    interaction_kind,
+                    tool_call_id,
+                    raw,
+                    ..
+                }) => {
+                    assert_eq!(interaction_kind, AcpInteractionKind::Question);
+                    assert_eq!(
+                        tool_call_id.as_deref(),
+                        Some(expected_tool_call_id.as_str())
+                    );
+                    assert_eq!(raw["kind"], "ask_user_question");
+                    assert_eq!(
+                        raw["questions"][0]["question"],
+                        "Which language should the project use?"
+                    );
+                    assert_eq!(raw["questions"][0]["allowOther"], true);
+                    assert_eq!(raw["questions"][1]["multiSelect"], true);
+                    break request_id;
+                }
+                Some(AcpEvent::ToolCall { tool_call_id, .. })
+                    if tool_call_id == expected_tool_call_id =>
+                {
+                    panic!("question interaction must not create a duplicate generic tool row");
+                }
+                Some(_) => {}
+                None => panic!("ACP event stream closed before Qwen question"),
+            }
+        }
+    })
+    .await
+    .expect("Qwen question must not be consumed by auto approval");
+
+    runtime
+        .resolve_questionnaire(
+            &request_id,
+            AcpQuestionnaireSubmission {
+                outcome: AcpQuestionnaireOutcome::Accepted,
+                answers: vec![
+                    AcpQuestionnaireAnswer {
+                        question_index: 0,
+                        selected_option_indexes: vec![0],
+                        other_text: None,
+                    },
+                    AcpQuestionnaireAnswer {
+                        question_index: 1,
+                        selected_option_indexes: vec![0],
+                        other_text: Some("Security scan".into()),
+                    },
+                ],
+            },
+        )
+        .await
+        .expect("resolve Qwen questionnaire");
+    handle.wait().await.expect("Qwen question prompt completes");
+
+    let log = std::fs::read_to_string(&log_path).expect("fake agent log");
+    let response = log
+        .lines()
+        .find(|line| line.starts_with("qwen-question/response\t"))
+        .expect("Qwen question response log");
+    assert!(response.contains(r#""optionId": "proceed_once""#), "{log}");
+    assert!(response.contains(r#""0": "TypeScript""#), "{log}");
+    assert!(
+        response.contains(r#""1": "Unit tests, Security scan""#),
+        "{log}"
+    );
+
+    std::fs::remove_file(log_path).expect("remove fake agent log");
+}
+
+#[tokio::test]
+async fn claude_switch_mode_with_plan_is_classified_without_vendor_metadata() {
+    let log_path = unique_log_path("claude-plan-review");
+    let runtime = AcpRuntime::new();
+    let agent = fake_agent(&log_path);
+    let limits = RuntimeLimits::new(60, 8);
+    let cwd = std::env::current_dir().expect("current directory");
+    let (event_tx, mut received) = mpsc::unbounded_channel();
+    let snapshot = runtime
+        .prepare(
+            "thread-claude-plan",
+            &agent,
+            cwd.clone(),
+            None,
+            true,
+            limits,
+            events(),
+        )
+        .await
+        .expect("prepare Claude plan session");
+    let handle = runtime
+        .schedule_prompt(
+            "thread-claude-plan",
+            &agent,
+            cwd,
+            prompt("claude-plan-review"),
+            Some(snapshot.session_id.clone()),
+            true,
+            limits,
+            event_tx,
+        )
+        .await
+        .expect("schedule Claude plan prompt");
+
+    let expected_tool_call_id = format!("claude-plan-{}", snapshot.session_id);
+    let request_id = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            match received.recv().await {
+                Some(AcpEvent::PermissionRequest {
+                    request_id,
+                    interaction_kind,
+                    tool_call_id,
+                    raw,
+                    options,
+                    ..
+                }) => {
+                    assert_eq!(interaction_kind, AcpInteractionKind::PlanReview);
+                    assert_eq!(
+                        tool_call_id.as_deref(),
+                        Some(expected_tool_call_id.as_str())
+                    );
+                    assert_eq!(raw["kind"], "plan_review");
+                    assert_eq!(raw["plan"], "# Claude Plan\n\n- Keep the API stable");
+                    assert_eq!(
+                        options
+                            .iter()
+                            .map(|option| option.option_id.as_str())
+                            .collect::<Vec<_>>(),
+                        ["acceptEdits", "default", "plan"]
+                    );
+                    break request_id;
+                }
+                Some(AcpEvent::ToolCall { tool_call_id, .. })
+                    if tool_call_id == expected_tool_call_id =>
+                {
+                    panic!("Claude plan review must not create a duplicate generic tool row");
+                }
+                Some(_) => {}
+                None => panic!("ACP event stream closed before Claude plan review"),
+            }
+        }
+    })
+    .await
+    .expect("Claude switch-mode request must become a plan review");
+
+    assert!(
+        runtime
+            .resolve_permission(&request_id, "default".into(), None)
+            .await
+    );
+    handle.wait().await.expect("Claude plan prompt completes");
+
+    let log = std::fs::read_to_string(&log_path).expect("fake agent log");
+    let response = log
+        .lines()
+        .find(|line| line.starts_with("claude-plan/response\t"))
+        .expect("Claude plan response log");
+    assert!(response.contains(r#""optionId": "default""#), "{log}");
 
     std::fs::remove_file(log_path).expect("remove fake agent log");
 }

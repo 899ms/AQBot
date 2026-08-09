@@ -20,6 +20,7 @@ const baseRequest: AcpInteractionRequest = {
   threadId: 'thread-1',
   messageId: 'assistant-1',
   requestId: 'permission-1',
+  toolCallId: 'tool-permission-1',
   toolName: 'run_terminal_command',
   input: { command: 'pnpm test' },
   status: 'pending',
@@ -68,8 +69,7 @@ describe('AcpInteractionComposer', () => {
     expect(screen.getByRole('button', { name: '允许一次' })).toHaveAccessibleDescription(
       'Only run this command once.',
     );
-    // Agents often omit allow_always — UI injects session-scoped always allow.
-    expect(screen.getByRole('button', { name: '始终允许' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '始终允许' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /拒绝/i })).toBeInTheDocument();
     expect(screen.queryByText('Allow once from Agent')).not.toBeInTheDocument();
     expect(screen.getByText('Only run this command once.')).toHaveStyle({
@@ -81,16 +81,62 @@ describe('AcpInteractionComposer', () => {
     expect(details).toHaveTextContent('pnpm test');
   });
 
-  it('submits the synthetic always-allow option id for session scope', async () => {
+  it('submits an agent-advertised always-allow option unchanged', async () => {
     const onSubmit = vi.fn(async () => undefined);
-    renderComposer(baseRequest, onSubmit);
+    renderComposer({
+      ...baseRequest,
+      options: [
+        baseRequest.options[0],
+        {
+          id: 'agent-allow-always',
+          label: 'Always allow from Agent',
+          kind: 'AllowAlways',
+        },
+        baseRequest.options[1],
+      ],
+    }, onSubmit);
 
     fireEvent.click(screen.getByRole('button', { name: '始终允许' }));
     await waitFor(() => {
       expect(onSubmit).toHaveBeenCalledWith({
-        optionId: '__aqbot_session_always_allow',
+        optionId: 'agent-allow-always',
       });
     });
+  });
+
+  it('keeps a no-tool-call permission manual and uses its title as the prompt', () => {
+    renderComposer({
+      ...baseRequest,
+      requestId: 'autohand-permission',
+      toolCallId: undefined,
+      toolName: '',
+      title: 'Allow Autohand to deploy this change?',
+      description: '',
+      options: [
+        { id: 'allow_once', label: 'Allow once', kind: 'AllowOnce' },
+        { id: 'reject_once', label: 'Reject', kind: 'RejectOnce' },
+      ],
+    });
+
+    expect(screen.getByText('Allow Autohand to deploy this change?')).toBeInTheDocument();
+    expect(screen.queryByText('tool')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '始终允许' })).not.toBeInTheDocument();
+  });
+
+  it('retains an agent-advertised always option for a no-tool-call permission', () => {
+    renderComposer({
+      ...baseRequest,
+      requestId: 'autohand-real-always',
+      toolCallId: undefined,
+      toolName: 'autohand_permission',
+      options: [
+        { id: 'allow_once', label: 'Allow once', kind: 'AllowOnce' },
+        { id: 'allow_always', label: 'Allow always', kind: 'AllowAlways' },
+        { id: 'reject_once', label: 'Reject', kind: 'RejectOnce' },
+      ],
+    });
+
+    expect(screen.getAllByRole('button', { name: '始终允许' })).toHaveLength(1);
   });
 
   it('moves keyboard focus to the first available decision', async () => {
@@ -147,12 +193,36 @@ describe('AcpInteractionComposer', () => {
     expect(screen.getByRole('button', { name: '取消' })).toBeInTheDocument();
   });
 
+  it('renders the real Codex plan review body and only its advertised actions', () => {
+    renderComposer({
+      ...baseRequest,
+      kind: 'plan_review',
+      title: 'Implement this plan?',
+      input: { plan: '## Codex plan\n1. Inspect\n2. Ship' },
+      options: [
+        { id: 'implement_plan', label: 'Yes, implement this plan', kind: 'AllowOnce' },
+        {
+          id: 'revise_plan',
+          label: 'No, and tell Codex what to do differently',
+          kind: 'RejectOnce',
+        },
+      ],
+    });
+
+    expect(screen.getByText('Codex plan')).toBeInTheDocument();
+    const execute = screen.getByRole('button', { name: '立即执行' });
+    expect(execute).toBeEnabled();
+    expect(screen.getByRole('button', { name: '进行改变' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: '取消' })).not.toBeInTheDocument();
+  });
+
   it('lets plan review request changes with feedback', async () => {
     const onSubmit = vi.fn(async () => undefined);
     renderComposer({
       ...baseRequest,
       kind: 'plan_review',
       description: 'Ship the rename plan.',
+      input: { supportsFeedback: true },
       options: [
         { id: 'approved', label: 'Approve and implement' },
         { id: 'cancelled', label: 'Continue planning' },
@@ -173,6 +243,79 @@ describe('AcpInteractionComposer', () => {
         feedback: 'Keep the data path unchanged',
       });
     });
+  });
+
+  it('submits a Codex plan revision directly when the protocol cannot carry feedback', async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    renderComposer({
+      ...baseRequest,
+      kind: 'plan_review',
+      input: {
+        plan: 'Ship the rename plan.',
+        supportsFeedback: false,
+      },
+      options: [
+        { id: 'implement_plan', label: 'Yes, implement this plan' },
+        { id: 'revise_plan', label: 'No, and tell Codex what to do differently' },
+      ],
+    }, onSubmit);
+
+    fireEvent.click(screen.getByRole('button', { name: '进行改变' }));
+
+    await waitFor(() => {
+      expect(onSubmit).toHaveBeenCalledWith({ optionId: 'revise_plan' });
+    });
+    expect(screen.queryByPlaceholderText('描述希望如何调整计划…')).not.toBeInTheDocument();
+  });
+
+  it('maps Claude plan option kinds without hiding advertised execution modes', async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    renderComposer({
+      ...baseRequest,
+      kind: 'plan_review',
+      input: { plan: 'Review the Claude plan.', supportsFeedback: false },
+      options: [
+        { id: 'auto', label: 'Auto mode', kind: 'AllowAlways' },
+        { id: 'acceptEdits', label: 'Accept edits', kind: 'AllowAlways' },
+        { id: 'default', label: 'Default mode', kind: 'AllowOnce' },
+        { id: 'plan', label: 'Keep planning', kind: 'RejectOnce' },
+      ],
+    }, onSubmit);
+
+    const execute = screen.getByRole('button', { name: '立即执行' });
+    expect(execute).toBeEnabled();
+    expect(screen.getByRole('button', { name: '进行改变' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: '取消' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Auto mode' })).toHaveAttribute('translate', 'no');
+    expect(screen.getByRole('button', { name: 'Accept edits' })).toHaveAttribute('translate', 'no');
+    expect(execute.parentElement).toHaveStyle({
+      gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 132px), 1fr))',
+    });
+
+    fireEvent.click(execute);
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ optionId: 'default' }));
+  });
+
+  it('maps Qwen plan option kinds and keeps its advertised always option', async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    renderComposer({
+      ...baseRequest,
+      kind: 'plan_review',
+      input: { plan: 'Review the Qwen plan.', supportsFeedback: false },
+      options: [
+        { id: 'proceed_once', label: 'Proceed once', kind: 'AllowOnce' },
+        { id: 'proceed_always', label: 'Always proceed', kind: 'AllowAlways' },
+        { id: 'cancel', label: 'Keep planning', kind: 'RejectOnce' },
+      ],
+    }, onSubmit);
+
+    expect(screen.getByRole('button', { name: '立即执行' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '进行改变' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Always proceed' })).toHaveAttribute('translate', 'no');
+    expect(screen.queryByRole('button', { name: '取消' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '进行改变' }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith({ optionId: 'cancel' }));
   });
 
   it('opens plan review in an accessible dialog and restores focus after Escape', async () => {

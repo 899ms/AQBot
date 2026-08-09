@@ -50,8 +50,12 @@ const requiredKeys = [
   'interactionToolCancelled',
   'interactionToolUnknown',
   'interactionSubmitAnswers',
+  'interactionDeclineAnswers',
   'interactionOther',
   'interactionAnswerRequired',
+  'interactionAnswerInvalid',
+  'interactionUnsupportedField',
+  'interactionEnterAnswer',
   'interactionSelectOne',
   'interactionSelectMany',
   'interactionChatAboutThis',
@@ -91,6 +95,7 @@ describe('ACP interaction i18n', () => {
       expect(locale.agentPage?.interactionNetworkRetryAttempt).not.toContain('{{maximum}}');
       expect(locale.agentPage?.interactionNetworkRetryProgress).toContain('{{attempt}}');
       expect(locale.agentPage?.interactionNetworkRetryProgress).toContain('{{maximum}}');
+      expect(locale.agentPage?.interactionUnsupportedField).toContain('{{type}}');
     }
   });
 });

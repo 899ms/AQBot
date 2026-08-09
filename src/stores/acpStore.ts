@@ -33,12 +33,10 @@ const _acpMessageLoadVersion = new Map<string, number>();
 const _acpSessionMutationTails = new Map<string, Promise<void>>();
 const _acpSessionLifecycleVersion = new Map<string, number>();
 const _acpRetiredSessionKeys = new Set<string>();
-const _acpAutoApprovalTokens = new Map<string, { threadId: string; token: number }>();
 const _acpFirstOutputTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const _acpStreamingMessageThreads = new Map<string, string>();
 let _acpOptimisticMessageSeq = 0;
 let _acpInteractionSeq = 0;
-let _acpAutoApprovalSeq = 0;
 
 async function serializeAcpSessionMutation<T>(
   threadId: string,
@@ -108,30 +106,11 @@ function retireAcpSessionKey(sessionKey: string): void {
     sessionKey,
     (_acpSessionLifecycleVersion.get(sessionKey) ?? 0) + 1,
   );
-  invalidateAutoApprovalsForSession(sessionKey);
   clearFirstOutputTimer(sessionKey);
 }
 
 function isAcpSessionKeyLive(sessionKey: string): boolean {
   return !_acpRetiredSessionKeys.has(sessionKey);
-}
-
-function beginAutoApproval(requestId: string, threadId: string): number {
-  const token = ++_acpAutoApprovalSeq;
-  _acpAutoApprovalTokens.set(requestId, { threadId, token });
-  return token;
-}
-
-function finishAutoApproval(requestId: string, token: number): boolean {
-  if (_acpAutoApprovalTokens.get(requestId)?.token !== token) return false;
-  _acpAutoApprovalTokens.delete(requestId);
-  return true;
-}
-
-function invalidateAutoApprovalsForSession(threadId: string): void {
-  for (const [requestId, approval] of _acpAutoApprovalTokens) {
-    if (approval.threadId === threadId) _acpAutoApprovalTokens.delete(requestId);
-  }
 }
 
 function takeStreamingMessageIdsForSessions(
@@ -233,6 +212,7 @@ function extractPlanDocumentContent(
     extras?.description,
     source.planContent,
     source.plan_content,
+    source.plan,
     source.content,
     source.description,
     extras?.title,
@@ -247,13 +227,22 @@ function extractPlanDocumentContent(
 function planDocumentStatusFromResolution(
   optionId: string | undefined,
   reason: 'selected' | 'cancelled' | 'expired' | undefined,
+  optionKind?: string,
 ): AcpPlanDocument['status'] {
   if (reason === 'expired') return 'expired';
   if (reason === 'cancelled') return 'cancelled';
   const id = String(optionId ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (id === 'approved' || id === 'approve') return 'approved';
-  if (id === 'cancelled' || id === 'cancel') return 'cancelled';
+  const kind = String(optionKind ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
   if (id === 'abandoned' || id === 'abandon') return 'abandoned';
+  if (kind.includes('reject') || kind.includes('deny')) return 'cancelled';
+  if (kind.includes('allow')) return 'approved';
+  if (id === 'approved' || id === 'approve' || id === 'implementplan') return 'approved';
+  if (
+    id === 'cancelled'
+    || id === 'cancel'
+    || id === 'reviseplan'
+    || id === 'plan'
+  ) return 'cancelled';
   if (reason === 'selected') return 'approved';
   return 'expired';
 }
@@ -486,6 +475,7 @@ export interface AcpPermissionRequest {
 
 export type AcpQuestionnaireOutcome =
   | 'accepted'
+  | 'declined'
   | 'chat_about_this'
   | 'skip_interview'
   | 'cancelled';
@@ -499,6 +489,16 @@ export interface AcpQuestionnaireAnswer {
 export interface AcpQuestionnaireSubmission {
   outcome: AcpQuestionnaireOutcome;
   answers: AcpQuestionnaireAnswer[];
+}
+
+function questionnaireHasSecret(input: Record<string, unknown> | undefined): boolean {
+  if (!Array.isArray(input?.questions)) return false;
+  return input.questions.some((entry) => {
+    if (!entry || typeof entry !== 'object') return false;
+    const question = entry as Record<string, unknown>;
+    return question.secret === true
+      || String(question.inputType ?? '').toLowerCase() === 'secret';
+  });
 }
 
 export interface AcpToolCallState {
@@ -633,11 +633,6 @@ interface AcpStore {
   planByThread: Record<string, AcpPlanState>;
   /** Full plan-review documents kept for timeline re-reading after exit. */
   planDocumentsByThread: Record<string, AcpPlanDocument[]>;
-  /**
-   * Thread-scoped tools the user chose "始终允许" for — auto-approve matching
-   * permission prompts for the rest of this AQBot thread/session.
-   */
-  alwaysAllowedToolsByThread: Record<string, string[]>;
   spawnModelByThread: Record<string, string>;
   spawnReasoningByThread: Record<string, string>;
   permissionMode: string;
@@ -784,75 +779,34 @@ function mapAcpOptions(
   });
 }
 
-/** Normalize tool name for session always-allow matching. */
-export function acpPermissionToolKey(toolName: string | null | undefined): string {
-  return String(toolName ?? '').trim().toLowerCase();
-}
-
-const ACP_SESSION_ALWAYS_ALLOW_OPTION_ID = '__aqbot_session_always_allow';
-
-function optionIdentity(option: { id?: string; kind?: string | null }): string {
-  return `${String(option.id ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')} ${
-    String(option.kind ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
-  }`.trim();
-}
-
-function isSessionAlwaysAllowOption(option: { id?: string; kind?: string | null }): boolean {
-  const identity = optionIdentity(option);
-  return identity.includes('allowalways') || option.id === ACP_SESSION_ALWAYS_ALLOW_OPTION_ID;
-}
-
-function findAgentAllowOptionId(
-  options: Array<{ id: string; kind?: string }>,
-): string | undefined {
-  const realAlways = options.find(
-    (option) => isSessionAlwaysAllowOption(option)
-      && option.id !== ACP_SESSION_ALWAYS_ALLOW_OPTION_ID,
-  );
-  if (realAlways) return realAlways.id;
-  const once = options.find((option) => {
-    const identity = optionIdentity(option);
-    return identity.includes('allowonce')
-      || identity === 'allow'
-      || identity === 'approved'
-      || identity === 'approve';
-  });
-  if (once) return once.id;
-  return options.find((option) => {
-    const identity = optionIdentity(option);
-    return identity.includes('allow')
-      && !identity.includes('reject')
-      && !identity.includes('deny');
-  })?.id;
-}
-
-function rememberAlwaysAllowedTool(
-  byThread: Record<string, string[]>,
-  threadId: string,
-  toolName: string,
-): Record<string, string[]> {
-  const key = acpPermissionToolKey(toolName);
-  if (!key) return byThread;
-  const existing = byThread[threadId] ?? [];
-  if (existing.includes(key)) return byThread;
-  return { ...byThread, [threadId]: [...existing, key] };
-}
-
-function isToolAlwaysAllowed(
-  byThread: Record<string, string[]>,
-  threadId: string,
-  toolName: string,
-): boolean {
-  const key = acpPermissionToolKey(toolName);
-  if (!key) return false;
-  return (byThread[threadId] ?? []).includes(key);
-}
-
-function interactionKind(raw: Record<string, unknown>): AcpPermissionRequest['kind'] {
-  const kind = String(raw.kind ?? '').toLowerCase();
-  if (kind === 'ask_user_question') return 'question';
+function interactionKind(
+  raw: Record<string, unknown>,
+  explicit?: AcpPermissionRequest['kind'],
+): AcpPermissionRequest['kind'] {
+  if (explicit && explicit !== 'permission') return explicit;
+  const meta = raw._meta && typeof raw._meta === 'object'
+    ? raw._meta as Record<string, unknown>
+    : null;
+  const codex = meta?.codex && typeof meta.codex === 'object'
+    ? meta.codex as Record<string, unknown>
+    : null;
+  const kind = String(codex?.kind ?? raw.kind ?? '').toLowerCase();
+  if (kind === 'ask_user_question' || kind === 'elicitation_form') return 'question';
   if (kind === 'plan_review') return 'plan_review';
-  return 'permission';
+  const toolCallValue = raw.toolCall ?? raw.tool_call;
+  const toolCall = toolCallValue && typeof toolCallValue === 'object'
+    ? toolCallValue as Record<string, unknown>
+    : raw;
+  const rawInputValue = toolCall.rawInput ?? toolCall.raw_input;
+  const rawInput = rawInputValue && typeof rawInputValue === 'object'
+    ? rawInputValue as Record<string, unknown>
+    : null;
+  const toolKind = String(toolCall.kind ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const plan = raw.plan ?? rawInput?.plan;
+  if (toolKind === 'switchmode' && typeof plan === 'string' && plan.trim()) {
+    return 'plan_review';
+  }
+  return explicit ?? 'permission';
 }
 
 function removeThreadEntries<T extends { threadId: string }>(
@@ -910,7 +864,6 @@ function clearAcpSessionState(
     cancellingByThread: omitSessionKeys(state.cancellingByThread, sessionKeys),
     planByThread: omitSessionKeys(state.planByThread, sessionKeys),
     planDocumentsByThread: omitSessionKeys(state.planDocumentsByThread, sessionKeys),
-    alwaysAllowedToolsByThread: omitSessionKeys(state.alwaysAllowedToolsByThread, sessionKeys),
     spawnModelByThread: omitSessionKeys(state.spawnModelByThread, sessionKeys),
     spawnReasoningByThread: omitSessionKeys(state.spawnReasoningByThread, sessionKeys),
     ...(state.activeThreadId && sessionKeys.has(state.activeThreadId)
@@ -1128,7 +1081,6 @@ export const useAcpStore = create<AcpStore>()(
   cancellingByThread: {},
   planByThread: {},
   planDocumentsByThread: {},
-  alwaysAllowedToolsByThread: {},
   spawnModelByThread: {},
   spawnReasoningByThread: {},
   permissionMode: 'default',
@@ -2106,7 +2058,6 @@ export const useAcpStore = create<AcpStore>()(
       if (!cancelled) throw new Error('No active ACP turn to cancel');
       await get().loadMessages(threadId);
       if (get().messagesErrorByThread[threadId]) {
-        invalidateAutoApprovalsForSession(threadId);
         set((s) => {
           const messageIds = new Set(
             s.messages
@@ -2305,70 +2256,32 @@ export const useAcpStore = create<AcpStore>()(
   respondPermission: async (requestId, optionId, feedback) => {
     const trimmedFeedback = feedback?.trim();
     const existing = get().pendingPermissions[requestId];
-    let resolvedOptionId = optionId;
-    let rememberAlways = false;
-
-    if (existing && (existing.kind ?? 'permission') === 'permission') {
-      const selected = existing.options.find((option) => option.id === optionId);
-      const syntheticAlways = optionId === ACP_SESSION_ALWAYS_ALLOW_OPTION_ID
-        || isSessionAlwaysAllowOption({ id: optionId, kind: selected?.kind });
-      if (syntheticAlways) {
-        rememberAlways = true;
-        if (optionId === ACP_SESSION_ALWAYS_ALLOW_OPTION_ID) {
-          const agentAllowId = findAgentAllowOptionId(existing.options);
-          if (!agentAllowId) {
-            throw new Error('No allow option available for session always-allow');
-          }
-          resolvedOptionId = agentAllowId;
-        }
-      }
-    }
 
     await invoke('acp_respond_permission', {
       requestId,
-      optionId: resolvedOptionId,
+      optionId,
       feedback: trimmedFeedback || null,
     });
     set((s) => {
       const current = s.pendingPermissions[requestId] ?? existing;
-      if (!current) {
-        if (!rememberAlways || !existing) return s;
-        return {
-          alwaysAllowedToolsByThread: rememberAlwaysAllowedTool(
-            s.alwaysAllowedToolsByThread,
-            existing.threadId,
-            existing.toolName,
-          ),
-        };
-      }
-      const selectedOption = current.options.find((option) => option.id === resolvedOptionId)
-        ?? current.options.find((option) => option.id === optionId);
+      if (!current) return s;
+      const selectedOption = current.options.find((option) => option.id === optionId);
       const next = resolvedInteractionState(s.pendingPermissions, s.toolCalls, {
         requestId,
         reason: 'selected',
-        optionId: resolvedOptionId,
-        optionKind: rememberAlways
-          ? 'AllowAlways'
-          : selectedOption?.kind,
-        optionLabel: rememberAlways
-          ? (selectedOption?.label ?? '始终允许')
-          : selectedOption?.label,
+        optionId,
+        optionKind: selectedOption?.kind,
+        optionLabel: selectedOption?.label,
       });
-      const withAlways = rememberAlways
-        ? {
-            ...next,
-            alwaysAllowedToolsByThread: rememberAlwaysAllowedTool(
-              s.alwaysAllowedToolsByThread,
-              current.threadId,
-              current.toolName,
-            ),
-          }
-        : next;
-      if (current.kind !== 'plan_review') return withAlways;
+      if (current.kind !== 'plan_review') return next;
       return {
-        ...withAlways,
+        ...next,
         planDocumentsByThread: resolvePlanDocument(s.planDocumentsByThread, requestId, {
-          status: planDocumentStatusFromResolution(resolvedOptionId, 'selected'),
+          status: planDocumentStatusFromResolution(
+            optionId,
+            'selected',
+            selectedOption?.kind,
+          ),
           messageId: current.messageId,
           feedback: trimmedFeedback || undefined,
         }),
@@ -2377,6 +2290,7 @@ export const useAcpStore = create<AcpStore>()(
   },
 
   respondQuestionnaire: async (requestId, submission) => {
+    const redactSummary = questionnaireHasSecret(get().pendingPermissions[requestId]?.input);
     const summary = await invoke<string>('acp_respond_questionnaire', {
       requestId,
       outcome: submission.outcome,
@@ -2386,14 +2300,13 @@ export const useAcpStore = create<AcpStore>()(
       requestId,
       reason: submission.outcome === 'cancelled' ? 'cancelled' : 'selected',
       optionId: submission.outcome,
-      optionLabel: summary || undefined,
+      optionLabel: redactSummary ? undefined : summary || undefined,
     }));
   },
 
   bindEvents: async () => {
     // Tear down any previous generation first (StrictMode remount / leave+reenter Agent).
     const gen = ++_acpListenerGen;
-    _acpAutoApprovalTokens.clear();
     if (_acpUnlisten) {
       _acpUnlisten();
       _acpUnlisten = null;
@@ -2568,15 +2481,16 @@ export const useAcpStore = create<AcpStore>()(
         } = event.payload;
         markTurnActivity(threadId);
         const toolCall = (raw.toolCall ?? raw.tool_call ?? raw) as Record<string, unknown>;
-        const kind = eventInteractionKind ?? interactionKind(raw);
+        const kind = interactionKind(raw, eventInteractionKind);
         const toolCallId = eventToolCallId
           ?? (typeof toolCall.toolCallId === 'string' ? toolCall.toolCallId : null)
           ?? (typeof toolCall.tool_call_id === 'string' ? toolCall.tool_call_id : undefined);
         const toolName =
-          (typeof toolCall.kind === 'string' && toolCall.kind)
-          || (typeof toolCall.toolName === 'string' && toolCall.toolName)
+          (typeof toolCall.toolName === 'string' && toolCall.toolName)
+          || (typeof toolCall.kind === 'string' && toolCall.kind)
+          || (typeof toolCall.tool === 'string' && toolCall.tool)
           || (typeof toolCall.title === 'string' && String(toolCall.title).slice(0, 40))
-          || 'tool';
+          || (toolCallId ? 'tool' : '');
         const inputObj =
           (toolCall.rawInput as Record<string, unknown>)
           || (toolCall.input as Record<string, unknown>)
@@ -2584,7 +2498,23 @@ export const useAcpStore = create<AcpStore>()(
         const title = eventTitle
           ?? (typeof raw.title === 'string' ? raw.title : undefined)
           ?? (typeof toolCall.title === 'string' ? toolCall.title : undefined);
-        const input = typeof inputObj === 'object' && inputObj ? inputObj : { value: inputObj };
+        const baseInput = typeof inputObj === 'object' && inputObj ? inputObj : { value: inputObj };
+        const plan = [raw.plan, baseInput.plan]
+          .find((value) => typeof value === 'string' && value.trim());
+        const supportsFeedback = typeof raw.supportsFeedback === 'boolean'
+          ? raw.supportsFeedback
+          : typeof baseInput.supportsFeedback === 'boolean'
+            ? baseInput.supportsFeedback
+            : kind === 'plan_review'
+              ? false
+              : undefined;
+        const input = kind === 'plan_review'
+          ? {
+              ...baseInput,
+              ...(typeof plan === 'string' ? { plan } : {}),
+              ...(typeof supportsFeedback === 'boolean' ? { supportsFeedback } : {}),
+            }
+          : baseInput;
         const mappedOptions = mapAcpOptions(options ?? []);
         const sequence = ++_acpInteractionSeq;
         const pendingRequest: AcpPermissionRequest = {
@@ -2600,39 +2530,6 @@ export const useAcpStore = create<AcpStore>()(
           status: 'pending',
           sequence,
         };
-
-        // Session always-allow: auto-approve without surfacing the composer.
-        if (
-          kind === 'permission'
-          && isToolAlwaysAllowed(get().alwaysAllowedToolsByThread, threadId, String(toolName))
-        ) {
-          const allowOptionId = findAgentAllowOptionId(mappedOptions);
-          if (allowOptionId) {
-            const approvalToken = beginAutoApproval(requestId, threadId);
-            void invoke('acp_respond_permission', {
-              requestId,
-              optionId: allowOptionId,
-              feedback: null,
-            })
-              .then(() => {
-                finishAutoApproval(requestId, approvalToken);
-              })
-              .catch((error) => {
-                console.error('[acp] session always-allow auto-respond failed', error);
-                if (
-                  !finishAutoApproval(requestId, approvalToken)
-                  || !isThreadEventLive(threadId)
-                ) return;
-                set((state) => ({
-                  pendingPermissions: {
-                    ...state.pendingPermissions,
-                    [requestId]: pendingRequest,
-                  },
-                }));
-              });
-            return;
-          }
-        }
 
         set((s) => {
           const nextPermissions = {
@@ -2677,7 +2574,6 @@ export const useAcpStore = create<AcpStore>()(
       }>('acp-interaction-closed', (event) => {
         if (!isThreadEventLive(event.payload.threadId)) return;
         const payload = event.payload;
-        _acpAutoApprovalTokens.delete(payload.requestId);
         markTurnActivity(payload.threadId);
         set((state) => {
           const resolution = {
@@ -2710,6 +2606,7 @@ export const useAcpStore = create<AcpStore>()(
                 status: planDocumentStatusFromResolution(
                   resolution.optionId,
                   payload.reason,
+                  resolution.optionKind,
                 ),
                 messageId: payload.messageId ?? existing?.messageId,
               },
@@ -2803,7 +2700,6 @@ export const useAcpStore = create<AcpStore>()(
         (event) => {
           if (!isThreadEventLive(event.payload.threadId)) return;
           const { threadId, messageId, text, stopReason, durationMs } = event.payload;
-          invalidateAutoApprovalsForSession(threadId);
           markTurnActivity(threadId);
           streamBatch.delete(messageId);
           _acpStreamingMessageThreads.delete(messageId);
@@ -2877,7 +2773,6 @@ export const useAcpStore = create<AcpStore>()(
         (event) => {
           if (!isThreadEventLive(event.payload.threadId)) return;
           const { threadId, messageId, message, text } = event.payload;
-          invalidateAutoApprovalsForSession(threadId);
           invalidateAcpMessageLoad(threadId);
           markTurnActivity(threadId);
           if (messageId) {

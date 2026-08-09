@@ -9,14 +9,18 @@ use crate::config::ConfiguredAgent;
 use agent_client_protocol::schema::v1::{
     AgentCapabilities, AgentNotification, BooleanConfigOptionCapabilities, CancelNotification,
     ClientCapabilities, ClientNotification, ClientSessionCapabilities, CloseSessionRequest,
-    ContentBlock, ExtNotification, ImageContent, Implementation, InitializeRequest,
-    LoadSessionRequest, McpServer, NewSessionResponse, PermissionOptionKind, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, ResourceLink,
-    ResumeSessionRequest, SelectedPermissionOutcome, SessionConfigKind, SessionConfigOption,
-    SessionConfigOptionCategory, SessionConfigOptionValue, SessionConfigOptionsCapabilities,
-    SessionConfigSelectOption, SessionConfigSelectOptions, SessionId, SessionMode, SessionModeId,
-    SessionModeState, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    SetSessionModeRequest, TextContent,
+    ContentBlock, CreateElicitationRequest, CreateElicitationResponse, ElicitationAcceptAction,
+    ElicitationAction, ElicitationCapabilities, ElicitationContentValue,
+    ElicitationFormCapabilities, ElicitationFormMode, ElicitationMode, ElicitationPropertySchema,
+    ElicitationSchema, ElicitationScope, ExtNotification, ImageContent, Implementation,
+    InitializeRequest, LoadSessionRequest, McpServer, MultiSelectItems, NewSessionResponse,
+    PermissionOption, PermissionOptionKind, PromptRequest, RequestPermissionOutcome,
+    RequestPermissionResponse, ResourceLink, ResumeSessionRequest, SelectedPermissionOutcome,
+    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigOptionValue,
+    SessionConfigOptionsCapabilities, SessionConfigSelectOption, SessionConfigSelectOptions,
+    SessionId, SessionMode, SessionModeId, SessionModeState, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, SetSessionModeRequest, StringFormat, TextContent,
+    ToolCallUpdate,
 };
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::{
@@ -24,7 +28,7 @@ use agent_client_protocol::{
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{
@@ -234,16 +238,60 @@ struct PendingPermission {
     interaction_kind: AcpInteractionKind,
     tool_call_id: Option<String>,
     options: Vec<PermissionOptionView>,
-    questionnaire: Option<GrokQuestionnaireContext>,
+    questionnaire: Option<PendingQuestionnaire>,
     event_tx: mpsc::UnboundedSender<AcpEvent>,
     sender: Option<oneshot::Sender<PermissionResolution>>,
-    questionnaire_sender: Option<oneshot::Sender<AcpQuestionnaireSubmission>>,
+}
+
+enum PendingQuestionnaire {
+    Grok {
+        context: GrokQuestionnaireContext,
+        sender: Option<oneshot::Sender<AcpQuestionnaireSubmission>>,
+    },
+    Elicitation {
+        context: ElicitationFormContext,
+        sender: Option<oneshot::Sender<CreateElicitationResponse>>,
+    },
+    Qwen {
+        context: QwenQuestionnaireContext,
+        sender: Option<oneshot::Sender<ExtendedRequestPermissionResponse>>,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct ElicitationFormContext {
+    questions: Vec<ElicitationQuestionContext>,
+}
+
+#[derive(Debug, Clone)]
+struct ElicitationQuestionContext {
+    id: String,
+    title: String,
+    required: bool,
+    secret: bool,
+    schema: ElicitationPropertySchema,
+    options: Vec<ElicitationOptionContext>,
+    other: Option<ElicitationOtherPropertyContext>,
+}
+
+#[derive(Debug, Clone)]
+struct ElicitationOtherPropertyContext {
+    id: String,
+    schema: ElicitationPropertySchema,
+}
+
+#[derive(Debug, Clone)]
+struct ElicitationOptionContext {
+    value: String,
+    label: String,
+    description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AcpQuestionnaireOutcome {
     Accepted,
+    Declined,
     ChatAboutThis,
     SkipInterview,
     Cancelled,
@@ -789,19 +837,47 @@ impl AcpRuntime {
             let pending = map
                 .get_mut(request_id)
                 .ok_or_else(|| "questionnaire not found or already resolved".to_string())?;
-            let context = pending
+            let questionnaire = pending
                 .questionnaire
-                .as_ref()
+                .as_mut()
                 .ok_or_else(|| "interaction is not a questionnaire".to_string())?;
-            let summary = validate_questionnaire_submission(context, &submission)?;
             let outcome = submission.outcome;
-            let sender = pending
-                .questionnaire_sender
-                .take()
-                .ok_or_else(|| "questionnaire was already resolved".to_string())?;
-            sender
-                .send(submission)
-                .map_err(|_| "questionnaire responder is no longer available".to_string())?;
+            let summary = match questionnaire {
+                PendingQuestionnaire::Grok { context, sender } => {
+                    let summary = validate_questionnaire_submission(context, &submission)?;
+                    sender
+                        .take()
+                        .ok_or_else(|| "questionnaire was already resolved".to_string())?
+                        .send(submission)
+                        .map_err(|_| {
+                            "questionnaire responder is no longer available".to_string()
+                        })?;
+                    summary
+                }
+                PendingQuestionnaire::Elicitation { context, sender } => {
+                    let (summary, response) =
+                        elicitation_response_from_submission(context, &submission)?;
+                    sender
+                        .take()
+                        .ok_or_else(|| "questionnaire was already resolved".to_string())?
+                        .send(response)
+                        .map_err(|_| {
+                            "questionnaire responder is no longer available".to_string()
+                        })?;
+                    summary
+                }
+                PendingQuestionnaire::Qwen { context, sender } => {
+                    let (summary, response) = qwen_response_from_submission(context, &submission)?;
+                    sender
+                        .take()
+                        .ok_or_else(|| "questionnaire was already resolved".to_string())?
+                        .send(response)
+                        .map_err(|_| {
+                            "questionnaire responder is no longer available".to_string()
+                        })?;
+                    summary
+                }
+            };
             let pending = map
                 .remove(request_id)
                 .expect("resolved questionnaire remains registered");
@@ -814,17 +890,19 @@ impl AcpRuntime {
         };
         let option_id = match outcome {
             AcpQuestionnaireOutcome::Accepted => "accepted",
+            AcpQuestionnaireOutcome::Declined => "declined",
             AcpQuestionnaireOutcome::ChatAboutThis => "chat_about_this",
             AcpQuestionnaireOutcome::SkipInterview => "skip_interview",
             AcpQuestionnaireOutcome::Cancelled => "cancelled",
         };
-        let selected =
-            (outcome != AcpQuestionnaireOutcome::Cancelled).then(|| PermissionOptionView {
+        let selected = matches!(terminal_outcome, AcpInteractionOutcome::Selected).then(|| {
+            PermissionOptionView {
                 option_id: option_id.into(),
                 name: summary.clone(),
                 kind: None,
                 description: None,
-            });
+            }
+        });
         emit_interaction_closed(
             &pending.event_tx,
             request_id,
@@ -2427,6 +2505,7 @@ fn spawn_process_anchor(
 
     let connection_task = tokio::spawn(async move {
         let permissions_perm = permissions.clone();
+        let permissions_elicitation = permissions.clone();
         let permissions_plan = permissions.clone();
         let permissions_question = permissions.clone();
         let ready_tx_fallback = ready_tx.clone();
@@ -2472,8 +2551,8 @@ fn spawn_process_anchor(
                 {
                     let permissions = permissions_perm;
                     let routes = routes.clone();
-                    move |request: RequestPermissionRequest,
-                          responder: Responder<RequestPermissionResponse>,
+                    move |request: ExtendedRequestPermissionRequest,
+                          responder: Responder<ExtendedRequestPermissionResponse>,
                           _connection: ConnectionTo<Agent>| {
                         let permissions = permissions.clone();
                         let routes = routes.clone();
@@ -2487,9 +2566,8 @@ fn spawn_process_anchor(
                                     if route.prompt_state.load(Ordering::Acquire)
                                         == PROMPT_CANCEL_REQUESTED
                                     {
-                                        return responder.respond(RequestPermissionResponse::new(
-                                            RequestPermissionOutcome::Cancelled,
-                                        ));
+                                        return responder
+                                            .respond(ExtendedRequestPermissionResponse::cancelled());
                                     }
                                     let event_tx = route.event_slot.lock().await.clone();
                                     handle_permission_request(
@@ -2504,8 +2582,57 @@ fn spawn_process_anchor(
                                     )
                                     .await
                                 } else {
-                                    responder.respond(RequestPermissionResponse::new(
-                                        RequestPermissionOutcome::Cancelled,
+                                    responder.respond(ExtendedRequestPermissionResponse::cancelled())
+                                }
+                            })?;
+                            Ok(())
+                        }
+                    }
+                },
+                agent_client_protocol::on_receive_request!(),
+            )
+            .on_receive_request(
+                {
+                    let permissions = permissions_elicitation;
+                    let routes = routes.clone();
+                    move |request: CreateElicitationRequest,
+                          responder: Responder<CreateElicitationResponse>,
+                          connection: ConnectionTo<Agent>| {
+                        let permissions = permissions.clone();
+                        let routes = routes.clone();
+                        async move {
+                            connection.spawn(async move {
+                                let session_id = match request.scope() {
+                                    ElicitationScope::Session(scope) => scope.session_id.clone(),
+                                    _ => {
+                                        return responder.respond(CreateElicitationResponse::new(
+                                            ElicitationAction::Cancel,
+                                        ));
+                                    }
+                                };
+                                let route = resolve_session_route(&routes, &session_id).await;
+                                if let Some(route) = route {
+                                    if route.prompt_state.load(Ordering::Acquire)
+                                        == PROMPT_CANCEL_REQUESTED
+                                    {
+                                        return responder.respond(CreateElicitationResponse::new(
+                                            ElicitationAction::Cancel,
+                                        ));
+                                    }
+                                    let event_tx = route.event_slot.lock().await.clone();
+                                    handle_elicitation_request(
+                                        request,
+                                        responder,
+                                        permissions,
+                                        route.permission_scope,
+                                        event_tx,
+                                        route.prompt_state,
+                                        route.prompt_dispatch_lock,
+                                    )
+                                    .await
+                                } else {
+                                    responder.respond(CreateElicitationResponse::new(
+                                        ElicitationAction::Cancel,
                                     ))
                                 }
                             })?;
@@ -3005,6 +3132,81 @@ impl LegacySetModelRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonRpcResponse)]
 struct LegacySetModelResponse {}
 
+/// Qwen extends the standard permission response with a top-level `answers`
+/// object. Register the standard method through this lossless wrapper so
+/// ordinary agents keep the exact ACP response while Qwen receives its
+/// documented extension fields.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcRequest)]
+#[request(
+    method = "session/request_permission",
+    response = ExtendedRequestPermissionResponse
+)]
+#[serde(rename_all = "camelCase")]
+struct ExtendedRequestPermissionRequest {
+    session_id: SessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_call: Option<ToolCallUpdate>,
+    options: Vec<PermissionOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "_meta")]
+    meta: Option<agent_client_protocol::schema::v1::Meta>,
+    #[serde(flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonRpcResponse)]
+#[serde(rename_all = "camelCase")]
+struct ExtendedRequestPermissionResponse {
+    #[serde(flatten)]
+    standard: RequestPermissionResponse,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    answers: Option<IndexMap<String, String>>,
+}
+
+impl ExtendedRequestPermissionResponse {
+    fn new(outcome: RequestPermissionOutcome) -> Self {
+        Self {
+            standard: RequestPermissionResponse::new(outcome),
+            answers: None,
+        }
+    }
+
+    fn selected(option_id: impl Into<String>) -> Self {
+        Self::new(RequestPermissionOutcome::Selected(
+            SelectedPermissionOutcome::new(option_id.into()),
+        ))
+    }
+
+    fn cancelled() -> Self {
+        Self::new(RequestPermissionOutcome::Cancelled)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QwenQuestionOption {
+    label: String,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QwenQuestion {
+    #[serde(default)]
+    header: String,
+    question: String,
+    #[serde(default)]
+    multi_select: bool,
+    #[serde(default)]
+    options: Vec<QwenQuestionOption>,
+}
+
+#[derive(Debug, Clone)]
+struct QwenQuestionnaireContext {
+    questions: Vec<QwenQuestion>,
+    selected_option_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonRpcRequest)]
 #[request(method = "_x.ai/exit_plan_mode", response = GrokExitPlanModeResponse)]
 #[serde(rename_all = "camelCase")]
@@ -3128,7 +3330,9 @@ impl GrokAskUserResponse {
             return match submission.outcome {
                 AcpQuestionnaireOutcome::ChatAboutThis => Self::ChatAboutThis { partial_answers },
                 AcpQuestionnaireOutcome::SkipInterview => Self::SkipInterview { partial_answers },
-                AcpQuestionnaireOutcome::Accepted | AcpQuestionnaireOutcome::Cancelled => {
+                AcpQuestionnaireOutcome::Accepted
+                | AcpQuestionnaireOutcome::Declined
+                | AcpQuestionnaireOutcome::Cancelled => {
                     unreachable!("handled questionnaire outcome")
                 }
             };
@@ -3236,6 +3440,9 @@ fn validate_questionnaire_submission(
     context: &GrokQuestionnaireContext,
     submission: &AcpQuestionnaireSubmission,
 ) -> Result<String, String> {
+    if submission.outcome == AcpQuestionnaireOutcome::Declined {
+        return Err("decline is only valid for a standard elicitation".into());
+    }
     if matches!(
         submission.outcome,
         AcpQuestionnaireOutcome::ChatAboutThis | AcpQuestionnaireOutcome::SkipInterview
@@ -3301,6 +3508,401 @@ fn validate_questionnaire_submission(
     Ok(summary.join("\n"))
 }
 
+fn qwen_response_from_submission(
+    context: &QwenQuestionnaireContext,
+    submission: &AcpQuestionnaireSubmission,
+) -> Result<(String, ExtendedRequestPermissionResponse), String> {
+    match submission.outcome {
+        AcpQuestionnaireOutcome::Cancelled => {
+            return Ok((
+                String::new(),
+                ExtendedRequestPermissionResponse::cancelled(),
+            ));
+        }
+        AcpQuestionnaireOutcome::Accepted => {}
+        AcpQuestionnaireOutcome::Declined
+        | AcpQuestionnaireOutcome::ChatAboutThis
+        | AcpQuestionnaireOutcome::SkipInterview => {
+            return Err("unsupported outcome for a Qwen questionnaire".into());
+        }
+    }
+
+    let mut submitted = HashMap::new();
+    for answer in &submission.answers {
+        if context.questions.get(answer.question_index).is_none() {
+            return Err(format!(
+                "question index {} is out of range",
+                answer.question_index
+            ));
+        }
+        if submitted.insert(answer.question_index, answer).is_some() {
+            return Err(format!(
+                "question index {} was answered more than once",
+                answer.question_index
+            ));
+        }
+    }
+
+    let mut answers = IndexMap::new();
+    let mut summary = Vec::new();
+    for (question_index, question) in context.questions.iter().enumerate() {
+        let answer = submitted
+            .get(&question_index)
+            .ok_or_else(|| format!("question {question_index} is required"))?;
+        let mut seen = HashSet::new();
+        let mut values = Vec::new();
+        for option_index in &answer.selected_option_indexes {
+            if !seen.insert(*option_index) {
+                return Err(format!(
+                    "option index {option_index} was selected more than once"
+                ));
+            }
+            let option = question.options.get(*option_index).ok_or_else(|| {
+                format!("option index {option_index} is out of range for question {question_index}")
+            })?;
+            values.push(option.label.clone());
+        }
+        let other = answer
+            .other_text
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
+        if !question.multi_select && values.len() > 1 {
+            return Err(format!("question {question_index} only accepts one answer"));
+        }
+        if let Some(other) = other {
+            if question.multi_select {
+                values.push(other.to_string());
+            } else {
+                values = vec![other.to_string()];
+            }
+        }
+        if values.is_empty() {
+            return Err(format!("question {question_index} is required"));
+        }
+        let display = values.join(", ");
+        answers.insert(question_index.to_string(), display.clone());
+        summary.push(format!("{}: {display}", question.question));
+    }
+    Ok((
+        summary.join("\n"),
+        ExtendedRequestPermissionResponse {
+            standard: RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
+                SelectedPermissionOutcome::new(context.selected_option_id.clone()),
+            )),
+            answers: Some(answers),
+        },
+    ))
+}
+
+struct ValidatedElicitationValue {
+    property_id: String,
+    value: ElicitationContentValue,
+    display: String,
+}
+
+fn selected_elicitation_options<'a>(
+    question: &'a ElicitationQuestionContext,
+    answer: &AcpQuestionnaireAnswer,
+) -> Result<Vec<&'a ElicitationOptionContext>, String> {
+    let mut seen = HashSet::new();
+    answer
+        .selected_option_indexes
+        .iter()
+        .map(|option_index| {
+            if !seen.insert(*option_index) {
+                return Err(format!(
+                    "option index {option_index} was selected more than once"
+                ));
+            }
+            question.options.get(*option_index).ok_or_else(|| {
+                format!(
+                    "option index {option_index} is out of range for question {}",
+                    answer.question_index
+                )
+            })
+        })
+        .collect()
+}
+
+fn validate_string_elicitation(
+    schema: &agent_client_protocol::schema::v1::StringPropertySchema,
+    value: &str,
+) -> Result<(), String> {
+    let length = value.chars().count() as u32;
+    if length as usize > MAX_ELICITATION_TEXT_CHARS {
+        return Err("elicitation string exceeds the client safety limit".into());
+    }
+    if let Some(minimum) = schema.min_length {
+        if length < minimum {
+            return Err(format!("string is shorter than minimum length {minimum}"));
+        }
+    }
+    if let Some(maximum) = schema.max_length {
+        if length > maximum {
+            return Err(format!("string is longer than maximum length {maximum}"));
+        }
+    }
+    let allowed = schema
+        .one_of
+        .as_ref()
+        .map(|options| options.iter().map(|option| option.value.as_str()).collect())
+        .or_else(|| {
+            schema
+                .enum_values
+                .as_ref()
+                .map(|values| values.iter().map(String::as_str).collect())
+        });
+    if allowed.is_some_and(|allowed: Vec<&str>| !allowed.contains(&value)) {
+        return Err("value is not one of the elicitation enum options".into());
+    }
+    if let Some(pattern) = schema.pattern.as_deref() {
+        let pattern = regex::Regex::new(pattern)
+            .map_err(|error| format!("invalid elicitation regex pattern: {error}"))?;
+        if !pattern.is_match(value) {
+            return Err("value does not match the elicitation pattern".into());
+        }
+    }
+    if let Some(format) = schema.format.as_ref() {
+        match format {
+            StringFormat::Email => {
+                let email = regex::Regex::new(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+                    .expect("static email regex is valid");
+                if !email.is_match(value) {
+                    return Err("value is not a valid email address".into());
+                }
+            }
+            StringFormat::Uri => {
+                url::Url::parse(value)
+                    .map_err(|_| "value is not a valid absolute URI".to_string())?;
+            }
+            StringFormat::Date => {
+                chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                    .map_err(|_| "value is not a valid ISO date".to_string())?;
+            }
+            StringFormat::DateTime => {
+                chrono::DateTime::parse_from_rfc3339(value)
+                    .map_err(|_| "value is not a valid RFC 3339 date-time".to_string())?;
+            }
+            _ => return Err("unsupported elicitation string format".into()),
+        }
+    }
+    Ok(())
+}
+
+fn elicitation_scalar_value(
+    schema: &ElicitationPropertySchema,
+    value: &str,
+) -> Result<ElicitationContentValue, String> {
+    if value.chars().count() > MAX_ELICITATION_TEXT_CHARS {
+        return Err("elicitation value exceeds the client safety limit".into());
+    }
+    match schema {
+        ElicitationPropertySchema::String(schema) => {
+            validate_string_elicitation(schema, value)?;
+            Ok(value.to_string().into())
+        }
+        ElicitationPropertySchema::Number(schema) => {
+            let parsed = value
+                .parse::<f64>()
+                .map_err(|_| "elicitation value is not a number".to_string())?;
+            if !parsed.is_finite() {
+                return Err("elicitation number must be finite".into());
+            }
+            if let Some(minimum) = schema.minimum {
+                if parsed < minimum {
+                    return Err(format!("number is below minimum {minimum}"));
+                }
+            }
+            if let Some(maximum) = schema.maximum {
+                if parsed > maximum {
+                    return Err(format!("number is above maximum {maximum}"));
+                }
+            }
+            Ok(parsed.into())
+        }
+        ElicitationPropertySchema::Integer(schema) => {
+            let parsed = value
+                .parse::<i64>()
+                .map_err(|_| "elicitation value is not an integer".to_string())?;
+            if let Some(minimum) = schema.minimum {
+                if parsed < minimum {
+                    return Err(format!("integer is below minimum {minimum}"));
+                }
+            }
+            if let Some(maximum) = schema.maximum {
+                if parsed > maximum {
+                    return Err(format!("integer is above maximum {maximum}"));
+                }
+            }
+            Ok(parsed.into())
+        }
+        ElicitationPropertySchema::Boolean(_) => match value {
+            "true" => Ok(true.into()),
+            "false" => Ok(false.into()),
+            _ => Err("elicitation value is not a boolean".into()),
+        },
+        ElicitationPropertySchema::Array(_) => {
+            Err("multi-select elicitation requires option selections".into())
+        }
+        _ => Err("unsupported elicitation property schema".into()),
+    }
+}
+
+fn validate_elicitation_array(
+    schema: &agent_client_protocol::schema::v1::MultiSelectPropertySchema,
+    values: Vec<String>,
+) -> Result<ElicitationContentValue, String> {
+    let count = values.len() as u64;
+    if let Some(minimum) = schema.min_items {
+        if count < minimum {
+            return Err(format!(
+                "too few elicitation selections; minimum is {minimum}"
+            ));
+        }
+    }
+    if let Some(maximum) = schema.max_items {
+        if count > maximum {
+            return Err(format!(
+                "too many elicitation selections; maximum is {maximum}"
+            ));
+        }
+    }
+    Ok(values.into())
+}
+
+fn elicitation_answer_value(
+    question: &ElicitationQuestionContext,
+    answer: &AcpQuestionnaireAnswer,
+) -> Result<Option<ValidatedElicitationValue>, String> {
+    let other_text = answer
+        .other_text
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty());
+    if let Some(text) = other_text {
+        let (property_id, schema) = if let Some(other) = question.other.as_ref() {
+            (&other.id, &other.schema)
+        } else if question.options.is_empty() {
+            (&question.id, &question.schema)
+        } else {
+            return Err(format!(
+                "question {} does not allow a free-form answer",
+                answer.question_index
+            ));
+        };
+        let value = elicitation_scalar_value(schema, text)?;
+        return Ok(Some(ValidatedElicitationValue {
+            property_id: property_id.clone(),
+            value,
+            display: text.to_string(),
+        }));
+    }
+
+    let selected = selected_elicitation_options(question, answer)?;
+    if selected.is_empty() {
+        return Ok(None);
+    }
+
+    if !matches!(question.schema, ElicitationPropertySchema::Array(_)) && selected.len() > 1 {
+        return Err(format!(
+            "question {} only accepts one answer",
+            answer.question_index
+        ));
+    }
+    let values = selected
+        .iter()
+        .map(|option| option.value.clone())
+        .collect::<Vec<_>>();
+    let display = selected
+        .iter()
+        .map(|option| option.label.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let value = match &question.schema {
+        ElicitationPropertySchema::Array(schema) => validate_elicitation_array(schema, values)?,
+        _ => elicitation_scalar_value(&question.schema, &values[0])?,
+    };
+    Ok(Some(ValidatedElicitationValue {
+        property_id: question.id.clone(),
+        value,
+        display,
+    }))
+}
+
+fn accepted_elicitation_response(
+    context: &ElicitationFormContext,
+    submission: &AcpQuestionnaireSubmission,
+) -> Result<(String, CreateElicitationResponse), String> {
+    let mut submitted = HashMap::new();
+    for answer in &submission.answers {
+        if context.questions.get(answer.question_index).is_none() {
+            return Err(format!(
+                "question index {} is out of range",
+                answer.question_index
+            ));
+        }
+        if submitted.insert(answer.question_index, answer).is_some() {
+            return Err(format!(
+                "question index {} was answered more than once",
+                answer.question_index
+            ));
+        }
+    }
+
+    let mut content = BTreeMap::new();
+    let mut summary = Vec::new();
+    for (question_index, question) in context.questions.iter().enumerate() {
+        let value = submitted
+            .get(&question_index)
+            .map(|answer| elicitation_answer_value(question, answer))
+            .transpose()?
+            .flatten();
+        let Some(value) = value else {
+            if question.required {
+                return Err(format!(
+                    "required elicitation field `{}` is missing",
+                    question.id
+                ));
+            }
+            continue;
+        };
+        let display = if question.secret {
+            "••••••".to_string()
+        } else {
+            value.display
+        };
+        summary.push(format!("{}: {display}", question.title));
+        content.insert(value.property_id, value.value);
+    }
+    Ok((
+        summary.join("\n"),
+        CreateElicitationResponse::new(ElicitationAction::Accept(
+            ElicitationAcceptAction::new().content(content),
+        )),
+    ))
+}
+
+fn elicitation_response_from_submission(
+    context: &ElicitationFormContext,
+    submission: &AcpQuestionnaireSubmission,
+) -> Result<(String, CreateElicitationResponse), String> {
+    match submission.outcome {
+        AcpQuestionnaireOutcome::Accepted => accepted_elicitation_response(context, submission),
+        AcpQuestionnaireOutcome::Declined => Ok((
+            String::new(),
+            CreateElicitationResponse::new(ElicitationAction::Decline),
+        )),
+        AcpQuestionnaireOutcome::Cancelled => Ok((
+            String::new(),
+            CreateElicitationResponse::new(ElicitationAction::Cancel),
+        )),
+        AcpQuestionnaireOutcome::ChatAboutThis | AcpQuestionnaireOutcome::SkipInterview => {
+            Err("plan-only questionnaire action used for a standard elicitation".into())
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonRpcRequest)]
 #[request(method = "session/new", response = ExtendedNewSessionResponse)]
 #[serde(rename_all = "camelCase")]
@@ -3333,9 +3935,11 @@ struct ExtendedNewSessionResponse {
 }
 
 fn aqbot_client_capabilities() -> ClientCapabilities {
-    ClientCapabilities::new().session(ClientSessionCapabilities::new().config_options(
-        SessionConfigOptionsCapabilities::new().boolean(BooleanConfigOptionCapabilities::new()),
-    ))
+    ClientCapabilities::new()
+        .session(ClientSessionCapabilities::new().config_options(
+            SessionConfigOptionsCapabilities::new().boolean(BooleanConfigOptionCapabilities::new()),
+        ))
+        .elicitation(ElicitationCapabilities::new().form(ElicitationFormCapabilities::new()))
 }
 
 fn aqbot_initialize_request() -> InitializeRequest {
@@ -4852,9 +5456,847 @@ fn has_agent_permission_modes(modes: Option<&SessionModeState>) -> bool {
         })
 }
 
+fn elicitation_property_meta(
+    schema: &ElicitationPropertySchema,
+) -> Option<&agent_client_protocol::schema::v1::Meta> {
+    match schema {
+        ElicitationPropertySchema::String(value) => value.meta.as_ref(),
+        ElicitationPropertySchema::Number(value) => value.meta.as_ref(),
+        ElicitationPropertySchema::Integer(value) => value.meta.as_ref(),
+        ElicitationPropertySchema::Boolean(value) => value.meta.as_ref(),
+        ElicitationPropertySchema::Array(value) => value.meta.as_ref(),
+        _ => None,
+    }
+}
+
+fn elicitation_codex_meta<'a>(
+    schema: &'a ElicitationPropertySchema,
+    key: &str,
+) -> Option<&'a serde_json::Value> {
+    elicitation_property_meta(schema)?
+        .get("codex")?
+        .as_object()?
+        .get(key)
+}
+
+fn elicitation_property_text(schema: &ElicitationPropertySchema) -> (Option<&str>, Option<&str>) {
+    match schema {
+        ElicitationPropertySchema::String(value) => {
+            (value.title.as_deref(), value.description.as_deref())
+        }
+        ElicitationPropertySchema::Number(value) => {
+            (value.title.as_deref(), value.description.as_deref())
+        }
+        ElicitationPropertySchema::Integer(value) => {
+            (value.title.as_deref(), value.description.as_deref())
+        }
+        ElicitationPropertySchema::Boolean(value) => {
+            (value.title.as_deref(), value.description.as_deref())
+        }
+        ElicitationPropertySchema::Array(value) => {
+            (value.title.as_deref(), value.description.as_deref())
+        }
+        _ => (None, None),
+    }
+}
+
+fn elicitation_input_type(schema: &ElicitationPropertySchema, secret: bool) -> &'static str {
+    match schema {
+        ElicitationPropertySchema::String(_) if secret => "secret",
+        ElicitationPropertySchema::String(_) => "text",
+        ElicitationPropertySchema::Number(_) => "number",
+        ElicitationPropertySchema::Integer(_) => "integer",
+        ElicitationPropertySchema::Boolean(_) => "boolean",
+        ElicitationPropertySchema::Array(_) => "array",
+        _ => "unsupported",
+    }
+}
+
+fn enum_options(
+    values: impl IntoIterator<Item = (String, String, Option<String>)>,
+) -> Result<Vec<ElicitationOptionContext>, String> {
+    let mut seen = HashSet::new();
+    values
+        .into_iter()
+        .map(|(value, label, description)| {
+            if !seen.insert(value.clone()) {
+                return Err(format!("duplicate elicitation option value `{value}`"));
+            }
+            Ok(ElicitationOptionContext {
+                value,
+                label,
+                description,
+            })
+        })
+        .collect()
+}
+
+fn elicitation_property_options(
+    schema: &ElicitationPropertySchema,
+) -> Result<Vec<ElicitationOptionContext>, String> {
+    match schema {
+        ElicitationPropertySchema::String(value) => {
+            if let Some(options) = value.one_of.as_ref() {
+                return enum_options(options.iter().map(|option| {
+                    (
+                        option.value.clone(),
+                        option.title.clone(),
+                        option.description.clone(),
+                    )
+                }));
+            }
+            enum_options(
+                value
+                    .enum_values
+                    .clone()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|value| (value.clone(), value, None)),
+            )
+        }
+        ElicitationPropertySchema::Boolean(_) => enum_options([
+            ("true".into(), "true".into(), None),
+            ("false".into(), "false".into(), None),
+        ]),
+        ElicitationPropertySchema::Array(value) => match &value.items {
+            MultiSelectItems::String(items) => enum_options(
+                items
+                    .values
+                    .iter()
+                    .cloned()
+                    .map(|value| (value.clone(), value, None)),
+            ),
+            MultiSelectItems::Titled(items) => enum_options(items.options.iter().map(|option| {
+                (
+                    option.value.clone(),
+                    option.title.clone(),
+                    option.description.clone(),
+                )
+            })),
+            _ => Err("unsupported elicitation multi-select item schema".into()),
+        },
+        ElicitationPropertySchema::Number(_) | ElicitationPropertySchema::Integer(_) => Ok(vec![]),
+        _ => Err("unsupported elicitation property schema".into()),
+    }
+}
+
+fn codex_other_answer_target(schema: &ElicitationPropertySchema) -> Option<String> {
+    if elicitation_codex_meta(schema, "isOtherAnswer")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        return elicitation_codex_meta(schema, "questionId")?
+            .as_str()
+            .map(str::to_owned);
+    }
+    let marker = elicitation_property_meta(schema)?
+        .get("_askUserQuestionCustomAnswer")?
+        .as_object()?;
+    if !marker.get("isCustomAnswer")?.as_bool().unwrap_or(false) {
+        return None;
+    }
+    marker.get("questionId")?.as_str().map(str::to_owned)
+}
+
+fn normalized_elicitation_question(
+    question: &ElicitationQuestionContext,
+    request_message: &str,
+    single_question: bool,
+) -> serde_json::Value {
+    let (_, description) = elicitation_property_text(&question.schema);
+    let prompt = description.unwrap_or_else(|| {
+        if single_question {
+            request_message
+        } else {
+            &question.title
+        }
+    });
+    let mut normalized = serde_json::json!({
+        "id": question.id,
+        "title": question.title,
+        "question": prompt,
+        "description": description,
+        "required": question.required,
+        "inputType": elicitation_input_type(&question.schema, question.secret),
+        "secret": question.secret,
+        "allowOther": question.other.is_some(),
+        "otherPropertyId": question.other.as_ref().map(|other| other.id.as_str()),
+        "multiSelect": matches!(question.schema, ElicitationPropertySchema::Array(_)),
+        "options": question.options.iter().map(|option| serde_json::json!({
+            "label": option.label,
+            "description": option.description,
+            "value": option.value,
+        })).collect::<Vec<_>>(),
+    });
+    let encoded_schema = serde_json::to_value(&question.schema)
+        .expect("elicitation schema from serde is serializable");
+    if let Some(object) = normalized.as_object_mut() {
+        for key in [
+            "format",
+            "minLength",
+            "maxLength",
+            "pattern",
+            "minimum",
+            "maximum",
+            "minItems",
+            "maxItems",
+        ] {
+            if let Some(value) = encoded_schema.get(key) {
+                object.insert(key.into(), value.clone());
+            }
+        }
+        if !question.secret {
+            if let Some(value) = encoded_schema.get("default") {
+                object.insert("default".into(), value.clone());
+            }
+        }
+    }
+    normalized
+}
+
+const MAX_ELICITATION_PROPERTIES: usize = 64;
+const MAX_ELICITATION_OPTIONS: usize = 100;
+const MAX_ELICITATION_TEXT_CHARS: usize = 16_384;
+
+fn validate_elicitation_property_contract(
+    id: &str,
+    property: &ElicitationPropertySchema,
+) -> Result<(), String> {
+    let (title, description) = elicitation_property_text(property);
+    if [title, description]
+        .into_iter()
+        .flatten()
+        .any(|value| value.chars().count() > MAX_ELICITATION_TEXT_CHARS)
+    {
+        return Err(format!(
+            "elicitation property `{id}` contains oversized text"
+        ));
+    }
+    let options = elicitation_property_options(property)?;
+    if options.len() > MAX_ELICITATION_OPTIONS {
+        return Err(format!("elicitation property `{id}` has too many options"));
+    }
+    if options.iter().any(|option| {
+        option.value.chars().count() > MAX_ELICITATION_TEXT_CHARS
+            || option.label.chars().count() > MAX_ELICITATION_TEXT_CHARS
+            || option
+                .description
+                .as_deref()
+                .is_some_and(|value| value.chars().count() > MAX_ELICITATION_TEXT_CHARS)
+    }) {
+        return Err(format!(
+            "elicitation property `{id}` contains an oversized option"
+        ));
+    }
+    match property {
+        ElicitationPropertySchema::String(schema) => {
+            if schema
+                .min_length
+                .zip(schema.max_length)
+                .is_some_and(|(minimum, maximum)| minimum > maximum)
+            {
+                return Err(format!(
+                    "elicitation property `{id}` has invalid string bounds"
+                ));
+            }
+            if let Some(pattern) = schema.pattern.as_deref() {
+                if pattern.chars().count() > MAX_ELICITATION_TEXT_CHARS {
+                    return Err(format!(
+                        "elicitation property `{id}` has an oversized pattern"
+                    ));
+                }
+                regex::Regex::new(pattern).map_err(|error| {
+                    format!("elicitation property `{id}` has an invalid pattern: {error}")
+                })?;
+            }
+            if let Some(default) = schema.default.as_deref() {
+                if default.chars().count() > MAX_ELICITATION_TEXT_CHARS {
+                    return Err(format!(
+                        "elicitation property `{id}` has an oversized default"
+                    ));
+                }
+                validate_string_elicitation(schema, default)?;
+            }
+        }
+        ElicitationPropertySchema::Number(schema) => {
+            if schema
+                .minimum
+                .zip(schema.maximum)
+                .is_some_and(|(minimum, maximum)| minimum > maximum)
+            {
+                return Err(format!(
+                    "elicitation property `{id}` has invalid number bounds"
+                ));
+            }
+            if let Some(default) = schema.default {
+                elicitation_scalar_value(property, &default.to_string())?;
+            }
+        }
+        ElicitationPropertySchema::Integer(schema) => {
+            if schema
+                .minimum
+                .zip(schema.maximum)
+                .is_some_and(|(minimum, maximum)| minimum > maximum)
+            {
+                return Err(format!(
+                    "elicitation property `{id}` has invalid integer bounds"
+                ));
+            }
+            if let Some(default) = schema.default {
+                elicitation_scalar_value(property, &default.to_string())?;
+            }
+        }
+        ElicitationPropertySchema::Boolean(_) => {}
+        ElicitationPropertySchema::Array(schema) => {
+            if schema
+                .min_items
+                .zip(schema.max_items)
+                .is_some_and(|(minimum, maximum)| minimum > maximum)
+            {
+                return Err(format!(
+                    "elicitation property `{id}` has invalid array bounds"
+                ));
+            }
+            if schema
+                .min_items
+                .is_some_and(|minimum| minimum as usize > options.len())
+            {
+                return Err(format!(
+                    "elicitation property `{id}` has an impossible minimum"
+                ));
+            }
+            if let Some(default) = schema.default.as_ref() {
+                if default.len() > MAX_ELICITATION_OPTIONS {
+                    return Err(format!(
+                        "elicitation property `{id}` has an oversized default"
+                    ));
+                }
+                let allowed = options
+                    .iter()
+                    .map(|option| option.value.as_str())
+                    .collect::<HashSet<_>>();
+                let unique = default.iter().map(String::as_str).collect::<HashSet<_>>();
+                if unique.len() != default.len()
+                    || default
+                        .iter()
+                        .any(|value| !allowed.contains(value.as_str()))
+                {
+                    return Err(format!(
+                        "elicitation property `{id}` has an invalid default"
+                    ));
+                }
+                validate_elicitation_array(schema, default.clone())?;
+            }
+        }
+        _ => return Err(format!("unsupported elicitation property `{id}`")),
+    }
+    Ok(())
+}
+
+fn elicitation_form_context(schema: &ElicitationSchema) -> Result<ElicitationFormContext, String> {
+    if schema.properties.is_empty() || schema.properties.len() > MAX_ELICITATION_PROPERTIES {
+        return Err(format!(
+            "elicitation form must contain between 1 and {MAX_ELICITATION_PROPERTIES} properties"
+        ));
+    }
+    if [schema.title.as_deref(), schema.description.as_deref()]
+        .into_iter()
+        .flatten()
+        .any(|value| value.chars().count() > MAX_ELICITATION_TEXT_CHARS)
+    {
+        return Err("elicitation schema contains oversized text".into());
+    }
+    let required = schema
+        .required
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    if schema
+        .required
+        .as_deref()
+        .is_some_and(|required| required.len() != required.iter().collect::<HashSet<_>>().len())
+    {
+        return Err("elicitation schema contains duplicate required fields".into());
+    }
+    if required
+        .iter()
+        .any(|required_id| !schema.properties.contains_key(*required_id))
+    {
+        return Err("elicitation schema requires an unknown property".into());
+    }
+    let mut companions = HashMap::new();
+    for (id, property) in &schema.properties {
+        if id.trim().is_empty() || id.chars().count() > 256 {
+            return Err("elicitation property id is invalid".into());
+        }
+        validate_elicitation_property_contract(id, property)?;
+        if let Some(target) = codex_other_answer_target(property) {
+            if companions
+                .insert(target.clone(), (id.clone(), property.clone()))
+                .is_some()
+            {
+                return Err(format!("duplicate elicitation other field for `{target}`"));
+            }
+        }
+    }
+
+    let mut questions = Vec::new();
+    for (id, property) in &schema.properties {
+        if codex_other_answer_target(property).is_some() {
+            continue;
+        }
+        if matches!(property, ElicitationPropertySchema::Other(_)) {
+            return Err(format!("unsupported elicitation property `{id}`"));
+        }
+        let (title, _) = elicitation_property_text(property);
+        let other = companions
+            .remove(id)
+            .map(|(id, schema)| ElicitationOtherPropertyContext { id, schema });
+        let secret = elicitation_codex_meta(property, "isSecret")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            || other.as_ref().is_some_and(|other| {
+                elicitation_codex_meta(&other.schema, "isSecret")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            });
+        questions.push(ElicitationQuestionContext {
+            id: id.clone(),
+            title: title.unwrap_or(id).to_string(),
+            required: required.contains(id.as_str())
+                || other
+                    .as_ref()
+                    .is_some_and(|other| required.contains(other.id.as_str()))
+                || elicitation_codex_meta(property, "isOther")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            secret,
+            schema: property.clone(),
+            options: elicitation_property_options(property)?,
+            other,
+        });
+    }
+    if !companions.is_empty() {
+        return Err("elicitation other field references a missing question".into());
+    }
+    if questions.is_empty() {
+        return Err("elicitation form contains no supported questions".into());
+    }
+    Ok(ElicitationFormContext { questions })
+}
+
+fn normalize_elicitation_form(
+    request: &CreateElicitationRequest,
+    form: &ElicitationFormMode,
+) -> Result<(serde_json::Value, ElicitationFormContext), String> {
+    if request.message.chars().count() > MAX_ELICITATION_TEXT_CHARS {
+        return Err("elicitation message is too large".into());
+    }
+    let context = elicitation_form_context(&form.requested_schema)?;
+    let single_question = context.questions.len() == 1;
+    let raw = serde_json::json!({
+        "kind": "elicitation_form",
+        "message": request.message,
+        "questions": context.questions.iter().map(|question| {
+            normalized_elicitation_question(question, &request.message, single_question)
+        }).collect::<Vec<_>>(),
+    });
+    Ok((raw, context))
+}
+
+async fn handle_elicitation_request(
+    request: CreateElicitationRequest,
+    responder: Responder<CreateElicitationResponse>,
+    permissions: PermissionMap,
+    permission_scope: String,
+    event_tx: Option<mpsc::UnboundedSender<AcpEvent>>,
+    prompt_state: Arc<AtomicU8>,
+    prompt_dispatch_lock: Arc<Mutex<()>>,
+) -> Result<(), agent_client_protocol::Error> {
+    let prompt_dispatch = prompt_dispatch_lock.lock().await;
+    if prompt_state.load(Ordering::Acquire) == PROMPT_CANCEL_REQUESTED {
+        return responder.respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
+    }
+    let ElicitationMode::Form(form) = &request.mode else {
+        tracing::warn!("ACP agent requested an unsupported elicitation mode");
+        return responder.respond(CreateElicitationResponse::new(ElicitationAction::Decline));
+    };
+    let Some(event_tx) = event_tx else {
+        return responder.respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
+    };
+    let (raw, context) = match normalize_elicitation_form(&request, form) {
+        Ok(normalized) => normalized,
+        Err(error) => {
+            tracing::warn!(%error, "declining invalid ACP elicitation form");
+            return responder.respond(CreateElicitationResponse::new(ElicitationAction::Decline));
+        }
+    };
+    let tool_call_id = match request.scope() {
+        ElicitationScope::Session(scope) => scope.tool_call_id.as_ref().map(ToString::to_string),
+        _ => None,
+    };
+    let title = form
+        .requested_schema
+        .title
+        .clone()
+        .unwrap_or_else(|| request.message.clone());
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let options = context
+        .questions
+        .iter()
+        .enumerate()
+        .flat_map(|(question_index, question)| {
+            question
+                .options
+                .iter()
+                .enumerate()
+                .map(move |(option_index, option)| PermissionOptionView {
+                    option_id: format!("answer:{question_index}:{option_index}"),
+                    name: option.label.clone(),
+                    kind: Some("AllowOnce".into()),
+                    description: option.description.clone(),
+                })
+        })
+        .collect::<Vec<_>>();
+    let (sender, receiver) = oneshot::channel();
+    permissions.lock().await.insert(
+        request_id.clone(),
+        PendingPermission {
+            scope: permission_scope,
+            interaction_kind: AcpInteractionKind::Question,
+            tool_call_id: tool_call_id.clone(),
+            options: options.clone(),
+            questionnaire: Some(PendingQuestionnaire::Elicitation {
+                context,
+                sender: Some(sender),
+            }),
+            event_tx: event_tx.clone(),
+            sender: None,
+        },
+    );
+    if event_tx
+        .send(AcpEvent::PermissionRequest {
+            request_id: request_id.clone(),
+            interaction_kind: AcpInteractionKind::Question,
+            tool_call_id,
+            title: Some(title),
+            raw,
+            options,
+        })
+        .is_err()
+    {
+        permissions.lock().await.remove(&request_id);
+        return responder.respond(CreateElicitationResponse::new(ElicitationAction::Cancel));
+    }
+    drop(prompt_dispatch);
+
+    let response = match tokio::time::timeout(Duration::from_secs(600), receiver).await {
+        Ok(Ok(response)) => response,
+        _ => {
+            expire_permission(&permissions, &request_id).await;
+            CreateElicitationResponse::new(ElicitationAction::Cancel)
+        }
+    };
+    responder.respond(response)
+}
+
+fn standard_plan_review(raw: &serde_json::Value) -> Option<&str> {
+    let plan = raw
+        .pointer("/toolCall/rawInput/plan")
+        .or_else(|| raw.pointer("/tool_call/raw_input/plan"))?
+        .as_str()?
+        .trim();
+    if plan.is_empty() {
+        return None;
+    }
+    let codex_plan = raw
+        .pointer("/_meta/codex/kind")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("plan_review"));
+    let switch_mode = raw
+        .pointer("/toolCall/kind")
+        .or_else(|| raw.pointer("/tool_call/kind"))
+        .and_then(serde_json::Value::as_str)
+        .map(session_mode_token)
+        .is_some_and(|kind| kind == "switchmode");
+    (codex_plan || switch_mode).then_some(plan)
+}
+
+fn normalized_standard_plan_review(mut raw: serde_json::Value, plan: &str) -> serde_json::Value {
+    if let Some(object) = raw.as_object_mut() {
+        object.insert(
+            "kind".into(),
+            serde_json::Value::String("plan_review".into()),
+        );
+        object.insert("plan".into(), serde_json::Value::String(plan.into()));
+        object.insert("supportsFeedback".into(), serde_json::Value::Bool(false));
+    }
+    raw
+}
+
+fn qwen_questionnaire_context(
+    request: &ExtendedRequestPermissionRequest,
+) -> Result<Option<QwenQuestionnaireContext>, String> {
+    let Some(tool_call) = request.tool_call.as_ref() else {
+        return Ok(None);
+    };
+    let Some(meta) = tool_call.meta.as_ref() else {
+        return Ok(None);
+    };
+    let is_question = meta
+        .get("qwenInteractionKind")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("user_question"));
+    if !is_question {
+        return Ok(None);
+    }
+    let questions_value = meta
+        .get("qwenQuestions")
+        .cloned()
+        .or_else(|| {
+            tool_call
+                .fields
+                .raw_input
+                .as_ref()?
+                .get("questions")
+                .cloned()
+        })
+        .ok_or_else(|| "Qwen user_question is missing qwenQuestions".to_string())?;
+    let questions: Vec<QwenQuestion> = serde_json::from_value(questions_value)
+        .map_err(|error| format!("invalid Qwen questionnaire: {error}"))?;
+    if questions.is_empty() || questions.len() > 64 {
+        return Err("Qwen questionnaire must contain between 1 and 64 questions".into());
+    }
+    for question in &questions {
+        if question.question.trim().is_empty()
+            || question.options.len() > MAX_ELICITATION_OPTIONS
+            || question.question.chars().count() > MAX_ELICITATION_TEXT_CHARS
+            || question.header.chars().count() > MAX_ELICITATION_TEXT_CHARS
+            || question.options.iter().any(|option| {
+                option.label.chars().count() > MAX_ELICITATION_TEXT_CHARS
+                    || option
+                        .description
+                        .as_deref()
+                        .is_some_and(|value| value.chars().count() > MAX_ELICITATION_TEXT_CHARS)
+            })
+        {
+            return Err(
+                "Qwen questionnaire contains an invalid question or too many options".into(),
+            );
+        }
+    }
+    let selected_option_id = request
+        .options
+        .iter()
+        .find(|option| option.kind == PermissionOptionKind::AllowOnce)
+        .map(|option| option.option_id.to_string())
+        .ok_or_else(|| "Qwen questionnaire has no submit option".to_string())?;
+    Ok(Some(QwenQuestionnaireContext {
+        questions,
+        selected_option_id,
+    }))
+}
+
+fn normalized_qwen_questionnaire(context: &QwenQuestionnaireContext) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "ask_user_question",
+        "questions": context.questions.iter().enumerate().map(|(index, question)| {
+            serde_json::json!({
+                "id": index.to_string(),
+                "title": question.header,
+                "question": question.question,
+                "required": true,
+                "inputType": "text",
+                "secret": false,
+                "allowOther": true,
+                "multiSelect": question.multi_select,
+                "options": question.options.iter().map(|option| serde_json::json!({
+                    "label": option.label,
+                    "description": option.description,
+                    "value": option.label,
+                })).collect::<Vec<_>>(),
+            })
+        }).collect::<Vec<_>>(),
+    })
+}
+
+async fn handle_qwen_questionnaire(
+    request: &ExtendedRequestPermissionRequest,
+    context: QwenQuestionnaireContext,
+    responder: Responder<ExtendedRequestPermissionResponse>,
+    permissions: PermissionMap,
+    permission_scope: String,
+    event_tx: mpsc::UnboundedSender<AcpEvent>,
+    prompt_dispatch: tokio::sync::MutexGuard<'_, ()>,
+) -> Result<(), agent_client_protocol::Error> {
+    let tool_call = request
+        .tool_call
+        .as_ref()
+        .expect("Qwen questionnaire classification requires a tool call");
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let tool_call_id = tool_call.tool_call_id.to_string();
+    let raw = normalized_qwen_questionnaire(&context);
+    let options = request
+        .options
+        .iter()
+        .map(|option| PermissionOptionView {
+            option_id: option.option_id.to_string(),
+            name: option.name.clone(),
+            kind: Some(format!("{:?}", option.kind)),
+            description: None,
+        })
+        .collect::<Vec<_>>();
+    let (sender, receiver) = oneshot::channel();
+    permissions.lock().await.insert(
+        request_id.clone(),
+        PendingPermission {
+            scope: permission_scope,
+            interaction_kind: AcpInteractionKind::Question,
+            tool_call_id: Some(tool_call_id.clone()),
+            options: options.clone(),
+            questionnaire: Some(PendingQuestionnaire::Qwen {
+                context,
+                sender: Some(sender),
+            }),
+            event_tx: event_tx.clone(),
+            sender: None,
+        },
+    );
+    if event_tx
+        .send(AcpEvent::PermissionRequest {
+            request_id: request_id.clone(),
+            interaction_kind: AcpInteractionKind::Question,
+            tool_call_id: Some(tool_call_id),
+            title: tool_call.fields.title.clone(),
+            raw,
+            options,
+        })
+        .is_err()
+    {
+        permissions.lock().await.remove(&request_id);
+        return responder.respond(ExtendedRequestPermissionResponse::cancelled());
+    }
+    drop(prompt_dispatch);
+    let response = match tokio::time::timeout(Duration::from_secs(600), receiver).await {
+        Ok(Ok(response)) => response,
+        _ => {
+            expire_permission(&permissions, &request_id).await;
+            ExtendedRequestPermissionResponse::cancelled()
+        }
+    };
+    responder.respond(response)
+}
+
+fn validate_permission_options(options: &[PermissionOption]) -> Result<(), String> {
+    if options.is_empty() || options.len() > MAX_ELICITATION_OPTIONS {
+        return Err("permission request must contain between 1 and 100 options".into());
+    }
+    let mut ids = HashSet::new();
+    for option in options {
+        let option_id = option.option_id.to_string();
+        if option_id.trim().is_empty()
+            || option.name.trim().is_empty()
+            || option_id.chars().count() > 256
+            || option.name.chars().count() > MAX_ELICITATION_TEXT_CHARS
+        {
+            return Err("permission option id and name must not be empty".into());
+        }
+        if !ids.insert(option_id.clone()) {
+            return Err(format!("duplicate permission option id `{option_id}`"));
+        }
+        match option.kind {
+            PermissionOptionKind::AllowOnce
+            | PermissionOptionKind::AllowAlways
+            | PermissionOptionKind::RejectOnce
+            | PermissionOptionKind::RejectAlways => {}
+            _ => {
+                return Err(format!(
+                    "unsupported permission option kind for `{option_id}`"
+                ))
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_permission_metadata(request: &ExtendedRequestPermissionRequest) -> Result<(), String> {
+    let Some(meta) = request.meta.as_ref() else {
+        return Ok(());
+    };
+    if ["title", "prompt", "description", "tool"]
+        .into_iter()
+        .filter_map(|key| meta.get(key)?.as_str())
+        .any(|value| value.chars().count() > MAX_ELICITATION_TEXT_CHARS)
+    {
+        return Err("permission request metadata exceeds the client safety limit".into());
+    }
+    Ok(())
+}
+
+fn permission_request_title(
+    request: &ExtendedRequestPermissionRequest,
+    raw: &serde_json::Value,
+) -> Option<String> {
+    request
+        .tool_call
+        .as_ref()
+        .and_then(|tool_call| tool_call.fields.title.clone())
+        .or_else(|| {
+            let meta = request.meta.as_ref()?;
+            ["title", "prompt", "description", "tool"]
+                .into_iter()
+                .find_map(|key| meta.get(key)?.as_str().map(str::to_owned))
+        })
+        .or_else(|| {
+            raw.get("title")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+}
+
+fn normalized_generic_permission_raw(
+    mut raw: serde_json::Value,
+    request: &ExtendedRequestPermissionRequest,
+) -> serde_json::Value {
+    if request.tool_call.is_some() {
+        return raw;
+    }
+    let Some(meta) = request.meta.as_ref() else {
+        return raw;
+    };
+    let Some(object) = raw.as_object_mut() else {
+        return raw;
+    };
+    for key in ["title", "prompt", "description", "tool"] {
+        if !object.contains_key(key) {
+            if let Some(value) = meta.get(key) {
+                object.insert(key.into(), value.clone());
+            }
+        }
+    }
+    raw
+}
+
+fn should_auto_approve_permission(
+    auto: bool,
+    request: &ExtendedRequestPermissionRequest,
+    is_plan_review: bool,
+) -> bool {
+    auto && request.tool_call.is_some() && !is_plan_review
+}
+
+fn automatic_permission_option_id(options: &[PermissionOption]) -> Option<String> {
+    options
+        .iter()
+        .find(|option| option.kind == PermissionOptionKind::AllowOnce)
+        .map(|option| option.option_id.to_string())
+}
+
 async fn handle_permission_request(
-    request: RequestPermissionRequest,
-    responder: Responder<RequestPermissionResponse>,
+    request: ExtendedRequestPermissionRequest,
+    responder: Responder<ExtendedRequestPermissionResponse>,
     auto: bool,
     permissions: PermissionMap,
     permission_scope: String,
@@ -4864,47 +6306,60 @@ async fn handle_permission_request(
 ) -> Result<(), agent_client_protocol::Error> {
     let prompt_dispatch = prompt_dispatch_lock.lock().await;
     if prompt_state.load(Ordering::Acquire) == PROMPT_CANCEL_REQUESTED {
-        responder.respond(RequestPermissionResponse::new(
-            RequestPermissionOutcome::Cancelled,
-        ))?;
+        responder.respond(ExtendedRequestPermissionResponse::cancelled())?;
         return Ok(());
     }
-    if request.options.is_empty() {
-        tracing::warn!("ACP agent sent a permission request without any response options");
-        responder.respond(RequestPermissionResponse::new(
-            RequestPermissionOutcome::Cancelled,
-        ))?;
+    if let Err(error) = validate_permission_options(&request.options)
+        .and_then(|()| validate_permission_metadata(&request))
+    {
+        tracing::warn!(%error, "ACP agent sent an invalid permission request");
+        responder.respond(ExtendedRequestPermissionResponse::cancelled())?;
         return Ok(());
     }
 
-    if auto {
-        let option_id = request
-            .options
-            .iter()
-            .find(|option| option.kind == PermissionOptionKind::AllowAlways)
-            .or_else(|| {
-                request
-                    .options
-                    .iter()
-                    .find(|option| option.kind == PermissionOptionKind::AllowOnce)
-            })
-            .map(|option| option.option_id.clone());
+    let raw = serde_json::to_value(&request).map_err(|error| {
+        agent_client_protocol::util::internal_error(format!(
+            "failed to serialize permission request: {error}"
+        ))
+    })?;
+    let qwen_context = match qwen_questionnaire_context(&request) {
+        Ok(context) => context,
+        Err(error) => {
+            tracing::warn!(%error, "cancelling invalid Qwen questionnaire");
+            responder.respond(ExtendedRequestPermissionResponse::cancelled())?;
+            return Ok(());
+        }
+    };
+    if let Some(context) = qwen_context {
+        let Some(event_tx) = event_tx else {
+            responder.respond(ExtendedRequestPermissionResponse::cancelled())?;
+            return Ok(());
+        };
+        return handle_qwen_questionnaire(
+            &request,
+            context,
+            responder,
+            permissions,
+            permission_scope,
+            event_tx,
+            prompt_dispatch,
+        )
+        .await;
+    }
+    let plan = standard_plan_review(&raw).map(str::to_owned);
+
+    if should_auto_approve_permission(auto, &request, plan.is_some()) {
+        let option_id = automatic_permission_option_id(&request.options);
         if let Some(id) = option_id {
-            responder.respond(RequestPermissionResponse::new(
-                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(id)),
-            ))?;
+            responder.respond(ExtendedRequestPermissionResponse::selected(id))?;
         } else {
-            responder.respond(RequestPermissionResponse::new(
-                RequestPermissionOutcome::Cancelled,
-            ))?;
+            responder.respond(ExtendedRequestPermissionResponse::cancelled())?;
         }
         return Ok(());
     }
 
     let Some(event_tx) = event_tx else {
-        responder.respond(RequestPermissionResponse::new(
-            RequestPermissionOutcome::Cancelled,
-        ))?;
+        responder.respond(ExtendedRequestPermissionResponse::cancelled())?;
         return Ok(());
     };
 
@@ -4920,29 +6375,34 @@ async fn handle_permission_request(
         })
         .collect();
 
-    let raw = serde_json::to_value(&request).map_err(|error| {
-        agent_client_protocol::util::internal_error(format!(
-            "failed to serialize permission request: {error}"
-        ))
-    })?;
     let tool_call_raw = raw
         .get("toolCall")
         .or_else(|| raw.get("tool_call"))
-        .cloned()
-        .unwrap_or_else(|| {
-            serde_json::json!({
-                "toolCallId": request.tool_call.tool_call_id.to_string(),
-            })
-        });
-    let tool_call_id = request.tool_call.tool_call_id.to_string();
+        .cloned();
+    let tool_call_id = request
+        .tool_call
+        .as_ref()
+        .map(|tool_call| tool_call.tool_call_id.to_string());
     let tool_kind = tool_call_raw
-        .get("kind")
+        .as_ref()
+        .and_then(|raw| raw.get("kind"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
     let tool_status = tool_call_raw
-        .get("status")
+        .as_ref()
+        .and_then(|raw| raw.get("status"))
         .and_then(serde_json::Value::as_str)
         .map(str::to_owned);
+    let title = permission_request_title(&request, &raw);
+    let interaction_kind = if plan.is_some() {
+        AcpInteractionKind::PlanReview
+    } else {
+        AcpInteractionKind::Permission
+    };
+    let interaction_raw = plan
+        .as_deref()
+        .map(|plan| normalized_standard_plan_review(raw.clone(), plan))
+        .unwrap_or_else(|| normalized_generic_permission_raw(raw, &request));
     let (tx, rx) = oneshot::channel::<PermissionResolution>();
     {
         let mut map = permissions.lock().await;
@@ -4950,40 +6410,45 @@ async fn handle_permission_request(
             request_id.clone(),
             PendingPermission {
                 scope: permission_scope,
-                interaction_kind: AcpInteractionKind::Permission,
-                tool_call_id: Some(tool_call_id.clone()),
+                interaction_kind,
+                tool_call_id: tool_call_id.clone(),
                 options: options.clone(),
                 questionnaire: None,
                 event_tx: event_tx.clone(),
                 sender: Some(tx),
-                questionnaire_sender: None,
             },
         );
     }
-    if event_tx
-        .send(AcpEvent::ToolCall {
-            tool_call_id: tool_call_id.clone(),
-            title: request.tool_call.fields.title.clone(),
-            kind: tool_kind,
-            status: tool_status,
-            raw: tool_call_raw,
-        })
-        .is_err()
+    let tool_event_failed = if interaction_kind == AcpInteractionKind::Permission {
+        match (tool_call_id.as_ref(), tool_call_raw) {
+            (Some(tool_call_id), Some(tool_call_raw)) => event_tx
+                .send(AcpEvent::ToolCall {
+                    tool_call_id: tool_call_id.clone(),
+                    title: title.clone(),
+                    kind: tool_kind,
+                    status: tool_status,
+                    raw: tool_call_raw,
+                })
+                .is_err(),
+            _ => false,
+        }
+    } else {
+        false
+    };
+    if tool_event_failed
         || event_tx
             .send(AcpEvent::PermissionRequest {
                 request_id: request_id.clone(),
-                interaction_kind: AcpInteractionKind::Permission,
-                tool_call_id: Some(tool_call_id),
-                title: request.tool_call.fields.title.clone(),
-                raw,
+                interaction_kind,
+                tool_call_id,
+                title,
+                raw: interaction_raw,
                 options: options.clone(),
             })
             .is_err()
     {
         permissions.lock().await.remove(&request_id);
-        responder.respond(RequestPermissionResponse::new(
-            RequestPermissionOutcome::Cancelled,
-        ))?;
+        responder.respond(ExtendedRequestPermissionResponse::cancelled())?;
         return Ok(());
     }
     drop(prompt_dispatch);
@@ -4991,17 +6456,13 @@ async fn handle_permission_request(
     let selected = tokio::time::timeout(std::time::Duration::from_secs(600), rx).await;
     match selected {
         Ok(Ok(resolution)) => {
-            responder.respond(RequestPermissionResponse::new(
-                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                    resolution.option_id,
-                )),
+            responder.respond(ExtendedRequestPermissionResponse::selected(
+                resolution.option_id,
             ))?;
         }
         _ => {
             expire_permission(&permissions, &request_id).await;
-            responder.respond(RequestPermissionResponse::new(
-                RequestPermissionOutcome::Cancelled,
-            ))?;
+            responder.respond(ExtendedRequestPermissionResponse::cancelled())?;
         }
     }
     Ok(())
@@ -5061,6 +6522,7 @@ async fn handle_grok_exit_plan_mode(
             "title".into(),
             serde_json::Value::String("Plan review".into()),
         );
+        object.insert("supportsFeedback".into(), serde_json::Value::Bool(true));
     }
     let (tx, rx) = oneshot::channel::<PermissionResolution>();
     permissions.lock().await.insert(
@@ -5073,7 +6535,6 @@ async fn handle_grok_exit_plan_mode(
             questionnaire: None,
             event_tx: event_tx.clone(),
             sender: Some(tx),
-            questionnaire_sender: None,
         },
     );
     // Do NOT emit AcpEvent::Plan here — that is reserved for structured
@@ -5183,13 +6644,15 @@ async fn handle_grok_ask_user(
             interaction_kind: AcpInteractionKind::Question,
             tool_call_id: request.tool_call_id.clone(),
             options: options.clone(),
-            questionnaire: Some(GrokQuestionnaireContext {
-                questions: request.questions.clone(),
-                mode: request.mode,
+            questionnaire: Some(PendingQuestionnaire::Grok {
+                context: GrokQuestionnaireContext {
+                    questions: request.questions.clone(),
+                    mode: request.mode,
+                },
+                sender: Some(tx),
             }),
             event_tx: event_tx.clone(),
             sender: None,
-            questionnaire_sender: Some(tx),
         },
     );
     if event_tx
@@ -5559,7 +7022,411 @@ fn extract_text_content(value: &serde_json::Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::PromptCapabilities;
+    use agent_client_protocol::schema::v1::{PromptCapabilities, StringPropertySchema};
+
+    fn form_request(
+        message: &str,
+        requested_schema: serde_json::Value,
+    ) -> CreateElicitationRequest {
+        serde_json::from_value(serde_json::json!({
+            "sessionId": "session-1",
+            "toolCallId": "question-1",
+            "mode": "form",
+            "message": message,
+            "requestedSchema": requested_schema,
+        }))
+        .expect("valid test elicitation")
+    }
+
+    fn normalized_form(
+        request: &CreateElicitationRequest,
+    ) -> Result<(serde_json::Value, ElicitationFormContext), String> {
+        let ElicitationMode::Form(form) = &request.mode else {
+            panic!("test request uses form mode");
+        };
+        normalize_elicitation_form(request, form)
+    }
+
+    #[test]
+    fn initialize_advertises_form_elicitation_but_not_unimplemented_plan_operations() {
+        let initialize =
+            serde_json::to_value(aqbot_initialize_request()).expect("serialize initialize request");
+        assert_eq!(
+            initialize.pointer("/clientCapabilities/elicitation/form"),
+            Some(&serde_json::json!({}))
+        );
+        assert!(initialize
+            .pointer("/clientCapabilities/session/plan")
+            .is_none());
+    }
+
+    #[test]
+    fn claude_companion_is_optional_and_custom_answer_wins() {
+        let request = form_request(
+            "Choose a deployment target",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "title": "Target",
+                        "minLength": 1,
+                        "oneOf": [{ "const": "cloud", "title": "Cloud" }]
+                    },
+                    "target_custom": {
+                        "type": "string",
+                        "title": "Custom",
+                        "_meta": {
+                            "_askUserQuestionCustomAnswer": {
+                                "questionId": "target",
+                                "isCustomAnswer": true
+                            }
+                        }
+                    }
+                }
+            }),
+        );
+        let (raw, context) = normalized_form(&request).expect("normalize Claude form");
+        assert_eq!(context.questions.len(), 1);
+        assert!(!context.questions[0].required, "Claude permits skipping");
+        assert_eq!(raw["questions"][0]["question"], request.message);
+        assert_eq!(raw["questions"][0]["allowOther"], true);
+        assert_eq!(raw["questions"][0]["minLength"], 1);
+
+        let submission = AcpQuestionnaireSubmission {
+            outcome: AcpQuestionnaireOutcome::Accepted,
+            answers: vec![AcpQuestionnaireAnswer {
+                question_index: 0,
+                selected_option_indexes: vec![0],
+                other_text: Some("on-prem".into()),
+            }],
+        };
+        let (_, response) = elicitation_response_from_submission(&context, &submission)
+            .expect("custom answer overrides selected option");
+        assert_eq!(
+            serde_json::to_value(response).expect("serialize accepted form"),
+            serde_json::json!({
+                "action": "accept",
+                "content": { "target_custom": "on-prem" }
+            })
+        );
+    }
+
+    #[test]
+    fn codex_other_union_is_required_and_secret_default_never_leaks() {
+        let request = form_request(
+            "Enter the token",
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "token": {
+                        "type": "string",
+                        "title": "Token",
+                        "default": "managed",
+                        "_meta": { "codex": { "isOther": true, "isSecret": true } },
+                        "oneOf": [{ "const": "managed", "title": "Managed" }]
+                    },
+                    "token__other": {
+                        "type": "string",
+                        "_meta": { "codex": {
+                            "questionId": "token",
+                            "isOtherAnswer": true,
+                            "isSecret": true
+                        } }
+                    }
+                }
+            }),
+        );
+        let (raw, context) = normalized_form(&request).expect("normalize Codex form");
+        assert!(context.questions[0].required);
+        assert!(raw["questions"][0].get("default").is_none());
+        let missing = AcpQuestionnaireSubmission {
+            outcome: AcpQuestionnaireOutcome::Accepted,
+            answers: vec![],
+        };
+        assert!(elicitation_response_from_submission(&context, &missing)
+            .expect_err("Codex union requires base or custom answer")
+            .contains("required"));
+        let secret = AcpQuestionnaireSubmission {
+            outcome: AcpQuestionnaireOutcome::Accepted,
+            answers: vec![AcpQuestionnaireAnswer {
+                question_index: 0,
+                selected_option_indexes: vec![],
+                other_text: Some("actual-secret".into()),
+            }],
+        };
+        let (summary, response) =
+            elicitation_response_from_submission(&context, &secret).expect("accept secret answer");
+        assert_eq!(summary, "Token: ••••••");
+        assert!(!summary.contains("actual-secret"));
+        assert_eq!(
+            serde_json::to_value(response).expect("serialize secret response")["content"]
+                ["token__other"],
+            "actual-secret"
+        );
+    }
+
+    #[test]
+    fn elicitation_decline_and_cancel_remain_distinct_wire_actions() {
+        let request = form_request(
+            "Optional note",
+            serde_json::json!({
+                "type": "object",
+                "properties": { "note": { "type": "string" } }
+            }),
+        );
+        let (_, context) = normalized_form(&request).expect("normalize optional form");
+        for (outcome, action) in [
+            (AcpQuestionnaireOutcome::Declined, "decline"),
+            (AcpQuestionnaireOutcome::Cancelled, "cancel"),
+        ] {
+            let (_, response) = elicitation_response_from_submission(
+                &context,
+                &AcpQuestionnaireSubmission {
+                    outcome,
+                    answers: vec![],
+                },
+            )
+            .expect("terminal form response");
+            assert_eq!(
+                serde_json::to_value(response).expect("serialize form response"),
+                serde_json::json!({ "action": action })
+            );
+        }
+    }
+
+    #[test]
+    fn elicitation_rejects_invalid_constraints_and_oversized_schemas() {
+        let invalid_pattern = form_request(
+            "Value",
+            serde_json::json!({
+                "type": "object",
+                "properties": { "value": { "type": "string", "pattern": "[" } }
+            }),
+        );
+        assert!(normalized_form(&invalid_pattern).is_err());
+
+        let email = form_request(
+            "Email",
+            serde_json::json!({
+                "type": "object",
+                "properties": { "email": { "type": "string", "format": "email" } },
+                "required": ["email"]
+            }),
+        );
+        let (_, context) = normalized_form(&email).expect("supported email format");
+        let invalid_email = AcpQuestionnaireSubmission {
+            outcome: AcpQuestionnaireOutcome::Accepted,
+            answers: vec![AcpQuestionnaireAnswer {
+                question_index: 0,
+                selected_option_indexes: vec![],
+                other_text: Some("not-an-email".into()),
+            }],
+        };
+        assert!(elicitation_response_from_submission(&context, &invalid_email).is_err());
+
+        let mut schema = ElicitationSchema::new();
+        for index in 0..=MAX_ELICITATION_PROPERTIES {
+            schema.properties.insert(
+                format!("property_{index}"),
+                ElicitationPropertySchema::String(StringPropertySchema::new()),
+            );
+        }
+        assert!(elicitation_form_context(&schema).is_err());
+    }
+
+    #[test]
+    fn qwen_answers_use_question_indexes_and_join_multi_select_values() {
+        let context = QwenQuestionnaireContext {
+            questions: vec![
+                QwenQuestion {
+                    header: "Language".into(),
+                    question: "Language?".into(),
+                    multi_select: false,
+                    options: vec![QwenQuestionOption {
+                        label: "TypeScript".into(),
+                        description: None,
+                    }],
+                },
+                QwenQuestion {
+                    header: "Checks".into(),
+                    question: "Checks?".into(),
+                    multi_select: true,
+                    options: vec![QwenQuestionOption {
+                        label: "Unit tests".into(),
+                        description: None,
+                    }],
+                },
+            ],
+            selected_option_id: "proceed_once".into(),
+        };
+        let submission = AcpQuestionnaireSubmission {
+            outcome: AcpQuestionnaireOutcome::Accepted,
+            answers: vec![
+                AcpQuestionnaireAnswer {
+                    question_index: 0,
+                    selected_option_indexes: vec![0],
+                    other_text: None,
+                },
+                AcpQuestionnaireAnswer {
+                    question_index: 1,
+                    selected_option_indexes: vec![0],
+                    other_text: Some("Security scan".into()),
+                },
+            ],
+        };
+        let (_, response) =
+            qwen_response_from_submission(&context, &submission).expect("valid Qwen response");
+        assert_eq!(
+            serde_json::to_value(response).expect("serialize Qwen response"),
+            serde_json::json!({
+                "outcome": { "outcome": "selected", "optionId": "proceed_once" },
+                "answers": { "0": "TypeScript", "1": "Unit tests, Security scan" }
+            })
+        );
+    }
+
+    #[test]
+    fn standard_plan_classifier_requires_verified_metadata_or_switch_mode() {
+        let codex = serde_json::json!({
+            "toolCall": { "kind": "think", "rawInput": { "plan": "Codex plan" } },
+            "_meta": { "codex": { "kind": "plan_review" } }
+        });
+        let claude = serde_json::json!({
+            "toolCall": { "kind": "switch_mode", "rawInput": { "plan": "Claude plan" } }
+        });
+        let ordinary = serde_json::json!({
+            "toolCall": { "kind": "execute", "rawInput": { "plan": "not a review" } }
+        });
+        assert_eq!(standard_plan_review(&codex), Some("Codex plan"));
+        assert_eq!(standard_plan_review(&claude), Some("Claude plan"));
+        assert_eq!(standard_plan_review(&ordinary), None);
+        assert_eq!(
+            normalized_standard_plan_review(claude, "Claude plan")["supportsFeedback"],
+            false
+        );
+    }
+
+    #[test]
+    fn request_permission_without_tool_call_is_preserved_for_manual_review() {
+        let wire = serde_json::json!({
+            "sessionId": "session-autohand",
+            "options": [
+                { "optionId": "run", "name": "Run", "kind": "allow_once" },
+                { "optionId": "cancel", "name": "Cancel", "kind": "reject_once" }
+            ],
+            "_meta": {
+                "title": "Choose execution mode",
+                "prompt": "Select how Autohand should continue",
+                "description": "This choice is not a tool execution",
+                "tool": "mode_picker"
+            }
+        });
+        let parsed: ExtendedRequestPermissionRequest =
+            serde_json::from_value(wire.clone()).expect("off-spec but unambiguous picker parses");
+        assert!(parsed.tool_call.is_none());
+        assert_eq!(
+            permission_request_title(&parsed, &wire).as_deref(),
+            Some("Choose execution mode")
+        );
+        assert_eq!(
+            parsed.meta.as_ref().and_then(|meta| meta.get("prompt")),
+            wire.pointer("/_meta/prompt")
+        );
+        assert!(!should_auto_approve_permission(true, &parsed, false));
+        assert_eq!(
+            serde_json::to_value(&parsed).expect("re-serialize picker"),
+            wire
+        );
+        let normalized = normalized_generic_permission_raw(wire, &parsed);
+        assert_eq!(normalized["prompt"], "Select how Autohand should continue");
+        assert_eq!(
+            normalized["description"],
+            "This choice is not a tool execution"
+        );
+    }
+
+    #[test]
+    fn automatic_permission_never_selects_persistent_allow_always() {
+        let allow_always = PermissionOption::new(
+            "allow-always",
+            "Always allow",
+            PermissionOptionKind::AllowAlways,
+        );
+        let allow_once =
+            PermissionOption::new("allow-once", "Allow once", PermissionOptionKind::AllowOnce);
+        assert_eq!(
+            automatic_permission_option_id(&[allow_always.clone(), allow_once]),
+            Some("allow-once".into())
+        );
+        assert_eq!(automatic_permission_option_id(&[allow_always]), None);
+    }
+
+    #[test]
+    fn qwen_questionnaire_submit_never_selects_allow_always() {
+        let request = |options: serde_json::Value| {
+            serde_json::from_value::<ExtendedRequestPermissionRequest>(serde_json::json!({
+                "sessionId": "session-qwen",
+                "toolCall": {
+                    "toolCallId": "question-qwen",
+                    "kind": "think",
+                    "_meta": {
+                        "qwenInteractionKind": "user_question",
+                        "qwenQuestions": [{
+                            "header": "Language",
+                            "question": "Which language?",
+                            "options": [{ "label": "Rust" }]
+                        }]
+                    }
+                },
+                "options": options
+            }))
+            .expect("parse Qwen permission extension")
+        };
+        let mixed = request(serde_json::json!([
+            { "optionId": "persist", "name": "Always", "kind": "allow_always" },
+            { "optionId": "submit", "name": "Submit", "kind": "allow_once" }
+        ]));
+        assert_eq!(
+            qwen_questionnaire_context(&mixed)
+                .expect("valid Qwen questionnaire")
+                .expect("Qwen questionnaire context")
+                .selected_option_id,
+            "submit"
+        );
+        let persistent_only = request(serde_json::json!([
+            { "optionId": "persist", "name": "Always", "kind": "allow_always" }
+        ]));
+        assert!(qwen_questionnaire_context(&persistent_only).is_err());
+    }
+
+    #[test]
+    fn extended_permission_response_keeps_standard_wire_and_options_are_unique() {
+        assert_eq!(
+            serde_json::to_value(ExtendedRequestPermissionResponse::selected("run"))
+                .expect("serialize selected permission"),
+            serde_json::json!({
+                "outcome": { "outcome": "selected", "optionId": "run" }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ExtendedRequestPermissionResponse::cancelled())
+                .expect("serialize cancelled permission"),
+            serde_json::json!({ "outcome": { "outcome": "cancelled" } })
+        );
+        let duplicate: ExtendedRequestPermissionRequest =
+            serde_json::from_value(serde_json::json!({
+                "sessionId": "session-1",
+                "options": [
+                    { "optionId": "same", "name": "One", "kind": "allow_once" },
+                    { "optionId": "same", "name": "Two", "kind": "reject_once" }
+                ]
+            }))
+            .expect("parse duplicate option request");
+        assert!(validate_permission_options(&duplicate.options)
+            .expect_err("duplicate option ids must be rejected")
+            .contains("duplicate"));
+    }
 
     fn pending_permission(
         scope: &str,
@@ -5580,7 +7447,6 @@ mod tests {
                 questionnaire: None,
                 event_tx,
                 sender: Some(sender),
-                questionnaire_sender: None,
             },
             receiver,
         )
@@ -5600,23 +7466,25 @@ mod tests {
                 interaction_kind: AcpInteractionKind::Question,
                 tool_call_id: Some("question-tool-1".into()),
                 options: vec![],
-                questionnaire: Some(GrokQuestionnaireContext {
-                    questions: vec![GrokQuestion {
-                        question: "Which layers?".into(),
-                        multi_select: true,
-                        options: vec![GrokQuestionOption {
-                            label: "Frontend".into(),
-                            description: None,
-                            preview: None,
-                            id: Some("ui".into()),
+                questionnaire: Some(PendingQuestionnaire::Grok {
+                    context: GrokQuestionnaireContext {
+                        questions: vec![GrokQuestion {
+                            question: "Which layers?".into(),
+                            multi_select: true,
+                            options: vec![GrokQuestionOption {
+                                label: "Frontend".into(),
+                                description: None,
+                                preview: None,
+                                id: Some("ui".into()),
+                            }],
+                            id: Some("layers".into()),
                         }],
-                        id: Some("layers".into()),
-                    }],
-                    mode: GrokAskUserMode::Default,
+                        mode: GrokAskUserMode::Default,
+                    },
+                    sender: Some(sender),
                 }),
                 event_tx,
                 sender: None,
-                questionnaire_sender: Some(sender),
             },
             receiver,
         )
@@ -5724,11 +7592,11 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let (mut pending, response_rx) = pending_questionnaire("scope-1", event_tx);
         pending.interaction_kind = AcpInteractionKind::PlanReview;
-        pending
-            .questionnaire
-            .as_mut()
-            .expect("questionnaire context")
-            .mode = GrokAskUserMode::Plan;
+        let Some(PendingQuestionnaire::Grok { context, .. }) = pending.questionnaire.as_mut()
+        else {
+            panic!("Grok questionnaire context");
+        };
+        context.mode = GrokAskUserMode::Plan;
         runtime
             .permissions
             .lock()
@@ -6249,6 +8117,9 @@ mod tests {
                         "writeTextFile": false
                     },
                     "terminal": false,
+                    "elicitation": {
+                        "form": {}
+                    },
                     "session": {
                         "configOptions": {
                             "boolean": {}

@@ -138,4 +138,36 @@ describe('AcpToolCallNode', () => {
     expect(screen.getByText('跳过提问并开始规划')).toBeInTheDocument();
     expect(screen.queryByText('aqbot:questionnaire:skip_interview')).not.toBeInTheDocument();
   });
+
+  it('localizes a declined questionnaire result without exposing its marker', () => {
+    useAcpStore.setState({
+      toolCalls: {
+        'thread-1:assistant-3:tool-9': {
+          threadId: 'thread-1',
+          messageId: 'assistant-3',
+          toolCallId: 'tool-9',
+          toolName: 'elicitation_form',
+          status: 'success',
+          output: 'aqbot:questionnaire:declined',
+        },
+      },
+    });
+    const props = {
+      node: {
+        type: 'tool-call',
+        content: 'standard form',
+        attrs: { id: 'tool-9', message: 'assistant-3', name: 'elicitation_form' },
+      },
+    } as unknown as ComponentProps<typeof AcpToolCallNode>;
+
+    render(
+      <App>
+        <AcpToolCallNode {...props} />
+      </App>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /elicitation_form.*已完成/i }));
+    expect(screen.getByText('拒绝回答')).toBeInTheDocument();
+    expect(screen.queryByText('aqbot:questionnaire:declined')).not.toBeInTheDocument();
+  });
 });

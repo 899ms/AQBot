@@ -479,7 +479,6 @@ describe('acpStore lifecycle', () => {
         [threadId]: { entries: [{ content: 'Inspect', status: 'pending' }], completed: 0, total: 1 },
       },
       planDocumentsByThread: { [threadId]: [] },
-      alwaysAllowedToolsByThread: { [threadId]: ['execute'] },
       spawnModelByThread: { [threadId]: 'model-a', [draftKey]: 'model-a' },
       spawnReasoningByThread: { [threadId]: 'high', [draftKey]: 'high' },
       messagesLoadingByThread: { [threadId]: true },
@@ -537,7 +536,6 @@ describe('acpStore lifecycle', () => {
     expect(state.cancellingByThread[threadId]).toBeUndefined();
     expect(state.planByThread[threadId]).toBeUndefined();
     expect(state.planDocumentsByThread[threadId]).toBeUndefined();
-    expect(state.alwaysAllowedToolsByThread[threadId]).toBeUndefined();
     expect(state.messagesLoadingByThread[threadId]).toBeUndefined();
     expect(state.messagesErrorByThread[threadId]).toBeUndefined();
     expect(state.pendingPermissions['permission-project-deleted']).toBeUndefined();
