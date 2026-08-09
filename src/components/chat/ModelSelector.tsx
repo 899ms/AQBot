@@ -8,6 +8,7 @@ import { SmartProviderIcon } from '@/lib/providerIcons';
 import { getShortcutBinding, formatShortcutForDisplay } from '@/lib/shortcuts';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { getVisibleModelCapabilities } from '@/lib/modelCapabilities';
+import { sortModelsByVersionDesc } from '@/lib/modelVersionSort';
 import type { ModelCapability, Model } from '@/types';
 import { ConversationModelIcon } from './ConversationModelIcon';
 import { usePageSuspendCleanup } from '@/components/layout/PageLifecycle';
@@ -172,21 +173,24 @@ export function ModelSelector({ style, onSelect, overrideCurrentModel, children,
       );
   }, [pinnedModels, allEnabledModels, search]);
 
-  // Filtered providers and models (excluding search)
+  // Filtered providers and models (excluding search); newer model versions first
   const filteredProviders = useMemo(() => {
     const q = search.toLowerCase().trim();
     return providers
       .filter((p) => p.enabled)
       .map((p) => ({
         ...p,
-        models: p.models.filter(
-          (m) => {
-            if (!m.enabled) return false;
-            if (!isSelectableConversationModel(m, showImageModels)) return false;
-            if (excludeModelKeys?.includes(`${p.id}::${m.model_id}`)) return false;
-            if (!q) return true;
-            return m.name.toLowerCase().includes(q) || m.model_id.toLowerCase().includes(q) || p.name.toLowerCase().includes(q);
-          },
+        models: sortModelsByVersionDesc(
+          p.models.filter(
+            (m) => {
+              if (!m.enabled) return false;
+              if (!isSelectableConversationModel(m, showImageModels)) return false;
+              if (excludeModelKeys?.includes(`${p.id}::${m.model_id}`)) return false;
+              if (!q) return true;
+              return m.name.toLowerCase().includes(q) || m.model_id.toLowerCase().includes(q) || p.name.toLowerCase().includes(q);
+            },
+          ),
+          (m) => m.model_id,
         ),
       }))
       .filter((p) => p.models.length > 0);

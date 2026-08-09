@@ -56,6 +56,11 @@ import {
 } from './ModelMetadataSyncModal';
 import { ModelSyncPickerModal, type ModelSyncEntry } from './ModelSyncPickerModal';
 import { deriveModelGroupName, formatTokenCount, getModelGroupName } from '@/lib/modelSync';
+import {
+  compareModelGroupThenVersionDesc,
+  sortGroupKeysByVersionDesc,
+  sortModelsByVersionDesc,
+} from '@/lib/modelVersionSort';
 import { getBuiltinProviderWebsite, openExternalUrl } from '@/lib/providerWebsites';
 
 const { Text, Title } = Typography;
@@ -747,8 +752,10 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
       const syncEntries = result.candidates
         .map((candidate) => ({ ...candidate, model: candidate.proposed_model }))
         .sort((a, b) =>
-          getModelGroupName(a.model).localeCompare(getModelGroupName(b.model))
-          || (a.model.name || a.model.model_id).localeCompare(b.model.name || b.model.model_id),
+          compareModelGroupThenVersionDesc(
+            { group: getModelGroupName(a.model), id: a.model.model_id },
+            { group: getModelGroupName(b.model), id: b.model.model_id },
+          ),
         );
       setPickerModels(syncEntries);
       setPickerCatalog(result.catalog);
@@ -1327,11 +1334,17 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
       if (!groups[groupKey]) groups[groupKey] = [];
       groups[groupKey].push(model);
     }
+    for (const groupKey of Object.keys(groups)) {
+      groups[groupKey] = sortModelsByVersionDesc(groups[groupKey], (m) => m.model_id);
+    }
     return groups;
   }, [filteredModels]);
 
   // Track expanded groups for collapse/expand all
-  const groupKeys = useMemo(() => Object.keys(groupedModels), [groupedModels]);
+  const groupKeys = useMemo(
+    () => sortGroupKeysByVersionDesc(Object.keys(groupedModels)),
+    [groupedModels],
+  );
   const modelGroupOptions = useMemo(
     () => groupKeys.map((group) => ({ value: group })),
     [groupKeys],
@@ -1358,9 +1371,9 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
   type ModelListRow = { type: 'group'; group: string; models: Model[] } | { type: 'model'; model: Model; group: string } | { type: 'spacer'; beforeGroup: string };
   const flatModelRows = useMemo<ModelListRow[]>(() => {
     const rows: ModelListRow[] = [];
-    const entries = Object.entries(groupedModels);
-    for (let i = 0; i < entries.length; i++) {
-      const [group, models] = entries[i];
+    for (let i = 0; i < groupKeys.length; i++) {
+      const group = groupKeys[i];
+      const models = groupedModels[group] ?? [];
       if (i > 0) rows.push({ type: 'spacer', beforeGroup: group });
       rows.push({ type: 'group', group, models });
       if (expandedGroups.includes(group)) {
@@ -1370,7 +1383,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
       }
     }
     return rows;
-  }, [groupedModels, expandedGroups]);
+  }, [groupedModels, expandedGroups, groupKeys]);
 
   const modelListParentRef = useRef<HTMLDivElement>(null);
   const modelListVirtualizer = useVirtualizer({

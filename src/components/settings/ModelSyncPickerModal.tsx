@@ -43,6 +43,7 @@ import {
   formatTokenCount,
   getModelGroupName,
 } from '@/lib/modelSync';
+import { sortGroupKeysByVersionDesc, sortModelsByVersionDesc } from '@/lib/modelVersionSort';
 import { SmartModelIcon } from '@/lib/providerIcons';
 import { ModelCatalogStatusBar } from './ModelCatalogStatusBar';
 
@@ -222,7 +223,12 @@ export function ModelSyncPickerModal({
       if (!byGroup[key]) byGroup[key] = [];
       byGroup[key].push(entry);
     }
-    return { filtered, entries: Object.entries(byGroup) };
+    for (const key of Object.keys(byGroup)) {
+      byGroup[key] = sortModelsByVersionDesc(byGroup[key], (item) => item.model.model_id);
+    }
+    const orderedKeys = sortGroupKeysByVersionDesc(Object.keys(byGroup));
+    const groupEntries = orderedKeys.map((key) => [key, byGroup[key]] as [string, ModelSyncEntry[]]);
+    return { filtered, entries: groupEntries };
   }, [entries, search, statusFilter]);
 
   // Flatten groups into virtual rows
