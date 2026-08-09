@@ -1883,7 +1883,7 @@ impl Default for AppSettings {
             compression_prompt: None,
             default_compression_keep_last_n: None,
             model_catalog_source: ModelCatalogSourcePreference::Builtin,
-            proxy_type: None,
+            proxy_type: Some("system".to_string()),
             proxy_address: None,
             proxy_port: None,
             global_shortcut: "CommandOrControl+Shift+A".to_string(),
@@ -1988,6 +1988,20 @@ mod app_settings_tests {
     fn release_webview_on_tray_defaults_to_disabled() {
         let settings = AppSettings::default();
         assert!(!settings.release_webview_on_tray);
+    }
+
+    #[test]
+    fn proxy_defaults_to_system_while_explicit_none_remains_disabled() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.proxy_type.as_deref(), Some("system"));
+
+        let missing: AppSettings =
+            serde_json::from_value(json!({})).expect("missing proxy setting should deserialize");
+        assert_eq!(missing.proxy_type.as_deref(), Some("system"));
+
+        let disabled: AppSettings = serde_json::from_value(json!({ "proxy_type": null }))
+            .expect("explicitly disabled proxy should deserialize");
+        assert_eq!(disabled.proxy_type, None);
     }
 
     #[test]

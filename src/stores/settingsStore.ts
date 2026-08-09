@@ -73,7 +73,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   compression_prompt: null,
   default_compression_keep_last_n: null,
   model_catalog_source: 'builtin',
-  proxy_type: null,
+  proxy_type: 'system',
   proxy_address: null,
   proxy_port: null,
   global_shortcut: DEFAULT_SHORTCUT_BINDINGS.toggleCurrentWindow,
