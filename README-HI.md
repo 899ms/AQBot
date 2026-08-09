@@ -2,6 +2,7 @@
 
 [![AQBot](https://socialify.git.ci/AQBot-Desktop/AQBot/image?description=1&font=JetBrains+Mono&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2FAQBot-Desktop%2FAQBot%2Fblob%2Fmain%2Fsrc%2Fassets%2Fimage%2Flogo.png%3Fraw%3Dtrue&name=1&owner=1&pattern=Floating+Cogs&pulls=1&stargazers=1&theme=Auto)](https://github.com/AQBot-Desktop/AQBot)
 
+AQBot एक local-first desktop AI workspace है जो multi-provider chat, ACP agents, knowledge bases, MCP tools और API gateway को एक साथ लाता है, जबकि app data और user files आपके नियंत्रण में रहते हैं।
 
 ## स्क्रीनशॉट
 
@@ -36,9 +37,11 @@
 
 ### AI Agent
 
-- **Agent mode** — Model controlled desktop workflow में files edit, commands run और code analysis कर सकता है।
-- **Permission control** — Standard review, auto-accept edits या full-access mode चुनें, working-directory sandbox checks active रहते हैं।
-- **Approval और cost UI** — Tool calls real time में review करें, allow decisions याद रखें और हर session का token/cost track करें।
+- **ACP Agent workbench** — [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) के ज़रिए compatible coding agents को एक interface में चलाएँ और responses, reasoning तथा tool calls को stream होते देखें।
+- **Agent Registry और custom integrations** — Registry से Codex, Claude Agent, Gemini CLI, Cline, OpenCode और Grok Build जैसे agents जोड़ें, या custom command, arguments, environment variables और icon configure करें; agents को enable और reorder भी किया जा सकता है।
+- **Projects और direct chats** — Threads को project के अनुसार व्यवस्थित करें, महत्वपूर्ण sessions pin करें और पिछला workspace अपने आप restore करें, या project चुने बिना isolated working directory में direct chat शुरू करें।
+- **पूरी session interaction** — हर agent द्वारा उपलब्ध models, modes और options बदलें तथा attachments, questionnaires, plan review, plan progress और reload के बाद persisted state के साथ काम करें।
+- **पारदर्शी permission review** — Tool requests को real time में review करें, एक बार अनुमति दें या मौजूदा session में “Always Allow” चुनें, और default policy, idle timeout तथा maximum concurrent processes configure करें।
 
 ### Roles
 

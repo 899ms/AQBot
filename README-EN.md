@@ -2,6 +2,7 @@
 
 [![AQBot](https://socialify.git.ci/AQBot-Desktop/AQBot/image?description=1&font=JetBrains+Mono&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2FAQBot-Desktop%2FAQBot%2Fblob%2Fmain%2Fsrc%2Fassets%2Fimage%2Flogo.png%3Fraw%3Dtrue&name=1&owner=1&pattern=Floating+Cogs&pulls=1&stargazers=1&theme=Auto)](https://github.com/AQBot-Desktop/AQBot)
 
+AQBot is a local-first desktop AI workspace that brings multi-provider chat, ACP agents, knowledge bases, MCP tools and an API gateway together while keeping app data and user files under your control.
 
 ## Screenshots
 
@@ -36,9 +37,11 @@
 
 ### AI Agent
 
-- **Agent mode** — Let the model read and edit files, run commands and analyze code inside a controlled desktop workflow.
-- **Permission control** — Choose standard review, auto-accept edits or full-access mode while keeping working-directory sandbox checks active.
-- **Approval and cost UI** — Review tool calls in real time, remember allow decisions and track token/cost usage for each agent session.
+- **ACP agent workbench** — Run compatible coding agents through [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) in one interface, with streaming responses, reasoning and tool calls.
+- **Agent Registry and custom integrations** — Add agents such as Codex, Claude Agent, Gemini CLI, Cline, OpenCode and Grok Build from the Registry, or configure a custom command, arguments, environment variables and icon; agents can be enabled and reordered freely.
+- **Projects and direct chats** — Organize threads by project, pin important sessions and restore your last workspace automatically, or start a direct chat without selecting a project in an isolated working directory.
+- **Complete session interaction** — Switch models, modes and options exposed by each agent, and work with attachments, questionnaires, plan reviews, plan progress and persisted state across reloads.
+- **Transparent permission review** — Review tool requests in real time, allow once or “Always Allow” for the current session, and configure the default policy, idle timeout and maximum concurrent processes.
 
 ### Roles
 

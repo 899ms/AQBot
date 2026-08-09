@@ -2,6 +2,7 @@
 
 [![AQBot](https://socialify.git.ci/AQBot-Desktop/AQBot/image?description=1&font=JetBrains+Mono&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2FAQBot-Desktop%2FAQBot%2Fblob%2Fmain%2Fsrc%2Fassets%2Fimage%2Flogo.png%3Fraw%3Dtrue&name=1&owner=1&pattern=Floating+Cogs&pulls=1&stargazers=1&theme=Auto)](https://github.com/AQBot-Desktop/AQBot)
 
+AQBot es un espacio de trabajo de IA local para escritorio que reúne chat con múltiples proveedores, agentes ACP, bases de conocimiento, herramientas MCP y una pasarela API, manteniendo los datos y archivos del usuario bajo su control.
 
 ## Capturas de pantalla
 
@@ -36,9 +37,11 @@
 
 ### AI Agent
 
-- **Modo Agent** — El modelo puede editar archivos, ejecutar comandos y analizar código en un flujo controlado.
-- **Permisos** — Revisión estándar, aceptar ediciones automáticamente o acceso completo con sandbox del directorio de trabajo.
-- **Aprobación y coste** — Revisa tool calls, recuerda permisos y sigue tokens/coste por sesión.
+- **Espacio de trabajo para agentes ACP** — Ejecuta agentes de programación compatibles mediante [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) en una sola interfaz, con respuestas, razonamiento y llamadas a herramientas en streaming.
+- **Agent Registry e integraciones personalizadas** — Añade desde el Registry agentes como Codex, Claude Agent, Gemini CLI, Cline, OpenCode y Grok Build, o configura un comando, argumentos, variables de entorno e icono propios; también puedes activarlos y reordenarlos libremente.
+- **Proyectos y chats directos** — Organiza hilos por proyecto, fija sesiones importantes y recupera automáticamente el último espacio de trabajo, o inicia un chat sin proyecto dentro de un directorio de trabajo aislado.
+- **Interacción completa con la sesión** — Cambia los modelos, modos y opciones que ofrece cada agente y trabaja con adjuntos, cuestionarios, revisión de planes, progreso y estado persistente tras recargar.
+- **Revisión transparente de permisos** — Revisa solicitudes de herramientas en tiempo real, permite una vez o siempre durante la sesión actual y configura la política predeterminada, el tiempo de inactividad y el máximo de procesos simultáneos.
 
 ### Roles
 

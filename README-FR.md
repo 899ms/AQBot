@@ -2,6 +2,7 @@
 
 [![AQBot](https://socialify.git.ci/AQBot-Desktop/AQBot/image?description=1&font=JetBrains+Mono&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2FAQBot-Desktop%2FAQBot%2Fblob%2Fmain%2Fsrc%2Fassets%2Fimage%2Flogo.png%3Fraw%3Dtrue&name=1&owner=1&pattern=Floating+Cogs&pulls=1&stargazers=1&theme=Auto)](https://github.com/AQBot-Desktop/AQBot)
 
+AQBot est un espace de travail IA local pour ordinateur qui réunit chat multi-fournisseurs, agents ACP, bases de connaissances, outils MCP et passerelle API, tout en vous laissant le contrôle des données et fichiers stockés sur votre machine.
 
 ## Captures d'écran
 
@@ -36,9 +37,11 @@
 
 ### AI Agent
 
-- **Mode Agent** — Le modèle peut éditer des fichiers, exécuter des commandes et analyser du code dans un workflow contrôlé.
-- **Contrôle des permissions** — Choisissez revue standard, acceptation automatique des éditions ou accès complet avec sandbox de dossier de travail.
-- **Approbation et coûts** — Inspectez les appels d’outils, mémorisez les autorisations et suivez tokens/coûts par session.
+- **Atelier d'agents ACP** — Exécutez des agents de programmation compatibles via l'[Agent Client Protocol (ACP)](https://agentclientprotocol.com/) dans une interface unique, avec réponses, raisonnement et appels d'outils en streaming.
+- **Agent Registry et intégrations personnalisées** — Ajoutez depuis le Registry des agents tels que Codex, Claude Agent, Gemini CLI, Cline, OpenCode et Grok Build, ou configurez commande, arguments, variables d'environnement et icône ; chaque agent peut être activé et réordonné librement.
+- **Projets et discussions directes** — Classez les fils par projet, épinglez les sessions importantes et restaurez automatiquement votre dernier espace de travail, ou démarrez sans projet dans un répertoire de travail isolé.
+- **Interactions de session complètes** — Changez les modèles, modes et options exposés par chaque agent et utilisez pièces jointes, questionnaires, validation de plans, suivi de progression et restauration de l'état après rechargement.
+- **Validation transparente des permissions** — Examinez chaque demande d'outil en temps réel, autorisez-la une fois ou toujours pour la session en cours, puis configurez la politique par défaut, le délai d'inactivité et le nombre maximal de processus simultanés.
 
 ### Rôles
 

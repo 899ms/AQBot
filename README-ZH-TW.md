@@ -2,6 +2,7 @@
 
 [![AQBot](https://socialify.git.ci/AQBot-Desktop/AQBot/image?description=1&font=JetBrains+Mono&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2FAQBot-Desktop%2FAQBot%2Fblob%2Fmain%2Fsrc%2Fassets%2Fimage%2Flogo.png%3Fraw%3Dtrue&name=1&owner=1&pattern=Floating+Cogs&pulls=1&stargazers=1&theme=Auto)](https://github.com/AQBot-Desktop/AQBot)
 
+AQBot 是一款本機優先的桌面 AI 工作台，整合多服務商對話、ACP Agent、知識庫、MCP 工具與 API 閘道，並讓應用程式資料及使用者檔案始終由你掌控。
 
 ## 執行截圖
 
@@ -36,9 +37,11 @@
 
 ### AI Agent
 
-- **Agent 模式** — 讓模型在受控桌面工作流中讀取/編輯檔案、執行命令並分析程式碼。
-- **權限控制** — 可選擇標準審核、自動接受編輯或完全存取模式，同時保留工作目錄沙箱檢查。
-- **審批與成本面板** — 即時查看工具呼叫、記住允許決策，並追蹤每個 Agent 會話的 token 與成本。
+- **ACP Agent 工作台** — 透過 [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) 在統一介面中執行相容的程式設計 Agent，串流查看回覆、思考過程與工具呼叫。
+- **Agent Registry 與自訂整合** — 可從 Registry 加入 Codex、Claude Agent、Gemini CLI、Cline、OpenCode、Grok Build 等 Agent，也能設定自訂命令、參數、環境變數與圖示，並自由啟停及排序。
+- **專案與自由對話** — 依專案整理執行緒、釘選常用工作階段並自動還原上次工作現場；也可不選專案，直接在隔離的工作目錄中開始對話。
+- **完整工作階段互動** — 支援切換 Agent 提供的模型、模式與設定，以及附件、問卷、計畫審核、計畫進度和重新載入後的狀態還原。
+- **透明權限審批** — 即時審核工具請求，可單次允許或在目前工作階段中「始終允許」，並設定預設審批策略、閒置逾時與最大平行處理程序數。
 
 ### 角色
 

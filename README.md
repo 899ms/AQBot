@@ -2,6 +2,7 @@
 
 [![AQBot](https://socialify.git.ci/AQBot-Desktop/AQBot/image?description=1&font=JetBrains+Mono&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2FAQBot-Desktop%2FAQBot%2Fblob%2Fmain%2Fsrc%2Fassets%2Fimage%2Flogo.png%3Fraw%3Dtrue&name=1&owner=1&pattern=Floating+Cogs&pulls=1&stargazers=1&theme=Auto)](https://github.com/AQBot-Desktop/AQBot)
 
+AQBot 是一款本地优先的桌面 AI 工作台，统一多服务商对话、ACP Agent、知识库、MCP 工具与 API 网关，并将应用数据和用户文件保留在本机掌控之中。
 
 ## 运行截图
 
@@ -36,9 +37,11 @@
 
 ### AI Agent
 
-- **Agent 模式** — 让模型在受控桌面工作流中读取/编辑文件、执行命令并分析代码。
-- **权限控制** — 可选择标准审核、自动接受编辑或完全访问模式，同时保留工作目录沙箱检查。
-- **审批与成本面板** — 实时查看工具调用、记住允许决策，并跟踪每个 Agent 会话的 token 与成本。
+- **ACP Agent 工作台** — 通过 [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) 在统一界面中运行兼容的编程 Agent，流式查看回复、思考过程和工具调用。
+- **Agent Registry 与自定义接入** — 可从 Registry 添加 Codex、Claude Agent、Gemini CLI、Cline、OpenCode、Grok Build 等 Agent，也可配置自定义命令、参数、环境变量和图标，并自由启停与排序。
+- **项目与自由对话** — 按项目组织线程、固定常用会话并自动恢复上次现场；也可不选择项目，直接在隔离工作目录中开始对话。
+- **完整会话交互** — 支持 Agent 暴露的模型、模式和配置切换，以及附件、问卷、计划审核、计划进度与刷新后恢复。
+- **透明权限审批** — 实时审核工具请求，可单次允许或在当前会话中“始终允许”，并配置默认审批策略、空闲超时和最大并行进程数。
 
 ### 角色
 

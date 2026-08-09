@@ -2,6 +2,7 @@
 
 [![AQBot](https://socialify.git.ci/AQBot-Desktop/AQBot/image?description=1&font=JetBrains+Mono&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2FAQBot-Desktop%2FAQBot%2Fblob%2Fmain%2Fsrc%2Fassets%2Fimage%2Flogo.png%3Fraw%3Dtrue&name=1&owner=1&pattern=Floating+Cogs&pulls=1&stargazers=1&theme=Auto)](https://github.com/AQBot-Desktop/AQBot)
 
+AQBot هو مساحة عمل مكتبية للذكاء الاصطناعي تعتمد على التخزين المحلي، وتجمع المحادثة عبر عدة مزودين ووكلاء ACP وقواعد المعرفة وأدوات MCP وبوابة API، مع إبقاء بيانات التطبيق وملفات المستخدم تحت سيطرتك.
 
 ## لقطات الشاشة
 
@@ -36,9 +37,11 @@
 
 ### AI Agent
 
-- **Agent mode** — يمكن للنموذج تعديل الملفات وتشغيل الأوامر وتحليل الكود داخل desktop workflow مضبوط.
-- **التحكم في الصلاحيات** — اختر standard review أو auto-accept edits أو full-access mode مع استمرار working-directory sandbox checks.
-- **الموافقة والتكلفة** — راجع tool calls لحظياً، واحفظ allow decisions، وتابع token/cost لكل session.
+- **مساحة عمل وكلاء ACP** — شغّل وكلاء البرمجة المتوافقين عبر [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) في واجهة موحدة، مع بث الردود والاستدلال واستدعاءات الأدوات.
+- **Agent Registry والتكاملات المخصصة** — أضف من Registry وكلاء مثل Codex وClaude Agent وGemini CLI وCline وOpenCode وGrok Build، أو اضبط أمرًا ووسائط ومتغيرات بيئة وأيقونة مخصصة؛ ويمكنك تفعيل الوكلاء وإعادة ترتيبهم بحرية.
+- **المشاريع والمحادثات المباشرة** — نظّم المواضيع حسب المشروع، وثبّت الجلسات المهمة واستعد مساحة العمل الأخيرة تلقائيًا، أو ابدأ محادثة بلا مشروع داخل مجلد عمل معزول.
+- **تفاعل متكامل مع الجلسة** — بدّل النماذج والأوضاع والخيارات التي يوفرها كل وكيل، واستخدم المرفقات والاستبيانات ومراجعة الخطط وتتبع تقدمها واستعادة الحالة بعد إعادة التحميل.
+- **مراجعة شفافة للصلاحيات** — راجع طلبات الأدوات لحظيًا، واسمح بها مرة واحدة أو دائمًا في الجلسة الحالية، واضبط السياسة الافتراضية ومهلة الخمول والحد الأقصى للعمليات المتزامنة.
 
 ### Roles
 

@@ -2,6 +2,7 @@
 
 [![AQBot](https://socialify.git.ci/AQBot-Desktop/AQBot/image?description=1&font=JetBrains+Mono&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2FAQBot-Desktop%2FAQBot%2Fblob%2Fmain%2Fsrc%2Fassets%2Fimage%2Flogo.png%3Fraw%3Dtrue&name=1&owner=1&pattern=Floating+Cogs&pulls=1&stargazers=1&theme=Auto)](https://github.com/AQBot-Desktop/AQBot)
 
+AQBot は、複数プロバイダーのチャット、ACP Agent、ナレッジベース、MCP ツール、API ゲートウェイを統合し、アプリデータとユーザーファイルを手元で管理できるローカルファーストのデスクトップ AI ワークスペースです。
 
 ## スクリーンショット
 
@@ -36,9 +37,11 @@
 
 ### AI Agent
 
-- **Agent モード** — 制御されたデスクトップワークフロー内で、モデルにファイル編集、コマンド実行、コード分析を任せられます。
-- **権限制御** — 標準レビュー、自動編集承認、フルアクセスを選べ、作業ディレクトリのサンドボックスチェックは維持されます。
-- **承認とコスト UI** — ツール呼び出しをリアルタイムで確認し、許可判断を記憶し、各 Agent セッションの token とコストを追跡できます。
+- **ACP Agent ワークベンチ** — [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) 対応のコーディング Agent を一つの画面で実行し、応答、推論、ツール呼び出しをストリーミング表示します。
+- **Agent Registry とカスタム連携** — Registry から Codex、Claude Agent、Gemini CLI、Cline、OpenCode、Grok Build などを追加できるほか、独自のコマンド、引数、環境変数、アイコンを設定し、Agent の有効化や並べ替えも行えます。
+- **プロジェクトとダイレクトチャット** — スレッドをプロジェクト別に整理し、重要なセッションをピン留めして前回の作業状態を自動復元できます。プロジェクトを選ばず、分離された作業ディレクトリで直接チャットを始めることもできます。
+- **充実したセッション操作** — 各 Agent が公開するモデル、モード、設定の切り替えに加え、添付ファイル、アンケート、計画レビュー、進捗表示、再読み込み後の状態復元に対応します。
+- **明確な権限承認** — ツール要求をリアルタイムで確認し、今回のみ許可または現在のセッションで「常に許可」を選択できます。既定の承認方針、アイドルタイムアウト、最大同時プロセス数も設定できます。
 
 ### ロール
 

@@ -2,6 +2,7 @@
 
 [![AQBot](https://socialify.git.ci/AQBot-Desktop/AQBot/image?description=1&font=JetBrains+Mono&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2FAQBot-Desktop%2FAQBot%2Fblob%2Fmain%2Fsrc%2Fassets%2Fimage%2Flogo.png%3Fraw%3Dtrue&name=1&owner=1&pattern=Floating+Cogs&pulls=1&stargazers=1&theme=Auto)](https://github.com/AQBot-Desktop/AQBot)
 
+AQBot은 여러 제공자의 채팅, ACP Agent, 지식 베이스, MCP 도구와 API 게이트웨이를 한곳에 모으고 앱 데이터와 사용자 파일을 직접 관리할 수 있게 하는 로컬 우선 데스크톱 AI 작업 공간입니다.
 
 ## 스크린샷
 
@@ -36,9 +37,11 @@
 
 ### AI Agent
 
-- **Agent mode** — 모델이 controlled workflow에서 files edit, commands run, code analysis를 수행합니다.
-- **권한 제어** — standard review, auto-accept edits, full-access mode를 선택하고 working-directory sandbox checks를 유지합니다.
-- **승인 및 비용 UI** — tool calls를 실시간 검토하고 allow decisions를 기억하며 session token/cost를 추적합니다.
+- **ACP Agent 워크벤치** — [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) 호환 코딩 Agent를 하나의 화면에서 실행하고 응답, 추론 과정, 도구 호출을 스트리밍으로 확인합니다.
+- **Agent Registry 및 사용자 지정 연동** — Registry에서 Codex, Claude Agent, Gemini CLI, Cline, OpenCode, Grok Build 등을 추가하거나 사용자 지정 명령, 인수, 환경 변수와 아이콘을 설정할 수 있으며 Agent 활성화와 순서 변경도 지원합니다.
+- **프로젝트 및 바로 대화** — 스레드를 프로젝트별로 구성하고 중요한 세션을 고정하며 마지막 작업 상태를 자동 복원합니다. 프로젝트를 선택하지 않고 격리된 작업 디렉터리에서 바로 대화를 시작할 수도 있습니다.
+- **완전한 세션 상호작용** — 각 Agent가 제공하는 모델, 모드와 옵션 전환은 물론 첨부 파일, 설문, 계획 검토, 진행 상황과 새로고침 후 상태 복원을 지원합니다.
+- **투명한 권한 승인** — 도구 요청을 실시간으로 검토하고 한 번만 허용하거나 현재 세션에서 ‘항상 허용’할 수 있으며 기본 승인 정책, 유휴 제한 시간과 최대 동시 프로세스 수를 설정할 수 있습니다.
 
 ### 역할
 

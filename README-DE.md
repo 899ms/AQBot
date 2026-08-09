@@ -2,6 +2,7 @@
 
 [![AQBot](https://socialify.git.ci/AQBot-Desktop/AQBot/image?description=1&font=JetBrains+Mono&forks=1&issues=1&logo=https%3A%2F%2Fgithub.com%2FAQBot-Desktop%2FAQBot%2Fblob%2Fmain%2Fsrc%2Fassets%2Fimage%2Flogo.png%3Fraw%3Dtrue&name=1&owner=1&pattern=Floating+Cogs&pulls=1&stargazers=1&theme=Auto)](https://github.com/AQBot-Desktop/AQBot)
 
+AQBot ist ein lokal ausgerichteter KI-Arbeitsbereich für den Desktop, der Chats mit mehreren Anbietern, ACP-Agents, Wissensdatenbanken, MCP-Werkzeuge und ein API-Gateway vereint, während App-Daten und Benutzerdateien unter deiner Kontrolle bleiben.
 
 ## Screenshots
 
@@ -36,9 +37,11 @@
 
 ### AI Agent
 
-- **Agent-Modus** — Das Modell kann Dateien bearbeiten, Befehle ausführen und Code in einem kontrollierten Workflow analysieren.
-- **Berechtigungen** — Standardprüfung, Auto-Accept-Edits oder Vollzugriff mit aktiver Arbeitsverzeichnis-Sandbox.
-- **Freigabe und Kosten** — Tool-Aufrufe prüfen, Entscheidungen merken und Tokens/Kosten pro Session verfolgen.
+- **ACP-Agent-Arbeitsbereich** — Führe kompatible Coding-Agents über das [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) in einer Oberfläche aus und verfolge Antworten, Schlussfolgerungen und Werkzeugaufrufe als Stream.
+- **Agent Registry und eigene Integrationen** — Füge Codex, Claude Agent, Gemini CLI, Cline, OpenCode, Grok Build und weitere Agents aus der Registry hinzu oder konfiguriere eigene Befehle, Argumente, Umgebungsvariablen und Symbole; Agents lassen sich frei aktivieren und sortieren.
+- **Projekte und direkte Chats** — Organisiere Threads nach Projekt, hefte wichtige Sitzungen an und stelle den letzten Arbeitsstand automatisch wieder her, oder starte ohne Projektauswahl in einem isolierten Arbeitsverzeichnis.
+- **Vollständige Sitzungsinteraktion** — Wechsle Modelle, Modi und Optionen des jeweiligen Agents und nutze Anhänge, Fragebögen, Planprüfungen, Fortschrittsanzeigen sowie die Wiederherstellung des Zustands nach dem Neuladen.
+- **Transparente Berechtigungsprüfung** — Prüfe Werkzeuganfragen in Echtzeit, erlaube sie einmalig oder immer für die aktuelle Sitzung und konfiguriere Standardrichtlinie, Leerlaufzeitlimit und maximale Anzahl gleichzeitiger Prozesse.
 
 ### Rollen
 
