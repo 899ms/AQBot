@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,7 +27,23 @@ function hasConfigOverride() {
   return args.some((arg) => arg === "--config" || arg === "-c" || arg.startsWith("--config="));
 }
 
+function defaultCargoTargetDir(environment) {
+  if (process.platform === "darwin") {
+    return path.join(os.homedir(), "Library", "Caches", "aqbot", "cargo-target");
+  }
+  if (process.platform === "win32") {
+    const cacheRoot = environment.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
+    return path.join(cacheRoot, "aqbot", "cargo-target");
+  }
+  const cacheRoot = environment.XDG_CACHE_HOME || path.join(os.homedir(), ".cache");
+  return path.join(cacheRoot, "aqbot", "cargo-target");
+}
+
 const env = { ...process.env };
+
+if (args[0] === "dev" && !env.CARGO_TARGET_DIR) {
+  env.CARGO_TARGET_DIR = defaultCargoTargetDir(env);
+}
 
 if (process.platform === "darwin") {
   env.MACOSX_DEPLOYMENT_TARGET ??= "11.0";
