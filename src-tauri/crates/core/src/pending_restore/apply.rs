@@ -280,9 +280,35 @@ fn sync_restored_database(app_dir: &Path) -> Result<()> {
                 path.display()
             )));
         }
-        std::fs::File::open(&path)?.sync_all()?;
+        open_database_artifact_for_sync(&path)?.sync_all()?;
     }
     sync_directory(app_dir)
+}
+
+fn open_database_artifact_for_sync(path: &Path) -> Result<std::fs::File> {
+    // Windows FlushFileBuffers requires the handle to have GENERIC_WRITE access.
+    Ok(std::fs::OpenOptions::new().write(true).open(path)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    use super::*;
+
+    #[test]
+    fn database_artifact_sync_handle_has_write_access() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("aqbot.db");
+        std::fs::write(&path, b"database").unwrap();
+
+        let mut file = open_database_artifact_for_sync(&path).unwrap();
+
+        file.sync_all().unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"database");
+        file.write_all(b"x")
+            .expect("Windows FlushFileBuffers requires a handle with write access");
+    }
 }
 
 fn recover_interrupted_apply(
