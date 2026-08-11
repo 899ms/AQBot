@@ -55,6 +55,11 @@ vi.mock('react-i18next', () => ({
         'settings.groupMessageStyle': '消息样式',
         'settings.contextCompression': '上下文压缩',
         'settings.contextCompressionGroupDesc': '控制对话过长时如何压缩历史上下文。',
+        'settings.contextStrategy': '上下文策略',
+        'settings.contextStrategyTooltip': '选择上下文处理方式',
+        'settings.contextStrategySmartSummary': '智能摘要',
+        'settings.contextStrategyRawTruncate': '仅原文截断',
+        'settings.contextStrategyRawStrict': '严格原文',
         'settings.compressionKeepLastN': '压缩时保留最近消息数',
         'settings.compressionKeepLastNTooltip': '保留最近 N 条不压入摘要',
         'settings.compressionKeepLastNHint': '此为全局默认',
@@ -282,6 +287,7 @@ describe('ConversationSettings', () => {
       agent_workspace_name_strategy: 'uuid',
       agent_workspace_datetime_format: 'YYYY-MM-DD-HH-mm-ss',
       default_compression_keep_last_n: null,
+      default_context_strategy: 'raw_truncate',
     };
   });
 
@@ -295,6 +301,25 @@ describe('ConversationSettings', () => {
       expect(mocks.saveSettings).toHaveBeenCalledWith({
         default_compression_keep_last_n: 5,
       });
+    });
+  });
+
+  it('supports the full keep-last range and saves the global context strategy', async () => {
+    render(<ConversationSettings />);
+
+    const input = screen.getByLabelText('压缩时保留最近消息数');
+    expect(input).toHaveAttribute('min', '0');
+    expect(input).toHaveAttribute('max', '1000');
+    fireEvent.change(input, { target: { value: '1000' } });
+    expect(mocks.saveSettings).toHaveBeenLastCalledWith({
+      default_compression_keep_last_n: 1000,
+    });
+
+    fireEvent.change(screen.getByDisplayValue('仅原文截断'), {
+      target: { value: 'raw_strict' },
+    });
+    expect(mocks.saveSettings).toHaveBeenLastCalledWith({
+      default_context_strategy: 'raw_strict',
     });
   });
 
@@ -440,13 +465,14 @@ describe('ConversationSettings', () => {
 
     render(<ConversationSettings />);
 
-    let selects = screen.getAllByRole('combobox');
-    await waitFor(() => expect(selects[1]).toHaveTextContent('Inter'));
-    selects = screen.getAllByRole('combobox');
-    fireEvent.change(selects[1], { target: { value: 'Inter' } });
+    await waitFor(() => expect(screen.getAllByRole('combobox').filter((select) =>
+      select.textContent?.includes('Inter'))).toHaveLength(2));
+    const fontSelects = screen.getAllByRole('combobox').filter((select) =>
+      select.textContent?.includes('Inter'));
+    fireEvent.change(fontSelects[0], { target: { value: 'Inter' } });
     expect(mocks.saveSettings).toHaveBeenCalledWith({ chat_font_family: 'Inter' });
 
-    fireEvent.change(selects[2], { target: { value: 'JetBrains Mono' } });
+    fireEvent.change(fontSelects[1], { target: { value: 'JetBrains Mono' } });
     expect(mocks.saveSettings).toHaveBeenCalledWith({ code_font_family: 'JetBrains Mono' });
   });
 

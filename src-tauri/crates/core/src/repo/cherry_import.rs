@@ -14,7 +14,8 @@ use crate::error::{AQBotError, Result};
 use crate::file_store::FileStore;
 use crate::repo::settings::get_settings;
 use crate::types::{
-    infer_model_type_and_capabilities, Attachment, ModelParamOverrides, ProviderType,
+    infer_model_type_and_capabilities, Attachment, ContextStrategy, ModelParamOverrides,
+    ProviderType,
 };
 use crate::utils::{gen_id, now_ts};
 
@@ -455,6 +456,9 @@ pub async fn import_cherry_studio_backup_from_path_with_root(
                 active_artifact_id: Set(None),
                 research_mode: Set(0),
                 context_compression: Set(0),
+                context_strategy_override: Set(Some(
+                    ContextStrategy::RawTruncate.as_str().to_string(),
+                )),
                 context_message_limit: Set(None),
                 compression_keep_last_n: Set(None),
                 category_id: Set(None),
@@ -2308,6 +2312,10 @@ mod tests {
             .unwrap();
         assert_eq!(conversation.title, "Imported topic");
         assert_eq!(conversation.system_prompt.as_deref(), Some("system prompt"));
+        assert_eq!(
+            conversation.context_strategy_override.as_deref(),
+            Some("raw_truncate")
+        );
         assert_eq!(conversation.message_count, 3);
 
         let imported_roles = roles::Entity::find()

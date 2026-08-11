@@ -29,6 +29,7 @@ function conversation(
     is_pinned: false,
     is_archived: false,
     context_compression: false,
+    context_strategy_override: null,
     context_message_limit: null,
     compression_keep_last_n: null,
     category_id: null,

@@ -6,13 +6,47 @@ use std::collections::HashSet;
 use crate::entity::{conversation_summaries, conversations, messages, stored_files};
 use crate::error::{AQBotError, Result};
 use crate::types::{
-    Attachment, Conversation, ConversationSearchResult, ConversationSummary,
-    UpdateConversationInput,
+    Attachment, ContextStrategy, Conversation, ConversationSearchResult, ConversationSummary,
+    Message, UpdateConversationInput,
 };
 use crate::utils::{gen_id, now_ts};
 
-fn conversation_from_entity(m: conversations::Model) -> Conversation {
-    Conversation {
+fn persisted_nonnegative_u32(field: &str, value: Option<i32>) -> Result<Option<u32>> {
+    value
+        .map(|value| {
+            u32::try_from(value).map_err(|_| {
+                AQBotError::Validation(format!(
+                    "Invalid negative {field} value in the conversations table: {value}"
+                ))
+            })
+        })
+        .transpose()
+}
+
+fn validated_i32_override(field: &str, value: i64, max: i64) -> Result<i32> {
+    if !(0..=max).contains(&value) {
+        return Err(AQBotError::Validation(format!(
+            "{field} must be an integer between 0 and {max}"
+        )));
+    }
+    i32::try_from(value).map_err(|_| {
+        AQBotError::Validation(format!("{field} must be an integer between 0 and {max}"))
+    })
+}
+
+fn conversation_from_entity(m: conversations::Model) -> Result<Conversation> {
+    let context_strategy_override = m
+        .context_strategy_override
+        .as_deref()
+        .map(str::parse::<ContextStrategy>)
+        .transpose()
+        .map_err(AQBotError::Validation)?;
+    let context_message_limit =
+        persisted_nonnegative_u32("context_message_limit", m.context_message_limit)?;
+    let compression_keep_last_n =
+        persisted_nonnegative_u32("compression_keep_last_n", m.compression_keep_last_n)?;
+
+    Ok(Conversation {
         id: m.id,
         title: m.title,
         model_id: m.model_id,
@@ -33,14 +67,15 @@ fn conversation_from_entity(m: conversations::Model) -> Conversation {
         is_pinned: m.is_pinned != 0,
         is_archived: m.is_archived != 0,
         context_compression: m.context_compression != 0,
-        context_message_limit: m.context_message_limit.map(|v| v as u32),
-        compression_keep_last_n: m.compression_keep_last_n.map(|v| v as u32),
+        context_strategy_override,
+        context_message_limit,
+        compression_keep_last_n,
         category_id: m.category_id,
         parent_conversation_id: m.parent_conversation_id,
         mode: m.mode,
         created_at: m.created_at,
         updated_at: m.updated_at,
-    }
+    })
 }
 
 fn parse_string_list(raw: &str) -> Vec<String> {
@@ -60,7 +95,7 @@ pub async fn list_conversations(db: &DatabaseConnection) -> Result<Vec<Conversat
         .all(db)
         .await?;
 
-    Ok(rows.into_iter().map(conversation_from_entity).collect())
+    rows.into_iter().map(conversation_from_entity).collect()
 }
 
 /// Most recently updated non-archived conversations for tray / quick switchers.
@@ -76,7 +111,7 @@ pub async fn list_recent_conversations(
         .all(db)
         .await?;
 
-    Ok(rows.into_iter().map(conversation_from_entity).collect())
+    rows.into_iter().map(conversation_from_entity).collect()
 }
 
 /// Provider/model pair of the most recently updated non-archived conversation.
@@ -101,7 +136,7 @@ pub async fn list_archived_conversations(db: &DatabaseConnection) -> Result<Vec<
         .all(db)
         .await?;
 
-    Ok(rows.into_iter().map(conversation_from_entity).collect())
+    rows.into_iter().map(conversation_from_entity).collect()
 }
 
 pub async fn get_conversation(db: &DatabaseConnection, id: &str) -> Result<Conversation> {
@@ -110,7 +145,7 @@ pub async fn get_conversation(db: &DatabaseConnection, id: &str) -> Result<Conve
         .await?
         .ok_or_else(|| AQBotError::NotFound(format!("Conversation {}", id)))?;
 
-    Ok(conversation_from_entity(row))
+    conversation_from_entity(row)
 }
 
 pub async fn create_conversation(
@@ -152,7 +187,32 @@ pub async fn update_conversation(
         .ok_or_else(|| AQBotError::NotFound(format!("Conversation {}", id)))?;
 
     let now = now_ts();
-    let existing = conversation_from_entity(row.clone());
+    let existing = conversation_from_entity(row.clone())?;
+
+    let context_message_limit = input
+        .context_message_limit
+        .map(|value| {
+            value
+                .map(|value| {
+                    validated_i32_override("context_message_limit", value, i32::MAX as i64)
+                })
+                .transpose()
+        })
+        .transpose()?;
+    let compression_keep_last_n = input
+        .compression_keep_last_n
+        .map(|value| {
+            value
+                .map(|value| {
+                    validated_i32_override(
+                        "compression_keep_last_n",
+                        value,
+                        crate::types::MAX_COMPRESSION_KEEP_LAST_N as i64,
+                    )
+                })
+                .transpose()
+        })
+        .transpose()?;
 
     let title = input.title.unwrap_or(existing.title);
     let provider_id = input.provider_id.unwrap_or(existing.provider_id);
@@ -206,14 +266,34 @@ pub async fn update_conversation(
     if let Some(enabled_memory_namespace_ids) = input.enabled_memory_namespace_ids {
         am.enabled_memory_namespace_ids = Set(stringify_string_list(&enabled_memory_namespace_ids));
     }
-    if let Some(context_compression) = input.context_compression {
+    if let Some(context_strategy_override) = input.context_strategy_override {
+        let legacy_strategy = match context_strategy_override {
+            Some(strategy) => strategy,
+            None => crate::repo::settings::get_settings(db)
+                .await?
+                .default_context_strategy,
+        };
+        am.context_strategy_override =
+            Set(context_strategy_override.map(|strategy| strategy.as_str().to_string()));
+        am.context_compression = Set(if legacy_strategy == ContextStrategy::SmartSummary {
+            1
+        } else {
+            0
+        });
+    } else if let Some(context_compression) = input.context_compression {
+        let strategy = if context_compression {
+            ContextStrategy::SmartSummary
+        } else {
+            ContextStrategy::RawTruncate
+        };
         am.context_compression = Set(if context_compression { 1 } else { 0 });
+        am.context_strategy_override = Set(Some(strategy.as_str().to_string()));
     }
-    if let Some(context_message_limit) = input.context_message_limit {
-        am.context_message_limit = Set(context_message_limit.map(|v| v as i32));
+    if let Some(context_message_limit) = context_message_limit {
+        am.context_message_limit = Set(context_message_limit);
     }
-    if let Some(compression_keep_last_n) = input.compression_keep_last_n {
-        am.compression_keep_last_n = Set(compression_keep_last_n.map(|v| v as i32));
+    if let Some(compression_keep_last_n) = compression_keep_last_n {
+        am.compression_keep_last_n = Set(compression_keep_last_n);
     }
     if let Some(category_id) = input.category_id {
         am.category_id = Set(category_id);
@@ -512,6 +592,7 @@ pub async fn branch_conversation(
         is_pinned: Set(0),
         is_archived: Set(0),
         context_compression: Set(source.context_compression),
+        context_strategy_override: Set(source.context_strategy_override.clone()),
         context_message_limit: Set(source.context_message_limit),
         compression_keep_last_n: Set(source.compression_keep_last_n),
         category_id: Set(source.category_id.clone()),
@@ -634,7 +715,7 @@ pub async fn search_conversations(
             continue;
         }
         results.push(ConversationSearchResult {
-            conversation: conversation_from_entity(row),
+            conversation: conversation_from_entity(row)?,
             matched_message_preview: None,
         });
     }
@@ -748,15 +829,28 @@ pub async fn get_summary(
     Ok(row.map(summary_from_entity))
 }
 
-pub async fn upsert_summary(
-    db: &DatabaseConnection,
+fn validate_summary_text(summary_text: &str) -> Result<()> {
+    if summary_text.trim().is_empty() {
+        return Err(AQBotError::Validation(
+            "Conversation summary must not be empty".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+async fn upsert_summary_record<C>(
+    db: &C,
     conversation_id: &str,
     summary_text: &str,
     compressed_until_message_id: Option<&str>,
     token_count: Option<u32>,
     model_used: Option<&str>,
     source_text: Option<&str>,
-) -> Result<ConversationSummary> {
+) -> Result<()>
+where
+    C: ConnectionTrait,
+{
+    validate_summary_text(summary_text)?;
     let now = now_ts();
 
     let existing = conversation_summaries::Entity::find()
@@ -770,8 +864,8 @@ pub async fn upsert_summary(
             am.summary_text = Set(summary_text.to_string());
             am.compressed_until_message_id =
                 Set(compressed_until_message_id.map(|s| s.to_string()));
-            am.token_count = Set(token_count.map(|v| v as i64));
-            am.model_used = Set(model_used.map(|s| s.to_string()));
+            am.token_count = Set(token_count.map(i64::from));
+            am.model_used = Set(model_used.map(str::to_string));
             if let Some(source) = source_text {
                 am.source_text = Set(Some(source.to_string()));
             }
@@ -779,17 +873,14 @@ pub async fn upsert_summary(
             am.update(db).await?;
         }
         None => {
-            let id = gen_id();
             conversation_summaries::ActiveModel {
-                id: Set(id),
+                id: Set(gen_id()),
                 conversation_id: Set(conversation_id.to_string()),
                 summary_text: Set(summary_text.to_string()),
-                compressed_until_message_id: Set(
-                    compressed_until_message_id.map(|s| s.to_string()),
-                ),
-                source_text: Set(source_text.map(|s| s.to_string())),
-                token_count: Set(token_count.map(|v| v as i64)),
-                model_used: Set(model_used.map(|s| s.to_string())),
+                compressed_until_message_id: Set(compressed_until_message_id.map(str::to_string)),
+                source_text: Set(source_text.map(str::to_string)),
+                token_count: Set(token_count.map(i64::from)),
+                model_used: Set(model_used.map(str::to_string)),
                 created_at: Set(now),
                 updated_at: Set(now),
             }
@@ -798,11 +889,87 @@ pub async fn upsert_summary(
         }
     }
 
+    Ok(())
+}
+
+pub async fn upsert_summary(
+    db: &DatabaseConnection,
+    conversation_id: &str,
+    summary_text: &str,
+    compressed_until_message_id: Option<&str>,
+    token_count: Option<u32>,
+    model_used: Option<&str>,
+    source_text: Option<&str>,
+) -> Result<ConversationSummary> {
+    upsert_summary_record(
+        db,
+        conversation_id,
+        summary_text,
+        compressed_until_message_id,
+        token_count,
+        model_used,
+        source_text,
+    )
+    .await?;
+
     get_summary(db, conversation_id).await?.ok_or_else(|| {
         AQBotError::Database(sea_orm::DbErr::Custom(
             "Failed to read back upserted summary".into(),
         ))
     })
+}
+
+/// Atomically upsert a conversation summary and insert its system boundary marker.
+pub async fn upsert_summary_with_marker(
+    db: &DatabaseConnection,
+    conversation_id: &str,
+    summary_text: &str,
+    compressed_until_message_id: Option<&str>,
+    token_count: Option<u32>,
+    model_used: Option<&str>,
+    source_text: Option<&str>,
+    marker_content: &str,
+) -> Result<(ConversationSummary, Message)> {
+    if marker_content.is_empty() {
+        return Err(AQBotError::Validation(
+            "Compression marker content must not be empty".to_string(),
+        ));
+    }
+
+    let marker_id = gen_id();
+    let txn = db.begin().await?;
+    upsert_summary_record(
+        &txn,
+        conversation_id,
+        summary_text,
+        compressed_until_message_id,
+        token_count,
+        model_used,
+        source_text,
+    )
+    .await?;
+    messages::ActiveModel {
+        id: Set(marker_id.clone()),
+        conversation_id: Set(conversation_id.to_string()),
+        role: Set("system".to_string()),
+        content: Set(marker_content.to_string()),
+        attachments: Set("[]".to_string()),
+        created_at: Set(now_ts()),
+        version_index: Set(0),
+        is_active: Set(1),
+        ..Default::default()
+    }
+    .insert(&txn)
+    .await?;
+    txn.commit().await?;
+
+    let summary = get_summary(db, conversation_id).await?.ok_or_else(|| {
+        AQBotError::Database(sea_orm::DbErr::Custom(
+            "Failed to read back upserted summary".into(),
+        ))
+    })?;
+    let marker = crate::repo::message::get_message(db, &marker_id).await?;
+    Ok((summary, marker))
 }
 
 /// Update only the summary text/metadata after a retry, preserving boundary and source.
@@ -813,17 +980,20 @@ pub async fn update_summary_text(
     token_count: Option<u32>,
     model_used: Option<&str>,
 ) -> Result<ConversationSummary> {
+    validate_summary_text(summary_text)?;
     let now = now_ts();
     let existing = conversation_summaries::Entity::find()
         .filter(conversation_summaries::Column::ConversationId.eq(conversation_id))
         .one(db)
         .await?
-        .ok_or_else(|| AQBotError::NotFound(format!("Summary for conversation {}", conversation_id)))?;
+        .ok_or_else(|| {
+            AQBotError::NotFound(format!("Summary for conversation {}", conversation_id))
+        })?;
 
     let mut am: conversation_summaries::ActiveModel = existing.into();
     am.summary_text = Set(summary_text.to_string());
-    am.token_count = Set(token_count.map(|v| v as i64));
-    am.model_used = Set(model_used.map(|s| s.to_string()));
+    am.token_count = Set(token_count.map(i64::from));
+    am.model_used = Set(model_used.map(str::to_string));
     am.updated_at = Set(now);
     am.update(db).await?;
 
@@ -842,12 +1012,323 @@ pub async fn delete_summary(db: &DatabaseConnection, conversation_id: &str) -> R
     Ok(())
 }
 
+/// Atomically delete a conversation summary and all matching system markers.
+pub async fn delete_summary_and_markers(
+    db: &DatabaseConnection,
+    conversation_id: &str,
+    marker_content: &str,
+) -> Result<()> {
+    if marker_content.is_empty() {
+        return Err(AQBotError::Validation(
+            "Compression marker content must not be empty".to_string(),
+        ));
+    }
+
+    let txn = db.begin().await?;
+    conversation_summaries::Entity::delete_many()
+        .filter(conversation_summaries::Column::ConversationId.eq(conversation_id))
+        .exec(&txn)
+        .await?;
+    messages::Entity::delete_many()
+        .filter(messages::Column::ConversationId.eq(conversation_id))
+        .filter(messages::Column::Role.eq("system"))
+        .filter(messages::Column::Content.eq(marker_content))
+        .exec(&txn)
+        .await?;
+    txn.commit().await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::db::create_test_pool;
     use crate::repo::message;
-    use crate::types::MessageRole;
+    use crate::types::{ContextStrategy, MessageRole, UpdateConversationInput};
+
+    fn update_input(value: serde_json::Value) -> UpdateConversationInput {
+        serde_json::from_value(value).expect("deserialize conversation update")
+    }
+
+    #[tokio::test]
+    async fn context_strategy_override_and_legacy_flag_stay_compatible() {
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+        let conversation = create_conversation(db, "Strategy", "model", "provider", None)
+            .await
+            .unwrap();
+        assert_eq!(conversation.context_strategy_override, None);
+
+        let unrelated_update = update_conversation(
+            db,
+            &conversation.id,
+            update_input(serde_json::json!({"title": "Renamed"})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(unrelated_update.context_strategy_override, None);
+        assert_eq!(unrelated_update.context_message_limit, None);
+        assert_eq!(unrelated_update.compression_keep_last_n, None);
+
+        let legacy_enabled = update_conversation(
+            db,
+            &conversation.id,
+            update_input(serde_json::json!({"context_compression": true})),
+        )
+        .await
+        .unwrap();
+        assert!(legacy_enabled.context_compression);
+        assert_eq!(
+            legacy_enabled.context_strategy_override,
+            Some(ContextStrategy::SmartSummary)
+        );
+
+        let strict = update_conversation(
+            db,
+            &conversation.id,
+            update_input(serde_json::json!({
+                "context_compression": true,
+                "context_strategy_override": "raw_strict"
+            })),
+        )
+        .await
+        .unwrap();
+        assert!(!strict.context_compression);
+        assert_eq!(
+            strict.context_strategy_override,
+            Some(ContextStrategy::RawStrict)
+        );
+
+        let inherited = update_conversation(
+            db,
+            &conversation.id,
+            update_input(serde_json::json!({"context_strategy_override": null})),
+        )
+        .await
+        .unwrap();
+        assert!(!inherited.context_compression);
+        assert_eq!(inherited.context_strategy_override, None);
+
+        let mut settings = crate::repo::settings::get_settings(db).await.unwrap();
+        settings.default_context_strategy = ContextStrategy::SmartSummary;
+        crate::repo::settings::save_settings(db, &settings)
+            .await
+            .unwrap();
+        let inherited_smart_summary = update_conversation(
+            db,
+            &conversation.id,
+            update_input(serde_json::json!({"context_strategy_override": null})),
+        )
+        .await
+        .unwrap();
+        assert!(inherited_smart_summary.context_compression);
+        assert_eq!(inherited_smart_summary.context_strategy_override, None);
+
+        let legacy_disabled = update_conversation(
+            db,
+            &conversation.id,
+            update_input(serde_json::json!({"context_compression": false})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            legacy_disabled.context_strategy_override,
+            Some(ContextStrategy::RawTruncate)
+        );
+    }
+
+    #[tokio::test]
+    async fn conversation_context_numeric_overrides_enforce_storage_bounds() {
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+        let conversation = create_conversation(db, "Bounds", "model", "provider", None)
+            .await
+            .unwrap();
+
+        for value in [0_i64, 20, 21, 100, 200, 999, 1000] {
+            let updated = update_conversation(
+                db,
+                &conversation.id,
+                update_input(serde_json::json!({"compression_keep_last_n": value})),
+            )
+            .await
+            .unwrap();
+            assert_eq!(updated.compression_keep_last_n, Some(value as u32));
+        }
+        let cleared_keep_last = update_conversation(
+            db,
+            &conversation.id,
+            update_input(serde_json::json!({"compression_keep_last_n": null})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared_keep_last.compression_keep_last_n, None);
+
+        for value in [-1_i64, 1001, i64::MAX] {
+            let error = update_conversation(
+                db,
+                &conversation.id,
+                update_input(serde_json::json!({"compression_keep_last_n": value})),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("compression_keep_last_n"));
+        }
+        assert!(
+            serde_json::from_value::<UpdateConversationInput>(serde_json::json!({
+                "compression_keep_last_n": 1.5
+            }))
+            .is_err()
+        );
+
+        let max_limit = update_conversation(
+            db,
+            &conversation.id,
+            update_input(serde_json::json!({"context_message_limit": i32::MAX as i64})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(max_limit.context_message_limit, Some(i32::MAX as u32));
+        let cleared_limit = update_conversation(
+            db,
+            &conversation.id,
+            update_input(serde_json::json!({"context_message_limit": null})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(cleared_limit.context_message_limit, None);
+        for value in [-1_i64, i32::MAX as i64 + 1, i64::MAX] {
+            let error = update_conversation(
+                db,
+                &conversation.id,
+                update_input(serde_json::json!({"context_message_limit": value})),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("context_message_limit"));
+        }
+    }
+
+    #[tokio::test]
+    async fn branch_copies_context_strategy_override() {
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+        let source = create_conversation(db, "Source", "model", "provider", None)
+            .await
+            .unwrap();
+        update_conversation(
+            db,
+            &source.id,
+            update_input(serde_json::json!({"context_strategy_override": "raw_strict"})),
+        )
+        .await
+        .unwrap();
+        let source_message = message::create_message(
+            db,
+            &source.id,
+            MessageRole::User,
+            "branch here",
+            &[],
+            None,
+            0,
+        )
+        .await
+        .unwrap();
+
+        let branch = branch_conversation(db, &source.id, &source_message.id, false, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            branch.context_strategy_override,
+            Some(ContextStrategy::RawStrict)
+        );
+        assert!(!branch.context_compression);
+    }
+
+    #[tokio::test]
+    async fn summary_and_marker_upsert_rolls_back_when_marker_insert_fails() {
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+        let conversation = create_conversation(db, "Atomic", "model", "provider", None)
+            .await
+            .unwrap();
+        db.execute_unprepared(
+            "CREATE TRIGGER reject_test_marker \
+             BEFORE INSERT ON messages \
+             WHEN NEW.content = '<!-- fail-marker -->' \
+             BEGIN SELECT RAISE(ABORT, 'marker rejected'); END;",
+        )
+        .await
+        .unwrap();
+
+        let error = upsert_summary_with_marker(
+            db,
+            &conversation.id,
+            "summary",
+            None,
+            Some(2),
+            Some("model"),
+            Some("source"),
+            "<!-- fail-marker -->",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.to_string().contains("marker rejected"));
+        assert!(get_summary(db, &conversation.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn summary_and_marker_delete_is_atomic() {
+        const MARKER: &str = "<!-- delete-marker -->";
+
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+        let conversation = create_conversation(db, "Atomic delete", "model", "provider", None)
+            .await
+            .unwrap();
+        let (summary, marker) = upsert_summary_with_marker(
+            db,
+            &conversation.id,
+            "summary",
+            None,
+            Some(2),
+            Some("model"),
+            Some("source"),
+            MARKER,
+        )
+        .await
+        .unwrap();
+        assert_eq!(summary.summary_text, "summary");
+        assert_eq!(marker.role, MessageRole::System);
+
+        db.execute_unprepared(
+            "CREATE TRIGGER reject_test_marker_delete \
+             BEFORE DELETE ON messages \
+             WHEN OLD.content = '<!-- delete-marker -->' \
+             BEGIN SELECT RAISE(ABORT, 'marker delete rejected'); END;",
+        )
+        .await
+        .unwrap();
+        let error = delete_summary_and_markers(db, &conversation.id, MARKER)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("marker delete rejected"));
+        assert!(get_summary(db, &conversation.id).await.unwrap().is_some());
+        assert_eq!(
+            message::get_message(db, &marker.id).await.unwrap().content,
+            MARKER
+        );
+
+        db.execute_unprepared("DROP TRIGGER reject_test_marker_delete")
+            .await
+            .unwrap();
+        delete_summary_and_markers(db, &conversation.id, MARKER)
+            .await
+            .unwrap();
+        assert!(get_summary(db, &conversation.id).await.unwrap().is_none());
+        assert!(message::get_message(db, &marker.id).await.is_err());
+    }
 
     #[test]
     fn stored_media_rewrite_respects_overlapping_id_boundaries() {

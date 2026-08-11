@@ -2311,6 +2311,7 @@ mod tests {
             is_pinned: false,
             is_archived: false,
             context_compression: false,
+            context_strategy_override: None,
             context_message_limit: None,
             compression_keep_last_n: None,
             category_id: None,

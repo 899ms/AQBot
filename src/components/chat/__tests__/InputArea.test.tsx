@@ -129,6 +129,7 @@ vi.mock('react-i18next', () => ({
         }
         if (typeof options.defaultValue === 'string') return options.defaultValue;
       }
+      if (key === 'chat.contextTokenUsage') return '上下文 tokens';
       return key;
     },
   }),
@@ -269,16 +270,16 @@ describe('InputArea', () => {
     conversationState.activeConversationId = null;
     conversationState.compressingConversationId = null;
     const view = render(renderInput());
-    expect(screen.queryByRole('button', { name: 'loading' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('chat.contextStrategyActive')).not.toHaveClass('ant-btn-loading');
 
     conversationState.activeConversationId = 'conv-1';
     conversationState.compressingConversationId = 'conv-1';
     view.rerender(renderInput());
-    expect(screen.getByRole('button', { name: 'loading' })).toBeInTheDocument();
+    expect(screen.getByLabelText('chat.contextStrategyActive')).toHaveClass('ant-btn-loading');
 
     conversationState.compressingConversationId = 'conv-2';
     view.rerender(renderInput());
-    expect(screen.queryByRole('button', { name: 'loading' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('chat.contextStrategyActive')).not.toHaveClass('ant-btn-loading');
   });
 
   it('focuses the chat textarea when the window regains focus without another active input', async () => {
@@ -434,7 +435,7 @@ describe('InputArea', () => {
     expect(screen.queryByText('XHigh')).not.toBeInTheDocument();
   });
 
-  it('shows backend context usage instead of a loaded-message estimate', async () => {
+  it('uses the backend dynamic input budget for context usage', async () => {
     getContextUsage.mockResolvedValueOnce({
       used_tokens: 720000,
       context_window: 1000000,
@@ -451,9 +452,136 @@ describe('InputArea', () => {
     );
 
     await waitFor(() => expect(getContextUsage).toHaveBeenCalledWith('conv-1'));
-    await userEvent.click(screen.getByLabelText('上下文 tokens'));
+    await userEvent.click(await screen.findByLabelText('上下文 tokens'));
 
-    expect(await screen.findByText('720,000 / 1,000,000 tokens (72%)')).toBeInTheDocument();
+    expect(await screen.findByText('720,000 / 700,000 tokens (100%)')).toBeInTheDocument();
+  });
+
+  it('shows strategy-aware token usage and excluded raw messages', async () => {
+    getContextUsage.mockResolvedValueOnce({
+      used_tokens: 80,
+      context_window: 100,
+      threshold_tokens: 70,
+      has_summary: false,
+      compressed_until_message_id: null,
+      messages_after_boundary: 1,
+      effective_strategy: 'raw_truncate',
+      raw_tokens: 140,
+      sent_tokens: 80,
+      excluded_message_count: 2,
+      exclusion_reason: 'message_limit',
+      overflow: false,
+    });
+
+    render(
+      <App>
+        <InputArea />
+      </App>,
+    );
+
+    await userEvent.click(await screen.findByLabelText('上下文 tokens'));
+
+    expect(await screen.findByText('80 / 70 tokens (100%)')).toBeInTheDocument();
+    expect(screen.getByText(/chat\.contextRawTokens: 140/)).toBeInTheDocument();
+    expect(screen.getByText(/chat\.contextExcludedMessages/)).toHaveTextContent(
+      'chat.contextExclusionReasonMessageLimit',
+    );
+    expect(screen.getByText(/chat\.contextExcludedMessages/)).not.toHaveTextContent('message_limit');
+    expect(screen.getByRole('button', { name: 'chat.compressNow' })).toBeDisabled();
+  });
+
+  it('keeps strict usage visible when the model context window is unknown', async () => {
+    getContextUsage.mockResolvedValueOnce({
+      used_tokens: 0,
+      context_window: null,
+      threshold_tokens: null,
+      has_summary: false,
+      compressed_until_message_id: null,
+      messages_after_boundary: 4,
+      effective_strategy: 'raw_strict',
+      raw_tokens: 140,
+      sent_tokens: 0,
+      excluded_message_count: 4,
+      exclusion_reason: 'context_window_unknown',
+      overflow: true,
+    });
+
+    render(
+      <App>
+        <InputArea />
+      </App>,
+    );
+
+    await userEvent.click(await screen.findByLabelText('上下文 tokens'));
+
+    expect(await screen.findByText('chat.contextWindowUnknownStrict')).toBeInTheDocument();
+    expect(screen.getByText(/chat\.contextExcludedMessages/)).toHaveTextContent(
+      'chat.contextExclusionReasonContextWindowUnknown',
+    );
+    const clearButton = screen.getByRole('button', { name: 'chat.clearContextToContinue' });
+    await userEvent.click(clearButton);
+    expect(insertContextClear).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows a strict block when the context budget metadata is unknown', async () => {
+    getContextUsage.mockResolvedValueOnce({
+      used_tokens: 0,
+      context_window: null,
+      threshold_tokens: null,
+      has_summary: false,
+      compressed_until_message_id: null,
+      messages_after_boundary: 4,
+      effective_strategy: 'raw_strict',
+      raw_tokens: 500,
+      sent_tokens: 0,
+      excluded_message_count: 4,
+      exclusion_reason: 'context_budget_unknown',
+      overflow: true,
+    });
+
+    render(
+      <App>
+        <InputArea />
+      </App>,
+    );
+
+    await userEvent.click(await screen.findByLabelText('上下文 tokens'));
+
+    expect(await screen.findByText('chat.contextBudgetUnknownStrict')).toBeInTheDocument();
+    expect(screen.queryByText('chat.contextWindowUnknownStrict')).not.toBeInTheDocument();
+    expect(screen.getByText(/chat\.contextExcludedMessages/)).toHaveTextContent(
+      'chat.contextExclusionReasonContextBudgetUnknown',
+    );
+    expect(screen.getByRole('button', { name: 'chat.clearContextToContinue' })).toBeInTheDocument();
+  });
+
+  it('falls back to a strict window-unknown state for legacy usage without a reason', async () => {
+    getContextUsage.mockResolvedValueOnce({
+      used_tokens: 0,
+      context_window: null,
+      threshold_tokens: null,
+      has_summary: false,
+      compressed_until_message_id: null,
+      messages_after_boundary: 4,
+      effective_strategy: 'raw_strict',
+      raw_tokens: 140,
+      sent_tokens: 0,
+      excluded_message_count: 0,
+      exclusion_reason: null,
+      overflow: true,
+    });
+
+    render(
+      <App>
+        <InputArea />
+      </App>,
+    );
+
+    await userEvent.click(await screen.findByLabelText('上下文 tokens'));
+
+    expect(await screen.findByText('chat.contextWindowUnknownStrict')).toBeInTheDocument();
+    expect(screen.queryByText('chat.contextBudgetUnknownStrict')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'chat.clearContextToContinue' })).toBeInTheDocument();
   });
 
   it('does not refetch context usage while a conversation switch is still loading messages', async () => {

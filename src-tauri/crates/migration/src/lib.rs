@@ -48,6 +48,7 @@ mod m20260810_000001_add_acp_tables;
 mod m20260811_000001_acp_project_sort_order;
 mod m20260812_000001_acp_thread_pin_sort;
 mod m20260813_000001_acp_project_kind;
+mod m20260814_000001_add_context_strategy;
 
 pub struct Migrator;
 
@@ -103,6 +104,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260811_000001_acp_project_sort_order::Migration),
             Box::new(m20260812_000001_acp_thread_pin_sort::Migration),
             Box::new(m20260813_000001_acp_project_kind::Migration),
+            Box::new(m20260814_000001_add_context_strategy::Migration),
         ]
     }
 }
@@ -589,5 +591,68 @@ mod tests {
         Migrator::refresh(&db)
             .await
             .expect("refresh sqlite migrations");
+    }
+
+    #[tokio::test]
+    async fn context_strategy_migration_backfills_legacy_rows_and_leaves_new_rows_null() {
+        let db = sqlite_test_db().await;
+        db.execute_unprepared(
+            "CREATE TABLE conversations (\
+                id TEXT PRIMARY KEY NOT NULL, \
+                context_compression INTEGER NOT NULL\
+             ); \
+             INSERT INTO conversations (id, context_compression) VALUES \
+                ('compressed', 1), \
+                ('raw', 0);",
+        )
+        .await
+        .expect("create legacy conversations");
+
+        let manager = SchemaManager::new(&db);
+        m20260814_000001_add_context_strategy::Migration
+            .up(&manager)
+            .await
+            .expect("run context strategy migration");
+
+        let rows = db
+            .query_all(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT id, context_strategy_override FROM conversations ORDER BY id".to_string(),
+            ))
+            .await
+            .expect("query migrated conversations");
+        assert_eq!(
+            rows[0]
+                .try_get::<Option<String>>("", "context_strategy_override")
+                .expect("read compressed strategy")
+                .as_deref(),
+            Some("smart_summary")
+        );
+        assert_eq!(
+            rows[1]
+                .try_get::<Option<String>>("", "context_strategy_override")
+                .expect("read raw strategy")
+                .as_deref(),
+            Some("raw_truncate")
+        );
+
+        db.execute_unprepared(
+            "INSERT INTO conversations (id, context_compression) VALUES ('new', 0)",
+        )
+        .await
+        .expect("insert post-migration conversation");
+        let row = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT context_strategy_override FROM conversations WHERE id = 'new'".to_string(),
+            ))
+            .await
+            .expect("query new conversation")
+            .expect("new conversation row");
+        assert_eq!(
+            row.try_get::<Option<String>>("", "context_strategy_override")
+                .expect("read new strategy"),
+            None
+        );
     }
 }

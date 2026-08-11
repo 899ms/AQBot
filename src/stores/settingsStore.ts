@@ -56,6 +56,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   default_top_p: null,
   default_frequency_penalty: null,
   default_context_count: null,
+  default_context_strategy: 'raw_truncate',
   title_summary_provider_id: null,
   title_summary_model_id: null,
   title_summary_temperature: null,

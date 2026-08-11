@@ -15,20 +15,16 @@ import {
   type AgentWorkspaceNameStrategy,
   type ChatMessageAreaStyle,
 } from '@/types';
+import {
+  COMPRESSION_KEEP_LAST_N_MAX,
+  COMPRESSION_KEEP_LAST_N_MIN,
+  isContextStrategy,
+  normalizeCompressionKeepLastN,
+  normalizeContextStrategy,
+} from '@/lib/contextStrategy';
 import { useSystemFonts } from '@/hooks/useSystemFonts';
 import { SettingsGroup } from './SettingsGroup';
 import { SettingsSelect } from './SettingsSelect';
-
-/** Matches backend DEFAULT_COMPRESSION_KEEP_LAST_N. */
-const DEFAULT_COMPRESSION_KEEP_LAST_N = 3;
-const COMPRESSION_KEEP_LAST_N_MAX = 20;
-
-function normalizeCompressionKeepLastN(value: number | string | null | undefined) {
-  if (value == null || value === '') return DEFAULT_COMPRESSION_KEEP_LAST_N;
-  const numericValue = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(numericValue)) return DEFAULT_COMPRESSION_KEEP_LAST_N;
-  return Math.min(COMPRESSION_KEEP_LAST_N_MAX, Math.max(0, Math.floor(numericValue)));
-}
 
 const { TextArea } = Input;
 const CHAT_FONT_SIZE_MIN = 12;
@@ -196,6 +192,26 @@ export function ConversationSettings() {
         </div>
         <div className="flex items-center justify-between" style={rowStyle}>
           <span className="inline-flex items-center gap-1">
+            {t('settings.contextStrategy')}
+            <Tooltip title={t('settings.contextStrategyTooltip')}>
+              <Info size={14} style={{ color: token.colorTextSecondary, cursor: 'help' }} />
+            </Tooltip>
+          </span>
+          <SettingsSelect
+            value={normalizeContextStrategy(settings.default_context_strategy)}
+            onChange={(value) => {
+              if (isContextStrategy(value)) void saveSettings({ default_context_strategy: value });
+            }}
+            options={[
+              { label: t('settings.contextStrategySmartSummary'), value: 'smart_summary' },
+              { label: t('settings.contextStrategyRawTruncate'), value: 'raw_truncate' },
+              { label: t('settings.contextStrategyRawStrict'), value: 'raw_strict' },
+            ]}
+          />
+        </div>
+        <Divider style={{ margin: '4px 0' }} />
+        <div className="flex items-center justify-between" style={rowStyle}>
+          <span className="inline-flex items-center gap-1">
             {t('settings.compressionKeepLastN')}
             <Tooltip title={t('settings.compressionKeepLastNTooltip')}>
               <Info size={14} style={{ color: token.colorTextSecondary, cursor: 'help' }} />
@@ -203,8 +219,9 @@ export function ConversationSettings() {
           </span>
           <InputNumber
             aria-label={t('settings.compressionKeepLastN')}
-            min={0}
+            min={COMPRESSION_KEEP_LAST_N_MIN}
             max={COMPRESSION_KEEP_LAST_N_MAX}
+            precision={0}
             value={normalizeCompressionKeepLastN(settings.default_compression_keep_last_n)}
             onChange={(value) => saveSettings({
               default_compression_keep_last_n: normalizeCompressionKeepLastN(value),

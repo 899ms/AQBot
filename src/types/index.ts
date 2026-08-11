@@ -347,6 +347,7 @@ export interface ModelParamOverrides {
 
 // === Conversation & Message ===
 export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
+export type ContextStrategy = 'smart_summary' | 'raw_truncate' | 'raw_strict';
 
 export interface ConversationCategory {
   id: string;
@@ -385,7 +386,10 @@ export interface Conversation {
   enabled_memory_namespace_ids: string[];
   is_pinned: boolean;
   is_archived: boolean;
+  /** Legacy compatibility flag. Prefer context_strategy_override. */
   context_compression: boolean;
+  /** Per-conversation strategy override. null = use the global default. */
+  context_strategy_override: ContextStrategy | null;
   /** Per-conversation history message cap. null = use global default. ≥50 = unlimited. */
   context_message_limit: number | null;
   /**
@@ -518,6 +522,13 @@ export interface ContextUsage {
   has_summary: boolean;
   compressed_until_message_id: string | null;
   messages_after_boundary: number;
+  /** New strategy-aware fields. Optional while older backends remain supported. */
+  effective_strategy?: ContextStrategy;
+  raw_tokens?: number;
+  sent_tokens?: number;
+  excluded_message_count?: number;
+  exclusion_reason?: string | null;
+  overflow?: boolean;
 }
 
 export interface UpdateConversationInput {
@@ -538,7 +549,10 @@ export interface UpdateConversationInput {
   enabled_mcp_server_ids?: string[];
   enabled_knowledge_base_ids?: string[];
   enabled_memory_namespace_ids?: string[];
+  /** Legacy compatibility flag. Prefer context_strategy_override. */
   context_compression?: boolean;
+  /** Set null to clear the override and use the global default strategy. */
+  context_strategy_override?: ContextStrategy | null;
   /** Set null to clear override and use global default. ≥50 = unlimited. */
   context_message_limit?: number | null;
   /** Set null to clear and use default keep-last-N (3). */
@@ -723,6 +737,8 @@ export interface AppSettings {
   default_top_p: number | null;
   default_frequency_penalty: number | null;
   default_context_count: number | null;
+  /** Default context handling strategy for conversations without an override. */
+  default_context_strategy: ContextStrategy;
   title_summary_provider_id: string | null;
   title_summary_model_id: string | null;
   title_summary_temperature: number | null;

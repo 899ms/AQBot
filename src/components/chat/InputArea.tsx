@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Button, Tooltip, App, theme, Dropdown, Tag, Popover, Checkbox, Badge, InputNumber } from 'antd';
 import type { MenuProps } from 'antd';
-import { Paperclip, Trash2, Mic, Eraser, Scissors, Globe, Brain, Atom, Plug, SlidersHorizontal, ArrowUp, Square, Check, Zap, ZapOff, Shrink, Upload, GitCompareArrows, X, BookOpen, GripHorizontal, CircleOff, SignalLow, SignalMedium, SignalHigh, Signal, Bot, MessageSquare, Shield, ShieldCheck, ShieldAlert, FolderOpen, ExternalLink } from 'lucide-react';
+import { Paperclip, Trash2, Mic, Eraser, Scissors, Globe, Brain, Atom, Plug, SlidersHorizontal, ArrowUp, Square, Check, Zap, Shrink, Upload, GitCompareArrows, X, BookOpen, GripHorizontal, CircleOff, SignalLow, SignalMedium, SignalHigh, Signal, Bot, MessageSquare, Shield, ShieldCheck, ShieldAlert, FolderOpen, ExternalLink } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useConversationStore, useProviderStore, useSettingsStore, useSearchStore, useMcpStore, useMemoryStore, useKnowledgeStore } from '@/stores';
 import { useUIStore } from '@/stores/uiStore';
@@ -17,6 +17,10 @@ import { NamespaceIcon } from '@/components/shared/NamespaceIcon';
 import { KnowledgeBaseIcon } from '@/components/shared/KnowledgeBaseIcon';
 import { getShortcutBinding, formatShortcutForDisplay, matchesShortcutEvent } from '@/lib/shortcuts';
 import { normalizeAutoConversationTitle } from '@/lib/conversationTitle';
+import {
+  resolveEffectiveContextStrategy,
+  shouldNotifyContextExclusion,
+} from '@/lib/contextStrategy';
 import { perfNow, perfTraceDuration } from '@/lib/perfTrace';
 import type { ShortcutAction } from '@/lib/shortcuts';
 import { VoiceCall } from './VoiceCall';
@@ -28,6 +32,7 @@ import {
   DEFAULT_CHAT_INPUT_ACTIONS_SCALE,
   normalizeChatInputActionsScale,
   type AttachmentInput,
+  type ContextStrategy,
   type ProviderType,
   type RealtimeConfig,
 } from '@/types';
@@ -111,10 +116,17 @@ export function InputArea() {
   const providers = useProviderStore((s) => s.providers);
   const settings = useSettingsStore((s) => s.settings);
   const activeConversationForContext = conversations.find((c) => c.id === activeConversationId);
+  const effectiveContextStrategy = resolveEffectiveContextStrategy(
+    activeConversationForContext,
+    settings.default_context_strategy,
+  );
   const contextCount = useMemo(() => {
     const activeMessages = messages.filter((m) => m.is_active !== false && !m.content.startsWith('%%ERROR%%'));
     const lastMarkerIdx = activeMessages.reduce((maxIdx, m, i) => {
-      if (m.content === '<!-- context-clear -->' || m.content === '<!-- context-compressed -->') return i;
+      if (
+        m.content === '<!-- context-clear -->'
+        || (effectiveContextStrategy === 'smart_summary' && m.content === '<!-- context-compressed -->')
+      ) return i;
       return maxIdx;
     }, -1);
     let count: number;
@@ -140,6 +152,7 @@ export function InputArea() {
     hasOlderMessages,
     totalActiveCount,
     activeConversationForContext?.context_message_limit,
+    effectiveContextStrategy,
     settings.default_context_count,
   ]);
   const inputActionsScale = normalizeChatInputActionsScale(
@@ -229,6 +242,25 @@ export function InputArea() {
 
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
   const currentMode = activeConversation?.mode === 'agent' ? 'agent' : 'chat';
+  const effectiveContextStrategyLabel = useMemo(() => {
+    switch (effectiveContextStrategy) {
+      case 'smart_summary': return t('settings.contextStrategySmartSummary');
+      case 'raw_strict': return t('settings.contextStrategyRawStrict');
+      case 'raw_truncate': return t('settings.contextStrategyRawTruncate');
+    }
+  }, [effectiveContextStrategy, t]);
+  const handleContextStrategyChange = useCallback(async (strategy: ContextStrategy) => {
+    if (!activeConversationId) return;
+    try {
+      await updateConversation(activeConversationId, {
+        context_strategy_override: strategy,
+        context_compression: strategy === 'smart_summary',
+      });
+    } catch (error) {
+      console.error('Failed to update context strategy:', error);
+      messageApi.error(t('chat.contextStrategyUpdateFailed'));
+    }
+  }, [activeConversationId, messageApi, t, updateConversation]);
 
   const setActivePage = useUIStore((s) => s.setActivePage);
   const setSettingsSection = useUIStore((s) => s.setSettingsSection);
@@ -743,15 +775,23 @@ export function InputArea() {
   const requestOpenCompressionSummary = useConversationStore((s) => s.requestOpenCompressionSummary);
   const [serverContextUsage, setServerContextUsage] = useState<{
     usedTokens: number;
-    maxTokens: number;
-    percent: number;
+    maxTokens: number | null;
+    percent: number | null;
     hasSummary: boolean;
     messagesAfterBoundary: number;
+    effectiveStrategy: ContextStrategy;
+    rawTokens: number;
+    sentTokens: number;
+    excludedMessageCount: number;
+    exclusionReason: string | null;
+    overflow: boolean;
   } | null>(null);
+  const lastExclusionNoticeRef = useRef<string | null>(null);
   const contextUsageRevision = `${messages.length}:${messages[messages.length - 1]?.id ?? ''}:${messages[messages.length - 1]?.status ?? ''}`;
 
   useEffect(() => {
     setServerContextUsage(null);
+    lastExclusionNoticeRef.current = null;
   }, [activeConversationId]);
 
   useEffect(() => {
@@ -773,16 +813,31 @@ export function InputArea() {
         getContextUsage(activeConversationId).then((usage) => {
           perfTraceDuration('chat.contextUsage', startedAt, { conversationId: activeConversationId });
           if (cancelled) return;
-          if (!usage?.context_window) {
+          if (!usage) {
             setServerContextUsage(null);
             return;
           }
+          const sentTokens = usage.sent_tokens ?? usage.used_tokens;
+          const inputBudget = usage.threshold_tokens ?? usage.context_window;
+          const maxTokens = inputBudget !== null && inputBudget !== undefined && inputBudget >= 0
+            ? inputBudget
+            : null;
           setServerContextUsage({
-            usedTokens: usage.used_tokens,
-            maxTokens: usage.context_window,
-            percent: Math.min(Math.round((usage.used_tokens / usage.context_window) * 100), 100),
+            usedTokens: sentTokens,
+            maxTokens,
+            percent: maxTokens !== null
+              ? maxTokens === 0
+                ? sentTokens > 0 ? 100 : 0
+                : Math.min(Math.round((sentTokens / maxTokens) * 100), 100)
+              : null,
             hasSummary: usage.has_summary,
             messagesAfterBoundary: usage.messages_after_boundary,
+            effectiveStrategy: usage.effective_strategy ?? effectiveContextStrategy,
+            rawTokens: usage.raw_tokens ?? usage.used_tokens,
+            sentTokens: usage.sent_tokens ?? usage.used_tokens,
+            excludedMessageCount: usage.excluded_message_count ?? 0,
+            exclusionReason: usage.exclusion_reason ?? null,
+            overflow: usage.overflow ?? false,
           });
         });
       };
@@ -801,7 +856,40 @@ export function InputArea() {
         win.cancelIdleCallback(idleId);
       }
     };
-  }, [activeConversationId, contextUsageRevision, getContextUsage, loading, streaming]);
+  }, [
+    activeConversationId,
+    contextUsageRevision,
+    effectiveContextStrategy,
+    getContextUsage,
+    loading,
+    streaming,
+  ]);
+
+  useEffect(() => {
+    if (!activeConversationId) return;
+    if (
+      !serverContextUsage?.excludedMessageCount
+      || !shouldNotifyContextExclusion(serverContextUsage.exclusionReason)
+    ) {
+      lastExclusionNoticeRef.current = null;
+      return;
+    }
+    const noticeKey = [
+      activeConversationId,
+      serverContextUsage.exclusionReason ?? '',
+    ].join(':');
+    if (lastExclusionNoticeRef.current === noticeKey) return;
+    lastExclusionNoticeRef.current = noticeKey;
+    messageApi.warning(t('chat.contextMessagesExcludedWarning', {
+      count: serverContextUsage.excludedMessageCount,
+    }));
+  }, [
+    activeConversationId,
+    messageApi,
+    serverContextUsage?.excludedMessageCount,
+    serverContextUsage?.exclusionReason,
+    t,
+  ]);
 
   // Fallback only: local estimation sees loaded messages, so it can undercount
   // paginated conversations when the backend usage query is unavailable.
@@ -814,7 +902,10 @@ export function InputArea() {
     // Count message tokens (only after last marker)
     const activeMessages = messages.filter((m) => m.is_active !== false && !m.content.startsWith('%%ERROR%%'));
     const lastMarkerIdx = activeMessages.reduce((maxIdx, m, i) => {
-      if (m.content === '<!-- context-clear -->' || m.content === '<!-- context-compressed -->') return i;
+      if (
+        m.content === '<!-- context-clear -->'
+        || (effectiveContextStrategy === 'smart_summary' && m.content === '<!-- context-compressed -->')
+      ) return i;
       return maxIdx;
     }, -1);
     const effectiveMessages = lastMarkerIdx === -1 ? activeMessages : activeMessages.slice(lastMarkerIdx + 1);
@@ -834,8 +925,20 @@ export function InputArea() {
       percent,
       hasSummary: lastMarkerIdx !== -1 && activeMessages[lastMarkerIdx]?.content === '<!-- context-compressed -->',
       messagesAfterBoundary: effectiveMessages.length,
+      effectiveStrategy: effectiveContextStrategy,
+      rawTokens: usedTokens,
+      sentTokens: usedTokens,
+      excludedMessageCount: 0,
+      exclusionReason: null,
+      overflow: false,
     };
-  }, [messages, currentModel?.context_window, activeConversation?.system_prompt, serverContextUsage]);
+  }, [
+    messages,
+    currentModel?.context_window,
+    activeConversation?.system_prompt,
+    effectiveContextStrategy,
+    serverContextUsage,
+  ]);
 
   const { hasRealtimeVoice, hasReasoning, hasVision, hasFunctionCalling } = React.useMemo(() => ({
     hasRealtimeVoice: activeConversation
@@ -1605,23 +1708,39 @@ export function InputArea() {
               menu={{
                 items: [
                   {
-                    key: 'auto',
-                    icon: activeConversation?.context_compression
-                      ? <ZapOff size={14} />
+                    key: 'smart_summary',
+                    icon: effectiveContextStrategy === 'smart_summary'
+                      ? <Check size={14} />
                       : <Zap size={14} />,
-                    label: activeConversation?.context_compression
-                      ? t('chat.disableAutoCompression')
-                      : t('chat.enableAutoCompression'),
-                    onClick: () => {
-                      if (!activeConversationId || !activeConversation) return;
-                      updateConversation(activeConversationId, { context_compression: !activeConversation.context_compression });
-                    },
+                    label: t('settings.contextStrategySmartSummary'),
+                    onClick: () => handleContextStrategyChange('smart_summary'),
+                  },
+                  {
+                    key: 'raw_truncate',
+                    icon: effectiveContextStrategy === 'raw_truncate'
+                      ? <Check size={14} />
+                      : <Shrink size={14} />,
+                    label: t('settings.contextStrategyRawTruncate'),
+                    onClick: () => handleContextStrategyChange('raw_truncate'),
+                  },
+                  {
+                    key: 'raw_strict',
+                    icon: effectiveContextStrategy === 'raw_strict'
+                      ? <Check size={14} />
+                      : <ShieldAlert size={14} />,
+                    label: t('settings.contextStrategyRawStrict'),
+                    onClick: () => handleContextStrategyChange('raw_strict'),
                   },
                   {
                     key: 'manual',
                     icon: <Shrink size={14} />,
                     label: t('chat.manualCompress'),
-                    disabled: !activeConversationId || loading || streaming || compressing || messages.length === 0,
+                    disabled: effectiveContextStrategy !== 'smart_summary'
+                      || !activeConversationId
+                      || loading
+                      || streaming
+                      || compressing
+                      || messages.length === 0,
                     onClick: async () => {
                       if (!activeConversationId) return;
                       try {
@@ -1637,14 +1756,23 @@ export function InputArea() {
               trigger={['click']}
               placement="topLeft"
             >
-              <Tooltip title={t('chat.contextCompression')}>
+              <Tooltip title={t('chat.contextStrategyActive', { strategy: effectiveContextStrategyLabel })}>
                 <Button
+                  aria-label={t('chat.contextStrategyActive', { strategy: effectiveContextStrategyLabel })}
                   type="text"
                   size="small"
-                  icon={<Zap size={14} />}
+                  icon={effectiveContextStrategy === 'smart_summary'
+                    ? <Zap size={14} />
+                    : effectiveContextStrategy === 'raw_strict'
+                      ? <ShieldAlert size={14} />
+                      : <Shrink size={14} />}
                   loading={compressing}
                   disabled={!activeConversationId || loading}
-                  style={activeConversation?.context_compression ? { color: token.colorPrimary } : undefined}
+                  style={effectiveContextStrategy === 'smart_summary'
+                    ? { color: token.colorPrimary }
+                    : effectiveContextStrategy === 'raw_strict'
+                      ? { color: token.colorWarning }
+                      : undefined}
                 />
               </Tooltip>
             </Dropdown>
@@ -1817,23 +1945,94 @@ export function InputArea() {
             </span>
           )}
           {contextTokenUsage && (() => {
+            const usageStrategyLabel = contextTokenUsage.effectiveStrategy === 'smart_summary'
+              ? t('settings.contextStrategySmartSummary')
+              : contextTokenUsage.effectiveStrategy === 'raw_strict'
+                ? t('settings.contextStrategyRawStrict')
+                : t('settings.contextStrategyRawTruncate');
             const r = 8, stroke = 2.5, size = (r + stroke) * 2;
             const circ = 2 * Math.PI * r;
-            const offset = circ * (1 - contextTokenUsage.percent / 100);
-            const color = contextTokenUsage.percent > 80
+            const strictBudgetUnknown = contextTokenUsage.exclusionReason === 'context_budget_unknown'
+              && contextTokenUsage.effectiveStrategy === 'raw_strict';
+            const strictWindowUnknown = contextTokenUsage.effectiveStrategy === 'raw_strict'
+              && (
+                contextTokenUsage.exclusionReason === 'context_window_unknown'
+                || (
+                  contextTokenUsage.exclusionReason === null
+                  && contextTokenUsage.maxTokens === null
+                )
+              );
+            const visualPercent = contextTokenUsage.percent ?? 100;
+            const offset = circ * (1 - visualPercent / 100);
+            const color = strictWindowUnknown || contextTokenUsage.overflow
               ? token.colorError
-              : contextTokenUsage.percent > 60
+              : visualPercent > 60
                 ? token.colorWarning
                 : token.colorPrimary;
-            const canCompress = !!activeConversationId && !loading && !streaming && !compressing && messages.length > 0;
+            const exclusionReasonLabel = (() => {
+              switch (contextTokenUsage.exclusionReason) {
+                case 'smart_summary': return t('chat.contextExclusionReasonSmartSummary');
+                case 'input_budget': return t('chat.contextExclusionReasonInputBudget');
+                case 'input_budget_exceeded': return t('chat.contextExclusionReasonInputBudgetExceeded');
+                case 'message_limit': return t('chat.contextExclusionReasonMessageLimit');
+                case 'context_window_unknown': return t('chat.contextExclusionReasonContextWindowUnknown');
+                case 'context_budget_unknown': return t('chat.contextExclusionReasonContextBudgetUnknown');
+                case null: return null;
+                default: return t('chat.contextExclusionReasonOther');
+              }
+            })();
+            const canCompress = contextTokenUsage.effectiveStrategy === 'smart_summary'
+              && !!activeConversationId
+              && !loading
+              && !streaming
+              && !compressing
+              && messages.length > 0;
             return (
               <Popover
                 trigger="click"
                 content={
-                  <div style={{ minWidth: 200, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ minWidth: 240, display: 'flex', flexDirection: 'column', gap: 8 }}>
                     <div style={{ fontSize: 12, color: token.colorTextSecondary }}>
-                      {contextTokenUsage.usedTokens.toLocaleString()} / {contextTokenUsage.maxTokens.toLocaleString()} tokens ({contextTokenUsage.percent}%)
+                      {contextTokenUsage.maxTokens !== null && contextTokenUsage.percent !== null
+                        ? `${contextTokenUsage.usedTokens.toLocaleString()} / ${contextTokenUsage.maxTokens.toLocaleString()} tokens (${contextTokenUsage.percent}%)`
+                        : strictBudgetUnknown
+                          ? t('chat.contextBudgetUnknownStrict')
+                          : strictWindowUnknown
+                            ? t('chat.contextWindowUnknownStrict')
+                            : t('chat.contextWindowUnknown')}
                     </div>
+                    <div style={{ fontSize: 11, color: token.colorTextTertiary }}>
+                      {t('chat.contextStrategyLabel')}: {usageStrategyLabel}
+                    </div>
+                    {(contextTokenUsage.rawTokens !== contextTokenUsage.sentTokens
+                      || contextTokenUsage.excludedMessageCount > 0) && (
+                      <div style={{ fontSize: 11, color: token.colorTextTertiary }}>
+                        {t('chat.contextRawTokens')}: {contextTokenUsage.rawTokens.toLocaleString()}
+                        {' · '}
+                        {t('chat.contextSentTokens')}: {contextTokenUsage.sentTokens.toLocaleString()}
+                      </div>
+                    )}
+                    {contextTokenUsage.excludedMessageCount > 0 && (
+                      <div style={{ fontSize: 11, color: token.colorWarning }}>
+                        {t('chat.contextExcludedMessages', {
+                          count: contextTokenUsage.excludedMessageCount,
+                        })}
+                        {exclusionReasonLabel
+                          ? ` · ${t('chat.contextExclusionReason')}: ${exclusionReasonLabel}`
+                          : ''}
+                      </div>
+                    )}
+                    {strictBudgetUnknown ? (
+                      contextTokenUsage.maxTokens !== null && (
+                        <div style={{ fontSize: 11, color: token.colorError }}>
+                          {t('chat.contextBudgetUnknownStrict')}
+                        </div>
+                      )
+                    ) : contextTokenUsage.overflow && !strictWindowUnknown && (
+                      <div style={{ fontSize: 11, color: token.colorError }}>
+                        {t('chat.contextOverflow')}
+                      </div>
+                    )}
                     {contextTokenUsage.hasSummary && (
                       <div style={{ fontSize: 11, color: token.colorTextTertiary }}>
                         {t('chat.hasSummary')}
@@ -1866,6 +2065,16 @@ export function InputArea() {
                       >
                         {t('chat.viewCompressionSummary')}
                       </Button>
+                      {(contextTokenUsage.overflow || strictWindowUnknown)
+                        && contextTokenUsage.effectiveStrategy === 'raw_strict' && (
+                          <Button
+                            size="small"
+                            danger
+                            onClick={() => insertContextClear()}
+                          >
+                            {t('chat.clearContextToContinue')}
+                          </Button>
+                        )}
                     </div>
                   </div>
                 }

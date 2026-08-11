@@ -658,6 +658,40 @@ pub struct ModelParamOverrides {
 
 // === Conversation & Message ===
 
+pub const MAX_COMPRESSION_KEEP_LAST_N: u32 = 1000;
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextStrategy {
+    SmartSummary,
+    #[default]
+    RawTruncate,
+    RawStrict,
+}
+
+impl ContextStrategy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SmartSummary => "smart_summary",
+            Self::RawTruncate => "raw_truncate",
+            Self::RawStrict => "raw_strict",
+        }
+    }
+}
+
+impl std::str::FromStr for ContextStrategy {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "smart_summary" => Ok(Self::SmartSummary),
+            "raw_truncate" => Ok(Self::RawTruncate),
+            "raw_strict" => Ok(Self::RawStrict),
+            _ => Err(format!("unsupported context strategy: {value}")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: String,
@@ -679,7 +713,12 @@ pub struct Conversation {
     pub message_count: u32,
     pub is_pinned: bool,
     pub is_archived: bool,
+    /// Legacy compatibility flag. New code should resolve
+    /// `context_strategy_override` against `AppSettings::default_context_strategy`.
     pub context_compression: bool,
+    /// `None` follows the global default context strategy.
+    #[serde(default)]
+    pub context_strategy_override: Option<ContextStrategy>,
     /// Per-conversation cap on history messages sent to the model.
     /// `None` falls back to global `default_context_count`. Values ≥ 50 mean unlimited.
     pub context_message_limit: Option<u32>,
@@ -836,7 +875,12 @@ pub struct UpdateConversationInput {
     pub enabled_mcp_server_ids: Option<Vec<String>>,
     pub enabled_knowledge_base_ids: Option<Vec<String>>,
     pub enabled_memory_namespace_ids: Option<Vec<String>>,
+    /// Legacy compatibility input. When present without a strategy override it
+    /// is persisted as an explicit smart-summary/raw-truncate strategy.
     pub context_compression: Option<bool>,
+    /// Set to `Some(None)` to clear the override and follow the global default.
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub context_strategy_override: Option<Option<ContextStrategy>>,
     /// Set to `Some(None)` to clear the override (use global default).
     #[serde(default, deserialize_with = "deserialize_double_option")]
     pub context_message_limit: Option<Option<i64>>,
@@ -1693,6 +1737,9 @@ pub struct AppSettings {
     pub default_top_p: Option<f32>,
     pub default_frequency_penalty: Option<f32>,
     pub default_context_count: Option<u32>,
+    /// Context strategy used when a conversation has no explicit override.
+    #[serde(default)]
+    pub default_context_strategy: ContextStrategy,
     pub title_summary_provider_id: Option<String>,
     pub title_summary_model_id: Option<String>,
     pub title_summary_temperature: Option<f32>,
@@ -1866,6 +1913,7 @@ impl Default for AppSettings {
             default_top_p: None,
             default_frequency_penalty: None,
             default_context_count: None,
+            default_context_strategy: ContextStrategy::default(),
             title_summary_provider_id: None,
             title_summary_model_id: None,
             title_summary_temperature: None,
@@ -1975,7 +2023,8 @@ impl Default for AppSettings {
 mod app_settings_tests {
     use super::{
         is_valid_selection_toolbar_icon, is_valid_selection_toolbar_search_url,
-        render_selection_toolbar_search_url, AppSettings, ModelCatalogSourcePreference,
+        render_selection_toolbar_search_url, AppSettings, ContextStrategy,
+        ModelCatalogSourcePreference,
         SelectionToolbarAiConfig, SelectionToolbarAppEntry, SelectionToolbarAppFilterMode,
         SelectionToolbarBuiltinAiKey, SelectionToolbarDisplayMode, SelectionToolbarSettings,
         SelectionToolbarTool, SelectionToolbarTriggerMode, SettingsSidebarDensity,
@@ -1983,6 +2032,25 @@ mod app_settings_tests {
         DEFAULT_SELECTION_TOOLBAR_SHORTCUT, DEFAULT_TRANSLATE_PROMPT,
     };
     use serde_json::json;
+
+    #[test]
+    fn context_strategy_uses_snake_case_and_defaults_to_raw_truncate() {
+        assert_eq!(ContextStrategy::default(), ContextStrategy::RawTruncate);
+        assert_eq!(
+            serde_json::to_value(ContextStrategy::SmartSummary).unwrap(),
+            json!("smart_summary")
+        );
+        assert_eq!(
+            serde_json::from_value::<ContextStrategy>(json!("raw_strict")).unwrap(),
+            ContextStrategy::RawStrict
+        );
+        assert_eq!(
+            serde_json::from_value::<AppSettings>(json!({}))
+                .unwrap()
+                .default_context_strategy,
+            ContextStrategy::RawTruncate
+        );
+    }
 
     #[test]
     fn release_webview_on_tray_defaults_to_disabled() {
