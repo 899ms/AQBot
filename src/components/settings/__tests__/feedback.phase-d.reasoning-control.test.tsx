@@ -15,7 +15,11 @@ describe('Phase D reasoning control regressions', () => {
   });
 
   it('suppresses returned thinking blocks when the user explicitly disables reasoning', () => {
-    const source = readSource('src-tauri/src/commands/conversations.rs');
+    const source = [
+      readSource('src-tauri/src/commands/conversations/content.rs'),
+      readSource('src-tauri/src/commands/conversations/message_streaming.rs'),
+      readSource('src-tauri/src/commands/conversations/stream_runtime.rs'),
+    ].join('\n');
 
     expect(source).toContain('let suppress_thinking = thinking_budget == Some(0)');
     expect(source).toContain('matches!(thinking_level.as_deref(), Some("off" | "none"))');

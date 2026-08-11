@@ -40,7 +40,7 @@ describe('ChatView sidebar collapse control', () => {
   it('does not render a tooltip for the title bar sidebar toggle', () => {
     const source = readSource();
     const toggleStart = source.indexOf('const renderChatSidebarToggle = useCallback(() => {');
-    const toggleEnd = source.indexOf('// ── User avatar helper', toggleStart);
+    const toggleEnd = source.indexOf('const { getBubbleVariant, userAvatar }', toggleStart);
     const toggleSource = source.slice(toggleStart, toggleEnd);
 
     expect(toggleSource).not.toContain('<Tooltip');

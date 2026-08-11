@@ -17,7 +17,7 @@ describe('Phase C output control regressions', () => {
   });
 
   it('shows a per-turn total token summary alongside prompt and completion counts', () => {
-    const source = readSource('src/components/chat/ChatView.tsx');
+    const source = readSource('src/components/chat/ChatAssistantFooter.tsx');
 
     expect(source).toContain('const totalTokens = (msg.prompt_tokens ?? 0) + (msg.completion_tokens ?? 0);');
     expect(source).toContain('{formatTokenCount(totalTokens)} tokens');
@@ -25,7 +25,7 @@ describe('Phase C output control regressions', () => {
   });
 
   it('adds transcript copy and no-thinking export variants at chat level', () => {
-    const source = readSource('src/components/chat/ChatView.tsx');
+    const source = readSource('src/components/chat/useChatShareExport.tsx');
 
     expect(source).toContain("key: 'copy-md'");
     expect(source).toContain("key: 'export-md-no-thinking'");
@@ -34,10 +34,11 @@ describe('Phase C output control regressions', () => {
 
   it('supports multi-select message share and data-driven PNG export', () => {
     const chatView = readSource('src/components/chat/ChatView.tsx');
+    const shareExport = readSource('src/components/chat/useChatShareExport.tsx');
     const exportChat = readSource('src/lib/exportChat.ts');
 
-    expect(chatView).toContain("key: 'select-share'");
-    expect(chatView).toContain('exportMessagesAsPNG');
+    expect(shareExport).toContain("key: 'select-share'");
+    expect(shareExport).toContain('exportMessagesAsPNG');
     expect(chatView).toContain('shareSelectMode');
     expect(chatView).toContain('handleShareSelectableClick');
     expect(chatView).toContain('wrapShareSelectableContent');

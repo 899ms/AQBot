@@ -92,6 +92,28 @@ with mode `0600` on Unix.
   or application version strings
 - All directory names are **lowercase** with no spaces
 
+## Source File Size and Decomposition (Mandatory)
+
+- This rule applies equally to **frontend, backend, and test code**: every
+  hand-written source file MUST be **3000 lines or fewer**. A file that would
+  exceed 3000 lines MUST be split before more code is added; there are no
+  frontend or backend exceptions.
+- Split UI code into focused components and composables/hooks. Extract logic
+  that can be reused into a dedicated module with a small, explicit interface
+  instead of duplicating it across callers.
+- If business logic is intentionally not reusable, split it by cohesive domain
+  responsibility, workflow stage, or feature area, then reference those files
+  through explicit language-native modules, imports, or source includes. Do not
+  split at arbitrary line numbers or hide oversized implementations behind
+  generated indirection.
+- Keep the original entry file as a small facade when callers need a stable
+  interface. Every extracted file is subject to the same 3000-line limit.
+- Before completing a code change, scan the affected repository for source
+  files over 3000 lines and continue decomposing until none remain.
+- Machine-generated dependency locks, generated artifacts, and binary assets
+  are maintained by their generators and MUST NOT be manually split or edited
+  merely to satisfy this source-code limit.
+
 ## UI Conventions
 
 ### Internationalization (i18n)

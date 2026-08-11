@@ -53,7 +53,7 @@ describe('ChatView assistant display policy', () => {
   });
 
   it('loads the complete transcript before copy and structured exports when the message window is trimmed', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/components/chat/ChatView.tsx'), 'utf8');
+    const source = readFileSync(resolve(process.cwd(), 'src/components/chat/useChatShareExport.tsx'), 'utf8');
 
     expect(source).toContain('const loadCompleteTranscript = useCallback(async () => {');
     expect(source).toContain("invoke<Message[]>('list_messages'");
@@ -89,7 +89,7 @@ describe('ChatView assistant display policy', () => {
   });
 
   it('routes plain text and markdown messages through chat typography classes', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/components/chat/ChatView.tsx'), 'utf8');
+    const source = readFileSync(resolve(process.cwd(), 'src/components/chat/ChatAssistantMarkdown.tsx'), 'utf8');
 
     expect(source).toContain('className="aqbot-chat-text"');
     expect(source).toContain('className="aqbot-chat-markdown"');
@@ -182,7 +182,10 @@ describe('ChatView assistant display policy', () => {
   });
 
   it('invalidates transient popovers and late async modals when Chat is suspended', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/components/chat/ChatView.tsx'), 'utf8');
+    const source = [
+      readFileSync(resolve(process.cwd(), 'src/components/chat/ChatView.tsx'), 'utf8'),
+      readFileSync(resolve(process.cwd(), 'src/components/chat/ChatAssistantFooter.tsx'), 'utf8'),
+    ].join('\n');
 
     expect(source).toContain('const [open, setOpen] = usePageTransientOpenState();');
     expect(source).toContain('pageConnectionGenerationRef.current !== connectionGeneration');

@@ -32,7 +32,7 @@ describe('Phase A feedback regressions', () => {
   });
 
   it('feeds normalized assistant markdown content into the stream renderer', () => {
-    const chatViewSource = readSource('src/components/chat/ChatView.tsx');
+    const chatViewSource = readSource('src/components/chat/ChatAssistantMarkdown.tsx');
 
     expect(chatViewSource).toContain('normalizeHtmlRenderContent(displaySplit.body, { final: !isStreaming })');
     expect(chatViewSource).toContain('content={rendererContent}');
@@ -49,7 +49,7 @@ describe('Phase A feedback regressions', () => {
   it('treats max tokens clearing as an explicit nullable contract from modal to TypeScript types to Rust persistence', () => {
     const modalSource = readSource('src/components/chat/ConversationSettingsModal.tsx');
     const typeSource = readSource('src/types/index.ts');
-    const rustTypeSource = readSource('src-tauri/crates/core/src/types.rs');
+    const rustTypeSource = readSource('src-tauri/crates/core/src/types/conversation.rs');
     const repoSource = readSource('src-tauri/crates/core/src/repo/conversation.rs');
 
     expect(modalSource).toContain('max_tokens: maxTokens,');

@@ -1,0 +1,1106 @@
+import { invoke } from '@/lib/invoke';
+import {
+  mergeAssistantVersionGroup,
+  mergeAssistantVersionsAfterSwitch,
+} from '@/lib/chatMultiModel';
+import { perfNow, perfTrace, perfTraceDuration } from '@/lib/perfTrace';
+import { isResourceFresh } from '@/lib/resourceState';
+import { useSettingsStore } from '@/stores/settingsStore';
+import { useCategoryStore } from './categoryStore';
+import type {
+  CompareResponsesResult,
+  ContextUsage,
+  Conversation,
+  ConversationBranch,
+  ConversationSummary,
+  ConversationWorkspaceSnapshot,
+  Message,
+} from '@/types';
+import {
+  CONVERSATIONS_RESOURCE_KEY,
+  cacheMessageState,
+  categoryTemplateUpdateFromCategory,
+  collectActiveStreamingMessageIds,
+  conversationPreferenceStateFromConversation,
+  conversationPreferenceUpdateFromState,
+  conversationRuntime as runtime,
+  emptyConversationPreferenceUpdate,
+  findResolvedVersionForPendingSelection,
+  invalidateConversationMessageCache,
+  isTemporaryMessageId,
+  mergeConversationCollections,
+  mergeDbRagDisplayPrefix,
+  mutateConversationsMeta,
+  persistConversationPreferences,
+  readCachedMessageState,
+  rememberPendingLocalVersionSelection,
+  resolveHydratedStreamingMessageId,
+  resolvePendingLocalVersionSelection,
+  restoreActiveStreamBuffer,
+  validateCachedMessageState,
+  type ConversationState,
+  type ConversationStoreSet,
+  type PendingLocalVersionSelection,
+} from './conversationStoreSupport';
+
+type ConversationManagementActions = Pick<ConversationState,
+  | 'setSearchEnabled'
+  | 'setSearchProviderId'
+  | 'setEnabledMcpServerIds'
+  | 'toggleMcpServer'
+  | 'setThinkingBudget'
+  | 'setThinkingLevel'
+  | 'setEnabledKnowledgeBaseIds'
+  | 'toggleKnowledgeBase'
+  | 'setEnabledMemoryNamespaceIds'
+  | 'toggleMemoryNamespace'
+  | 'insertContextClear'
+  | 'removeContextClear'
+  | 'clearAllMessages'
+  | 'clearFirstRounds'
+  | 'compressContext'
+  | 'getCompressionSummary'
+  | 'retryCompression'
+  | 'getContextUsage'
+  | 'requestOpenCompressionSummary'
+  | 'deleteCompression'
+  | 'ensureConversationsLoaded'
+  | 'invalidateConversations'
+  | 'fetchConversations'
+  | 'setActiveConversation'
+  | 'createConversation'
+  | 'updateConversation'
+  | 'renameConversation'
+  | 'regenerateTitle'
+  | 'deleteConversation'
+  | 'branchConversation'
+  | 'togglePin'
+  | 'toggleArchive'
+  | 'fetchArchivedConversations'
+  | 'batchDelete'
+  | 'batchArchive'
+  | 'batchMoveToCategory'
+  | 'hydrateMessageVersions'
+  | 'switchMessageVersion'
+  | 'listMessageVersions'
+  | 'listMessageVersionsBatch'
+  | 'updateMessageContent'
+  | 'deleteMessageGroup'
+  | 'loadWorkspaceSnapshot'
+  | 'updateWorkspaceSnapshot'
+  | 'forkConversation'
+  | 'compareResponses'
+>;
+
+export function createConversationManagementActions(
+  set: ConversationStoreSet,
+  get: () => ConversationState,
+): ConversationManagementActions {
+  return {
+    setSearchEnabled: (enabled) => {
+      const previous = get().searchEnabled;
+      const conversationId = get().activeConversationId;
+      set({ searchEnabled: enabled });
+      if (conversationId) {
+        void persistConversationPreferences(
+          set,
+          conversationId,
+          { search_enabled: enabled },
+          { searchEnabled: enabled },
+          { searchEnabled: previous },
+        );
+      }
+    },
+    setSearchProviderId: (id) => {
+      const previous = get().searchProviderId;
+      const conversationId = get().activeConversationId;
+      set({ searchProviderId: id });
+      if (conversationId) {
+        void persistConversationPreferences(
+          set,
+          conversationId,
+          { search_provider_id: id },
+          { searchProviderId: id },
+          { searchProviderId: previous },
+        );
+      }
+    },
+    setEnabledMcpServerIds: (ids) => {
+      const previous = get().enabledMcpServerIds;
+      const conversationId = get().activeConversationId;
+      const nextIds = [...ids];
+      set({ enabledMcpServerIds: nextIds });
+      if (conversationId) {
+        void persistConversationPreferences(
+          set,
+          conversationId,
+          { enabled_mcp_server_ids: nextIds },
+          { enabledMcpServerIds: nextIds },
+          { enabledMcpServerIds: previous },
+        );
+      }
+    },
+    toggleMcpServer: (id) => {
+      const previous = get().enabledMcpServerIds;
+      const nextIds = previous.includes(id)
+        ? previous.filter((serverId) => serverId !== id)
+        : [...previous, id];
+      const conversationId = get().activeConversationId;
+      set({ enabledMcpServerIds: nextIds });
+      if (conversationId) {
+        void persistConversationPreferences(
+          set,
+          conversationId,
+          { enabled_mcp_server_ids: nextIds },
+          { enabledMcpServerIds: nextIds },
+          { enabledMcpServerIds: previous },
+        );
+      }
+    },
+    setThinkingBudget: (budget) => {
+      const previous = get().thinkingBudget;
+      const conversationId = get().activeConversationId;
+      set({ thinkingBudget: budget });
+      if (conversationId) {
+        void persistConversationPreferences(
+          set,
+          conversationId,
+          { thinking_budget: budget },
+          { thinkingBudget: budget },
+          { thinkingBudget: previous },
+        );
+      }
+    },
+    setThinkingLevel: (level) => {
+      const previous = get().thinkingLevel;
+      const conversationId = get().activeConversationId;
+      set({ thinkingLevel: level });
+      if (conversationId) {
+        void persistConversationPreferences(
+          set,
+          conversationId,
+          { thinking_level: level },
+          { thinkingLevel: level },
+          { thinkingLevel: previous },
+        );
+      }
+    },
+    setEnabledKnowledgeBaseIds: (ids) => {
+      const previous = get().enabledKnowledgeBaseIds;
+      const conversationId = get().activeConversationId;
+      const nextIds = [...ids];
+      set({ enabledKnowledgeBaseIds: nextIds });
+      if (conversationId) {
+        void persistConversationPreferences(
+          set,
+          conversationId,
+          { enabled_knowledge_base_ids: nextIds },
+          { enabledKnowledgeBaseIds: nextIds },
+          { enabledKnowledgeBaseIds: previous },
+        );
+      }
+    },
+    toggleKnowledgeBase: (id) => {
+      const previous = get().enabledKnowledgeBaseIds;
+      const nextIds = previous.includes(id)
+        ? previous.filter((knowledgeBaseId) => knowledgeBaseId !== id)
+        : [...previous, id];
+      const conversationId = get().activeConversationId;
+      set({ enabledKnowledgeBaseIds: nextIds });
+      if (conversationId) {
+        void persistConversationPreferences(
+          set,
+          conversationId,
+          { enabled_knowledge_base_ids: nextIds },
+          { enabledKnowledgeBaseIds: nextIds },
+          { enabledKnowledgeBaseIds: previous },
+        );
+      }
+    },
+    setEnabledMemoryNamespaceIds: (ids) => {
+      const previous = get().enabledMemoryNamespaceIds;
+      const conversationId = get().activeConversationId;
+      const nextIds = [...ids];
+      set({ enabledMemoryNamespaceIds: nextIds });
+      if (conversationId) {
+        void persistConversationPreferences(
+          set,
+          conversationId,
+          { enabled_memory_namespace_ids: nextIds },
+          { enabledMemoryNamespaceIds: nextIds },
+          { enabledMemoryNamespaceIds: previous },
+        );
+      }
+    },
+    toggleMemoryNamespace: (id) => {
+      const previous = get().enabledMemoryNamespaceIds;
+      const nextIds = previous.includes(id)
+        ? previous.filter((memoryNamespaceId) => memoryNamespaceId !== id)
+        : [...previous, id];
+      const conversationId = get().activeConversationId;
+      set({ enabledMemoryNamespaceIds: nextIds });
+      if (conversationId) {
+        void persistConversationPreferences(
+          set,
+          conversationId,
+          { enabled_memory_namespace_ids: nextIds },
+          { enabledMemoryNamespaceIds: nextIds },
+          { enabledMemoryNamespaceIds: previous },
+        );
+      }
+    },
+    insertContextClear: async () => {
+      const conversationId = get().activeConversationId;
+      if (!conversationId) return;
+      if (get().loading) throw new Error('Conversation messages are still loading');
+      try {
+        const msg = await invoke<Message>('send_system_message', {
+          conversationId,
+          content: '<!-- context-clear -->',
+        });
+        if (get().activeConversationId === conversationId) {
+          set((s) => ({ messages: [...s.messages, msg] }));
+        } else {
+          invalidateConversationMessageCache(conversationId);
+        }
+        // Backup and clear agent SDK context (no-op if no agent session exists)
+        await invoke('agent_backup_and_clear_sdk_context', { conversationId }).catch(() => {});
+      } catch (error) {
+        set({ error: String(error) });
+        throw error;
+      }
+    },
+    removeContextClear: async (messageId) => {
+      const conversationId = get().activeConversationId;
+      if (get().loading) throw new Error('Conversation messages are still loading');
+      if (messageId.startsWith('ctx-clear-') || messageId.startsWith('temp-')) {
+        set((s) => ({ messages: s.messages.filter((m) => m.id !== messageId) }));
+        return;
+      }
+
+      try {
+        await invoke('delete_message', { id: messageId });
+        set((s) => ({ messages: s.messages.filter((m) => m.id !== messageId) }));
+        // Restore agent SDK context from backup (no-op if no agent session or no backup)
+        if (conversationId) {
+          await invoke('agent_restore_sdk_context_from_backup', { conversationId }).catch(() => {});
+        }
+      } catch (e) {
+        set({ error: String(e) });
+        throw e;
+      }
+    },
+    clearAllMessages: async () => {
+      const conversationId = get().activeConversationId;
+      if (!conversationId) return;
+      if (get().loading) throw new Error('Conversation messages are still loading');
+      try {
+        await invoke('clear_conversation_messages', { conversationId });
+        invalidateConversationMessageCache(conversationId);
+        if (get().activeConversationId !== conversationId) return;
+        runtime.activeMessageLoadSeq += 1;
+        set({
+          messages: [],
+          hasOlderMessages: false,
+          hasNewerMessages: false,
+          totalActiveCount: 0,
+          oldestLoadedMessageId: null,
+          newestLoadedMessageId: null,
+          loadingOlder: false,
+          loadingNewer: false,
+        });
+      } catch (e) {
+        console.error('Failed to clear messages:', e);
+      }
+    },
+    clearFirstRounds: async (rounds) => {
+      const conversationId = get().activeConversationId;
+      const safeRounds = Math.trunc(rounds);
+      if (!conversationId || !Number.isFinite(safeRounds) || safeRounds <= 0) return;
+      if (get().loading) throw new Error('Conversation messages are still loading');
+      try {
+        await invoke('clear_conversation_first_rounds', { conversationId, rounds: safeRounds });
+        invalidateConversationMessageCache(conversationId);
+        if (get().activeConversationId === conversationId) {
+          await get().fetchMessages(conversationId);
+        }
+      } catch (e) {
+        set({ error: String(e) });
+      }
+    },
+    compressContext: async () => {
+      const conversationId = get().activeConversationId;
+      if (!conversationId) return;
+      if (get().loading) throw new Error('Conversation messages are still loading');
+      set({ compressingConversationId: conversationId });
+      try {
+        await invoke<ConversationSummary>('compress_context', { conversationId });
+        invalidateConversationMessageCache(conversationId);
+        if (get().activeConversationId === conversationId) {
+          await get().fetchMessages(conversationId);
+        }
+        set((state) => ({
+          compressingConversationId: state.compressingConversationId === conversationId
+            ? null
+            : state.compressingConversationId,
+        }));
+      } catch (e) {
+        set({ compressingConversationId: null });
+        console.error('Failed to compress context:', e);
+        throw e;
+      }
+    },
+    getCompressionSummary: async (conversationId: string) => {
+      try {
+        return await invoke<ConversationSummary | null>('get_compression_summary', { conversationId });
+      } catch (e) {
+        console.error('Failed to get compression summary:', e);
+        return null;
+      }
+    },
+    retryCompression: async () => {
+      const conversationId = get().activeConversationId;
+      if (!conversationId) return null;
+      if (get().loading) throw new Error('Conversation messages are still loading');
+      set({ compressingConversationId: conversationId });
+      try {
+        const summary = await invoke<ConversationSummary>('retry_compression', { conversationId });
+        set((state) => ({
+          compressingConversationId: state.compressingConversationId === conversationId
+            ? null
+            : state.compressingConversationId,
+        }));
+        return summary;
+      } catch (e) {
+        set({ compressingConversationId: null });
+        console.error('Failed to retry compression:', e);
+        throw e;
+      }
+    },
+    getContextUsage: async (conversationId: string) => {
+      try {
+        return await invoke<ContextUsage>('get_context_usage', { conversationId });
+      } catch (e) {
+        console.error('Failed to get context usage:', e);
+        return null;
+      }
+    },
+    requestOpenCompressionSummary: () => {
+      set((state) => ({
+        openCompressionSummaryToken: state.openCompressionSummaryToken + 1,
+      }));
+    },
+    deleteCompression: async () => {
+      const conversationId = get().activeConversationId;
+      if (!conversationId) return;
+      try {
+        await invoke('delete_compression', { conversationId });
+        invalidateConversationMessageCache(conversationId);
+        if (get().activeConversationId === conversationId) {
+          await get().fetchMessages(conversationId);
+        }
+      } catch (e) {
+        console.error('Failed to delete compression:', e);
+        throw e;
+      }
+    },
+    ensureConversationsLoaded: async (options = {}) => {
+      const state = get();
+      if (!options.force && isResourceFresh(state.conversationsMeta, {
+        ...options,
+        key: CONVERSATIONS_RESOURCE_KEY,
+      })) return;
+
+      if (runtime.conversationsRequest?.revision === state.conversationsMeta.revision && !options.force) {
+        return runtime.conversationsRequest.promise;
+      }
+      if (runtime.conversationsRequest) {
+        await runtime.conversationsRequest.promise;
+        return get().ensureConversationsLoaded(options);
+      }
+
+      const revision = state.conversationsMeta.revision;
+      set((current) => ({
+        loading: true,
+        conversationsMeta: {
+          ...current.conversationsMeta,
+          status: 'loading',
+          key: CONVERSATIONS_RESOURCE_KEY,
+        },
+      }));
+
+      let promise!: Promise<void>;
+      promise = (async () => {
+        let reloadAfterCompletion = false;
+        try {
+          const conversations = await invoke<Conversation[]>('list_conversations');
+          if (get().conversationsMeta.revision !== revision) {
+            reloadAfterCompletion = true;
+            set({ loading: false });
+          } else {
+            set({
+              conversations,
+              loading: false,
+              error: null,
+              conversationsMeta: {
+                status: 'ready',
+                key: CONVERSATIONS_RESOURCE_KEY,
+                loadedAt: Date.now(),
+                revision,
+              },
+            });
+          }
+        } catch (e) {
+          if (get().conversationsMeta.revision !== revision) {
+            reloadAfterCompletion = true;
+            set({ loading: false });
+          } else {
+            set((current) => ({
+              error: String(e),
+              loading: false,
+              conversationsMeta: { ...current.conversationsMeta, status: 'error' },
+            }));
+          }
+        } finally {
+          runtime.conversationsRequest = null;
+        }
+        if (reloadAfterCompletion) {
+          await get().ensureConversationsLoaded();
+        }
+      })();
+      runtime.conversationsRequest = { revision, promise };
+      return promise;
+    },
+    invalidateConversations: (_reason) => set((state) => ({
+      conversationsMeta: {
+        status: 'idle',
+        key: null,
+        loadedAt: null,
+        revision: state.conversationsMeta.revision + 1,
+      },
+    })),
+    fetchConversations: () => get().ensureConversationsLoaded({ force: true }),
+    setActiveConversation: (id) => {
+      const previousState = get();
+      const previousConversationId = previousState.activeConversationId;
+      if (previousConversationId && previousConversationId !== id) {
+        cacheMessageState(get(), previousConversationId);
+      }
+      if (!id) {
+        runtime.activeMessageLoadSeq += 1;
+        set({
+          activeConversationId: null,
+          messages: [],
+          loading: false,
+          loadingOlder: false,
+          loadingNewer: false,
+          hasOlderMessages: false,
+          hasNewerMessages: false,
+          totalActiveCount: 0,
+          oldestLoadedMessageId: null,
+          newestLoadedMessageId: null,
+        });
+        return;
+      }
+
+      const conversation = get().conversations.find((item) => item.id === id)
+        ?? get().archivedConversations.find((item) => item.id === id);
+      // Check if this conversation had a stream complete while we were away
+      const needsRefreshAfterStreamDone = runtime.pendingConversationRefresh.has(id);
+      if (get().activeConversationId === id && !needsRefreshAfterStreamDone) {
+        return;
+      }
+      if (needsRefreshAfterStreamDone) {
+        runtime.pendingConversationRefresh.delete(id);
+      }
+
+      runtime.activeMessageLoadSeq += 1;
+      const requestSeq = runtime.activeMessageLoadSeq;
+      const startedAt = perfNow();
+      const canSkipMessageFetch = conversation?.message_count === 0
+        && !needsRefreshAfterStreamDone
+        && get().streamingConversationId !== id
+        && runtime.streamBuffer?.conversationId !== id;
+      const cachedCandidate = readCachedMessageState(id, conversation);
+      const cached = conversation?.message_count === 0 && cachedCandidate?.fresh !== true
+        ? null
+        : cachedCandidate;
+      const canUseFreshCache = cached?.fresh === true && !needsRefreshAfterStreamDone;
+      const retainPreviousWindow = !cached
+        && !canSkipMessageFetch
+        && previousConversationId !== null
+        && previousState.messages.length > 0;
+
+      perfTrace('chat.switch.start', {
+        conversationId: id,
+        skipMessageFetch: canSkipMessageFetch || canUseFreshCache,
+        cacheHit: Boolean(cached),
+      });
+      set({
+        activeConversationId: id,
+        messages: cached?.state.messages ?? (retainPreviousWindow ? previousState.messages : []),
+        loading: !canSkipMessageFetch && !cached,
+        loadingOlder: false,
+        loadingNewer: false,
+        hasOlderMessages: cached?.state.hasOlderMessages
+          ?? (retainPreviousWindow ? previousState.hasOlderMessages : false),
+        hasNewerMessages: cached?.state.hasNewerMessages
+          ?? (retainPreviousWindow ? previousState.hasNewerMessages : false),
+        totalActiveCount: cached?.state.totalActiveCount
+          ?? (retainPreviousWindow ? previousState.totalActiveCount : 0),
+        oldestLoadedMessageId: cached?.state.oldestLoadedMessageId
+          ?? (retainPreviousWindow ? previousState.oldestLoadedMessageId : null),
+        newestLoadedMessageId: cached?.state.newestLoadedMessageId
+          ?? (retainPreviousWindow ? previousState.newestLoadedMessageId : null),
+        error: null,
+        ...conversationPreferenceStateFromConversation(conversation),
+      });
+      if (canUseFreshCache) {
+        restoreActiveStreamBuffer(set, get, id);
+        validateCachedMessageState(set, get, id, cached.state, requestSeq);
+      }
+      if (canSkipMessageFetch || canUseFreshCache) {
+        perfTraceDuration(canUseFreshCache ? 'chat.switch.cached' : 'chat.switch.empty', startedAt, {
+          conversationId: id,
+        });
+        return;
+      }
+      get().fetchMessages(id, [], { setLoading: false }).then(() => {
+        perfTraceDuration('chat.switch.loaded', startedAt, { conversationId: id });
+        if (requestSeq !== runtime.activeMessageLoadSeq || get().activeConversationId !== id) {
+          return;
+        }
+        // If there's an active stream for this conversation, inject buffered content
+        if (runtime.streamBuffer && runtime.streamBuffer.conversationId === id && get().streaming) {
+          restoreActiveStreamBuffer(set, get, id);
+        } else if (runtime.streamBuffer && runtime.streamBuffer.conversationId === id && needsRefreshAfterStreamDone) {
+          // Stream completed while user was away — buffer still has final content.
+          // fetchMessages already loaded the completed message from DB, but inject
+          // buffer content in case the DB response is slightly behind.
+          const realId = runtime.streamBuffer.resolvedId ?? runtime.streamBuffer.messageId;
+          set((s) => {
+            const exists = s.messages.some((m) => m.id === realId);
+            if (exists) {
+              return {
+                messages: s.messages.map((m) =>
+                  m.id === realId
+                    ? { ...m, content: runtime.streamBuffer!.content, thinking: runtime.streamBuffer!.thinking || null }
+                    : m,
+                ),
+              };
+            }
+            return {};
+          });
+          runtime.streamBuffer = null;
+        } else if (needsRefreshAfterStreamDone) {
+          // Stream completed while away and buffer was already consumed — the
+          // fetchMessages above should have loaded the final message from DB.
+          // Clear any stale buffer reference.
+          runtime.streamBuffer = null;
+        }
+      });
+    },
+    createConversation: async (title, modelId, providerId, options) => {
+      try {
+        const category = options?.categoryId
+          ? useCategoryStore.getState().categories.find((item) => item.id === options.categoryId) ?? null
+          : null;
+        const templateProviderId = category?.default_provider_id ?? providerId;
+        const templateModelId = category?.default_model_id ?? modelId;
+        const createdConversation = await invoke<Conversation>('create_conversation', {
+          title,
+          modelId: templateModelId,
+          providerId: templateProviderId,
+          systemPrompt: category?.system_prompt ?? undefined,
+        });
+        let conversation = createdConversation;
+        try {
+          const inheritConversationPreferences =
+            useSettingsStore.getState().settings.inherit_conversation_preferences_on_create ?? true;
+          conversation = await invoke<Conversation>('update_conversation', {
+            id: createdConversation.id,
+            input: {
+              ...categoryTemplateUpdateFromCategory(category),
+              ...(inheritConversationPreferences
+                ? conversationPreferenceUpdateFromState(get())
+                : emptyConversationPreferenceUpdate()),
+            },
+          });
+        } catch (preferenceError) {
+          set({ error: String(preferenceError) });
+        }
+        set((s) => ({
+          conversations: [conversation, ...s.conversations],
+          conversationsMeta: mutateConversationsMeta(s.conversationsMeta),
+          activeConversationId: conversation.id,
+          messages: [],
+          loading: false,
+          loadingOlder: false,
+          loadingNewer: false,
+          hasOlderMessages: false,
+          hasNewerMessages: false,
+          totalActiveCount: 0,
+          oldestLoadedMessageId: null,
+          newestLoadedMessageId: null,
+          error: null,
+          ...conversationPreferenceStateFromConversation(conversation),
+        }));
+        return conversation;
+      } catch (e) {
+        set({ error: String(e) });
+        throw e;
+      }
+    },
+    updateConversation: async (id, input) => {
+      try {
+        const updated = await invoke<Conversation>('update_conversation', { id, input });
+        set((s) => ({
+          ...mergeConversationCollections(s.conversations, s.archivedConversations, updated),
+          conversationsMeta: mutateConversationsMeta(s.conversationsMeta),
+          ...(s.activeConversationId === id ? conversationPreferenceStateFromConversation(updated) : {}),
+          error: null,
+        }));
+      } catch (e) {
+        set({ error: String(e) });
+        throw e;
+      }
+    },
+    renameConversation: async (id, title) => {
+      await get().updateConversation(id, { title });
+    },
+    regenerateTitle: async (conversationId) => {
+      try {
+        await invoke('regenerate_conversation_title', { conversationId });
+      } catch (e) {
+        set({ error: String(e) });
+      }
+    },
+    deleteConversation: async (id) => {
+      try {
+        await invoke('delete_conversation', { id });
+        invalidateConversationMessageCache(id);
+        const state = get();
+        set({
+          conversations: state.conversations.filter((c) => c.id !== id),
+          conversationsMeta: mutateConversationsMeta(state.conversationsMeta),
+          activeConversationId: state.activeConversationId === id ? null : state.activeConversationId,
+          messages: state.activeConversationId === id ? [] : state.messages,
+          error: null,
+        });
+      } catch (e) {
+        set({ error: String(e) });
+        throw e;
+      }
+    },
+    branchConversation: async (conversationId, untilMessageId, asChild, title) => {
+      try {
+        const newConv = await invoke<Conversation>('branch_conversation', {
+          conversationId,
+          untilMessageId,
+          asChild,
+          title: title || null,
+        });
+        const shouldActivateBranch = get().activeConversationId === conversationId;
+        set((s) => ({
+          conversations: [newConv, ...s.conversations],
+          conversationsMeta: mutateConversationsMeta(s.conversationsMeta),
+          error: null,
+        }));
+        if (shouldActivateBranch && get().activeConversationId === conversationId) {
+          get().setActiveConversation(newConv.id);
+        }
+        return newConv;
+      } catch (e) {
+        set({ error: String(e) });
+        throw e;
+      }
+    },
+    togglePin: async (id) => {
+      try {
+        const updated = await invoke<Conversation>('toggle_pin_conversation', { id });
+        set((s) => ({
+          conversations: s.conversations.map((c) => (c.id === id ? updated : c)),
+          conversationsMeta: mutateConversationsMeta(s.conversationsMeta),
+          error: null,
+        }));
+      } catch (e) {
+        set({ error: String(e) });
+        throw e;
+      }
+    },
+    toggleArchive: async (id) => {
+      try {
+        const updated = await invoke<Conversation>('toggle_archive_conversation', { id });
+        if (updated.is_archived) {
+          // Moved to archive — remove from active list, add to archived
+          set((s) => ({
+            conversations: s.conversations.filter((c) => c.id !== id),
+            conversationsMeta: mutateConversationsMeta(s.conversationsMeta),
+            archivedConversations: [updated, ...s.archivedConversations],
+            activeConversationId: s.activeConversationId === id ? null : s.activeConversationId,
+            messages: s.activeConversationId === id ? [] : s.messages,
+            error: null,
+          }));
+        } else {
+          // Unarchived — remove from archived, add to active
+          set((s) => ({
+            conversations: [updated, ...s.conversations],
+            conversationsMeta: mutateConversationsMeta(s.conversationsMeta),
+            archivedConversations: s.archivedConversations.filter((c) => c.id !== id),
+            error: null,
+          }));
+        }
+      } catch (e) {
+        set({ error: String(e) });
+        throw e;
+      }
+    },
+    fetchArchivedConversations: async () => {
+      try {
+        const archived = await invoke<Conversation[]>('list_archived_conversations');
+        set({ archivedConversations: archived, error: null });
+      } catch (e) {
+        set({ error: String(e) });
+      }
+    },
+    batchDelete: async (ids) => {
+      const errors: string[] = [];
+      for (const id of ids) {
+        try {
+          await invoke('delete_conversation', { id });
+          invalidateConversationMessageCache(id);
+        } catch (e) {
+          errors.push(String(e));
+        }
+      }
+      set((s) => ({
+        conversations: s.conversations.filter((c) => !ids.includes(c.id)),
+        conversationsMeta: mutateConversationsMeta(s.conversationsMeta),
+        activeConversationId: ids.includes(s.activeConversationId ?? '') ? null : s.activeConversationId,
+        messages: ids.includes(s.activeConversationId ?? '') ? [] : s.messages,
+        error: errors.length ? errors.join('; ') : null,
+      }));
+    },
+    batchArchive: async (ids) => {
+      const archived: Conversation[] = [];
+      for (const id of ids) {
+        try {
+          const updated = await invoke<Conversation>('toggle_archive_conversation', { id });
+          if (updated.is_archived) archived.push(updated);
+        } catch (_) { /* skip */ }
+      }
+      set((s) => ({
+        conversations: s.conversations.filter((c) => !ids.includes(c.id)),
+        conversationsMeta: mutateConversationsMeta(s.conversationsMeta),
+        archivedConversations: [...archived, ...s.archivedConversations],
+        activeConversationId: ids.includes(s.activeConversationId ?? '') ? null : s.activeConversationId,
+        messages: ids.includes(s.activeConversationId ?? '') ? [] : s.messages,
+        error: null,
+      }));
+    },
+    batchMoveToCategory: async (ids, categoryId) => {
+      const updatedList: Conversation[] = [];
+      for (const id of ids) {
+        try {
+          const updated = await invoke<Conversation>('update_conversation', {
+            id,
+            input: { category_id: categoryId },
+          });
+          updatedList.push(updated);
+        } catch (_) { /* skip failed items */ }
+      }
+      if (updatedList.length > 0) {
+        const byId = new Map(updatedList.map((c) => [c.id, c]));
+        set((s) => ({
+          conversations: s.conversations.map((c) => byId.get(c.id) ?? c),
+          archivedConversations: s.archivedConversations.map((c) => byId.get(c.id) ?? c),
+          conversationsMeta: mutateConversationsMeta(s.conversationsMeta),
+          ...(s.activeConversationId && byId.has(s.activeConversationId)
+            ? conversationPreferenceStateFromConversation(byId.get(s.activeConversationId)!)
+            : {}),
+          error: null,
+        }));
+      }
+      return updatedList.length;
+    },
+    hydrateMessageVersions: (parentMessageId, versions, activeMessageId) => {
+      const resolvedPendingSelections: Array<{ pending: PendingLocalVersionSelection; messageId: string }> = [];
+      set((s) => {
+        let versionsForMerge = versions;
+        const streamingMessageIds = new Set(collectActiveStreamingMessageIds(s));
+        if (streamingMessageIds.size > 0) {
+          versionsForMerge = versionsForMerge.map((version) => {
+            if (!streamingMessageIds.has(version.id)) {
+              return version;
+            }
+            const localMessage = s.messages.find((message) =>
+              message.id === version.id
+              && message.parent_message_id === parentMessageId
+              && message.role === 'assistant'
+            );
+            if (!localMessage?.content) {
+              return version;
+            }
+            return {
+              ...version,
+              content: mergeDbRagDisplayPrefix(version.content, localMessage.content),
+              status: localMessage.status,
+              thinking: localMessage.thinking ?? version.thinking,
+              is_active: localMessage.is_active,
+            };
+          });
+        }
+
+        const resolvedStreamingMessageId = (() => {
+          if (!isTemporaryMessageId(s.streamingMessageId)) {
+            return null;
+          }
+          const placeholder = s.messages.find((message) => message.id === s.streamingMessageId);
+          if (!placeholder || placeholder.parent_message_id !== parentMessageId) {
+            return null;
+          }
+          const resolved = resolveHydratedStreamingMessageId(placeholder, versions);
+          if (!resolved) {
+            versionsForMerge = [...versions, placeholder];
+          }
+          return resolved ?? s.streamingMessageId;
+        })();
+
+        const pendingSelection = runtime.pendingLocalVersionSelections.get(parentMessageId) ?? null;
+        const resolvedPendingMessage = pendingSelection
+          ? findResolvedVersionForPendingSelection(pendingSelection, versions)
+          : null;
+        if (pendingSelection && resolvedPendingMessage) {
+          resolvedPendingSelections.push({ pending: pendingSelection, messageId: resolvedPendingMessage.id });
+        } else if (pendingSelection) {
+          const pendingPlaceholder = s.messages.find((message) =>
+            message.id === pendingSelection.tempMessageId
+            && message.parent_message_id === parentMessageId
+            && message.role === 'assistant'
+          );
+          if (
+            pendingPlaceholder
+            && !versionsForMerge.some((version) => version.id === pendingPlaceholder.id)
+          ) {
+            versionsForMerge = [...versionsForMerge, pendingPlaceholder];
+          }
+        }
+
+        const pendingActiveMessageId = resolvedPendingMessage?.id
+          ?? (
+            pendingSelection
+            && versionsForMerge.some((version) => version.id === pendingSelection.tempMessageId)
+              ? pendingSelection.tempMessageId
+              : null
+          );
+        const localActiveMessageId = s.messages.find((message) =>
+          message.parent_message_id === parentMessageId
+          && message.role === 'assistant'
+          && message.is_active
+          && versionsForMerge.some((version) => version.id === message.id)
+        )?.id ?? null;
+        const resolvedActiveMessageId = pendingActiveMessageId
+          ?? activeMessageId
+          ?? localActiveMessageId
+          ?? versionsForMerge.find((version) => version.is_active)?.id
+          ?? null;
+
+        return {
+          messages: mergeAssistantVersionGroup(
+            s.messages,
+            parentMessageId,
+            versionsForMerge,
+            resolvedActiveMessageId,
+          ),
+          streamingMessageId: resolvedStreamingMessageId ?? s.streamingMessageId,
+        };
+      });
+      for (const resolvedPendingSelection of resolvedPendingSelections) {
+        resolvePendingLocalVersionSelection(
+          set,
+          get,
+          resolvedPendingSelection.pending,
+          resolvedPendingSelection.messageId,
+        );
+      }
+    },
+    switchMessageVersion: async (conversationId, parentMessageId, messageId) => {
+      try {
+        const targetMessage = get().messages.find(
+          (message) => message.id === messageId
+            && message.parent_message_id === parentMessageId
+            && message.role === 'assistant',
+        );
+        if (isTemporaryMessageId(messageId)) {
+          if (!targetMessage) return;
+          runtime.userManuallySelectedVersion = true;
+          rememberPendingLocalVersionSelection(conversationId, parentMessageId, targetMessage);
+          set((s) => ({
+            messages: s.messages.map((message) => {
+              if (message.parent_message_id !== parentMessageId || message.role !== 'assistant') {
+                return message;
+              }
+              return { ...message, is_active: message.id === messageId };
+            }),
+          }));
+          return;
+        }
+
+        runtime.pendingLocalVersionSelections.delete(parentMessageId);
+        if (runtime.isMultiModelActive) {
+          // During multi-model streaming, skip the backend call entirely to avoid:
+          // 1. Race conditions with concurrent regenerate_with_model calls
+          // 2. invoke delay causing stale content display
+          // 3. Potential invoke failures during active streaming
+          // Just swap is_active flags in-memory; backend will be synced during cleanup.
+          runtime.userManuallySelectedVersion = true;
+          set((s) => {
+            const targetExists = s.messages.some(
+              (m) => m.id === messageId && m.parent_message_id === parentMessageId && m.role === 'assistant',
+            );
+            if (!targetExists) return {}; // Target not in memory yet, no-op
+            return {
+              messages: s.messages.map((m) => {
+                if (m.parent_message_id !== parentMessageId || m.role !== 'assistant') return m;
+                return m.id === messageId
+                  ? { ...m, is_active: true }
+                  : { ...m, is_active: false };
+              }),
+            };
+          });
+          return;
+        }
+
+        await invoke('switch_message_version', { conversationId, parentMessageId, messageId });
+
+        // Normal path: fetch all versions from DB and keep them all in store
+        // with correct is_active flags. This preserves multi-model detection
+        // (multiModelResponseParents) which needs multiple versions visible.
+        const versions = await get().listMessageVersions(conversationId, parentMessageId);
+        if (versions.length > 0) {
+          set((s) => ({
+            messages: mergeAssistantVersionsAfterSwitch(
+              s.messages,
+              parentMessageId,
+              versions,
+              messageId,
+            ),
+          }));
+        }
+      } catch (e) {
+        set({ error: String(e) });
+        await get().fetchMessages(conversationId);
+      }
+    },
+    listMessageVersions: async (conversationId, parentMessageId) => {
+      try {
+        return await invoke<Message[]>('list_message_versions', { conversationId, parentMessageId });
+      } catch (e) {
+        set({ error: String(e) });
+        return [];
+      }
+    },
+    listMessageVersionsBatch: async (conversationId, parentMessageIds) => {
+      if (parentMessageIds.length === 0) return {};
+      const startedAt = perfNow();
+      try {
+        const result = await invoke<Record<string, Message[]>>('list_message_versions_batch', {
+          conversationId,
+          parentMessageIds,
+        });
+        perfTraceDuration('chat.messageVersions.batch', startedAt, {
+          conversationId,
+          parentCount: parentMessageIds.length,
+        });
+        return result;
+      } catch (e) {
+        set({ error: String(e) });
+        return {};
+      }
+    },
+    updateMessageContent: async (messageId, content) => {
+      if (get().loading) throw new Error('Conversation messages are still loading');
+      try {
+        const updated = await invoke<Message>('update_message_content', { id: messageId, content });
+        set((s) => ({
+          messages: s.messages.map((m) => (m.id === messageId ? { ...m, content: updated.content } : m)),
+        }));
+      } catch (e) {
+        set({ error: String(e) });
+        throw e;
+      }
+    },
+    deleteMessageGroup: async (conversationId, userMessageId) => {
+      // Client-only messages (temp IDs) — just remove locally
+      if (userMessageId.startsWith('temp-')) {
+        set((s) => ({
+          messages: s.messages.filter(m =>
+            m.id !== userMessageId && m.parent_message_id !== userMessageId
+          ),
+        }));
+        return;
+      }
+      try {
+        await invoke('delete_message_group', { conversationId, userMessageId });
+        set((s) => ({
+          messages: s.messages.filter(m =>
+            m.id !== userMessageId && m.parent_message_id !== userMessageId
+          ),
+        }));
+      } catch (e) {
+        set({ error: String(e) });
+      }
+    },
+    loadWorkspaceSnapshot: async (conversationId) => {
+      try {
+        const snapshot = await invoke<ConversationWorkspaceSnapshot>('get_workspace_snapshot', {
+          conversation_id: conversationId,
+        });
+        set({ workspaceSnapshot: snapshot });
+        return snapshot;
+      } catch {
+        set({ workspaceSnapshot: null });
+        return null;
+      }
+    },
+    updateWorkspaceSnapshot: async (conversationId, snapshot) => {
+      try {
+        await invoke('update_workspace_snapshot', {
+          conversation_id: conversationId,
+          ...snapshot,
+        });
+        set((s) => ({
+          workspaceSnapshot: s.workspaceSnapshot
+            ? { ...s.workspaceSnapshot, ...snapshot }
+            : null,
+        }));
+      } catch (e) {
+        console.error('Failed to update workspace snapshot:', e);
+      }
+    },
+    forkConversation: async (conversationId, fromMessageId?) => {
+      try {
+        const branch = await invoke<ConversationBranch>('fork_conversation', {
+          conversation_id: conversationId,
+          message_id: fromMessageId,
+        });
+        const { fetchConversations } = get();
+        await fetchConversations();
+        return branch;
+      } catch (e) {
+        set({ error: String(e) });
+        return null;
+      }
+    },
+    compareResponses: async (leftMessageId, rightMessageId) => {
+      try {
+        return await invoke<CompareResponsesResult>('compare_branches', {
+          branch_a: leftMessageId,
+          branch_b: rightMessageId,
+        });
+      } catch {
+        return null;
+      }
+    },
+  };
+}
