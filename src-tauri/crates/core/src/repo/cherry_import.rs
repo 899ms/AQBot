@@ -463,6 +463,7 @@ pub async fn import_cherry_studio_backup_from_path_with_root(
                 compression_keep_last_n: Set(None),
                 category_id: Set(None),
                 parent_conversation_id: Set(None),
+                sort_order: Set(0),
                 mode: Set("chat".to_string()),
             }
             .insert(&txn)

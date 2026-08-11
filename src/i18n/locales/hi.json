@@ -57,6 +57,7 @@
     "clearContextToContinue": "संदर्भ साफ़ करें",
     "contextMessagesExcludedWarning": "मॉडल संदर्भ से {{count}} संदेश हटाए गए",
     "newConversation": "नई बातचीत",
+    "reorderConversation": "बातचीत का क्रम बदलने के लिए खींचें",
     "newConversationInCurrentCategory": "{{category}} में नया बनाएँ",
     "newStandaloneConversation": "स्वतंत्र नया बनाएँ",
     "expandSidebar": "चैट साइडबार का विस्तार करें",

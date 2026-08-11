@@ -12,6 +12,84 @@ function nowTs(): number {
   return Date.now();
 }
 
+function compareConversationOrder(a: any, b: any): number {
+  const aOrder = Number.isInteger(a.sort_order) ? a.sort_order : Number.MAX_SAFE_INTEGER;
+  const bOrder = Number.isInteger(b.sort_order) ? b.sort_order : Number.MAX_SAFE_INTEGER;
+  return aOrder - bOrder
+    || (Number(b.updated_at) || 0) - (Number(a.updated_at) || 0)
+    || String(a.id).localeCompare(String(b.id));
+}
+
+function compareConversationListOrder(a: any, b: any): number {
+  return Number(Boolean(b.is_pinned)) - Number(Boolean(a.is_pinned))
+    || (Number(b.updated_at) || 0) - (Number(a.updated_at) || 0)
+    || String(a.id).localeCompare(String(b.id));
+}
+
+function withConversationSortOrder(conversation: any): any {
+  return {
+    ...conversation,
+    sort_order: Number.isInteger(conversation.sort_order) ? conversation.sort_order : 0,
+  };
+}
+
+function conversationSortPeers(
+  conversations: any[],
+  categoryId: string | null,
+  pinned: boolean,
+  excludedIds: Set<string>,
+): any[] {
+  return conversations
+    .filter((conversation: any) => (
+      !conversation.is_archived
+      && conversation.parent_conversation_id == null
+      && (conversation.category_id ?? null) === categoryId
+      && (categoryId !== null || Boolean(conversation.is_pinned) === pinned)
+      && !excludedIds.has(conversation.id)
+    ))
+    .sort(compareConversationOrder);
+}
+
+function conversationTopSortOrder(
+  conversations: any[],
+  categoryId: string | null,
+  pinned: boolean,
+  count: number,
+  excludedIds = new Set<string>(),
+): number {
+  const peers = conversationSortPeers(conversations, categoryId, pinned, excludedIds);
+  if (peers.length === 0) return 0;
+  const minimumOrder = peers.reduce(
+    (minimum: number, conversation: any) => Math.min(
+      minimum,
+      Number.isInteger(conversation.sort_order) ? conversation.sort_order : 0,
+    ),
+    Number.MAX_SAFE_INTEGER,
+  );
+  return minimumOrder - count;
+}
+
+function placeConversationsAtTop(
+  conversations: any[],
+  categoryId: string | null,
+  pinned: boolean,
+  conversationIds: string[],
+): void {
+  if (conversationIds.length === 0) return;
+  const movedIds = new Set(conversationIds);
+  const start = conversationTopSortOrder(
+    conversations,
+    categoryId,
+    pinned,
+    conversationIds.length,
+    movedIds,
+  );
+  conversationIds.forEach((id, index) => {
+    const conversation = conversations.find((candidate: any) => candidate.id === id);
+    if (conversation) conversation.sort_order = start + index;
+  });
+}
+
 function getStore<T>(key: string, defaultValue: T): T {
   try {
     const data = localStorage.getItem(`aqbot_${key}`);
@@ -948,17 +1026,24 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
 
     // ── Conversations ─────────────────────────────────────────────────
     case 'list_conversations':
-      return getStore('conversations', []).filter((c: any) => !c.is_archived) as T;
+      return getStore<any[]>('conversations', [])
+        .filter((c: any) => !c.is_archived)
+        .sort(compareConversationListOrder)
+        .map(withConversationSortOrder) as T;
     case 'get_conversation_snapshot': {
       const conversation = getStore<any[]>('conversations', [])
         .find((item: any) => item.id === (args as any).id);
       if (!conversation) throw new Error('Conversation not found');
-      return conversation as T;
+      return withConversationSortOrder(conversation) as T;
     }
     case 'list_archived_conversations':
-      return getStore('conversations', []).filter((c: any) => c.is_archived) as T;
+      return getStore<any[]>('conversations', [])
+        .filter((c: any) => c.is_archived)
+        .map(withConversationSortOrder) as T;
     case 'create_conversation': {
       const { title, modelId, providerId } = args as any;
+      const convs = getStore<any[]>('conversations', []);
+      const sortOrder = conversationTopSortOrder(convs, null, false, 1);
       const conv = {
         id: genId(),
         title,
@@ -986,10 +1071,10 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
         category_id: null,
         parent_conversation_id: null,
         mode: 'chat',
+        sort_order: sortOrder,
         created_at: nowTs(),
         updated_at: nowTs(),
       };
-      const convs = getStore<any[]>('conversations', []);
       convs.push(conv);
       setStore('conversations', convs);
       return conv as T;
@@ -999,9 +1084,30 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
       const convs = getStore<any[]>('conversations', []);
       const idx = convs.findIndex((c: any) => c.id === id);
       if (idx !== -1) {
-        convs[idx] = { ...convs[idx], ...input, updated_at: nowTs() };
+        const previousCategoryId = convs[idx].category_id ?? null;
+        const nextCategoryId = input.category_id ?? null;
+        const movedToCategory = Object.prototype.hasOwnProperty.call(input, 'category_id')
+          && input.category_id !== undefined
+          && nextCategoryId !== previousCategoryId;
+        const movedSortOrder = movedToCategory && convs[idx].parent_conversation_id == null
+          ? conversationTopSortOrder(
+            convs,
+            nextCategoryId,
+            input.is_pinned ?? Boolean(convs[idx].is_pinned),
+            1,
+            new Set([id]),
+          )
+          : null;
+        convs[idx] = {
+          ...convs[idx],
+          ...input,
+          ...(movedSortOrder !== null
+            ? { sort_order: movedSortOrder }
+            : {}),
+          updated_at: nowTs(),
+        };
         setStore('conversations', convs);
-        return convs[idx] as T;
+        return withConversationSortOrder(convs[idx]) as T;
       }
       throw new Error('Conversation not found');
     }
@@ -1018,10 +1124,20 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
       const convs = getStore<any[]>('conversations', []);
       const idx = convs.findIndex((c: any) => c.id === id);
       if (idx !== -1) {
-        convs[idx].is_pinned = !convs[idx].is_pinned;
+        const newPinned = !convs[idx].is_pinned;
+        if (convs[idx].parent_conversation_id == null && convs[idx].category_id == null) {
+          convs[idx].sort_order = conversationTopSortOrder(
+            convs,
+            null,
+            newPinned,
+            1,
+            new Set([id]),
+          );
+        }
+        convs[idx].is_pinned = newPinned;
         convs[idx].updated_at = nowTs();
         setStore('conversations', convs);
-        return convs[idx] as T;
+        return withConversationSortOrder(convs[idx]) as T;
       }
       throw new Error('Conversation not found');
     }
@@ -1030,10 +1146,24 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
       const convs = getStore<any[]>('conversations', []);
       const aidx = convs.findIndex((c: any) => c.id === id);
       if (aidx !== -1) {
+        const isUnarchiving = convs[aidx].is_archived;
+        const targetCategoryId = convs[aidx].category_id ?? null;
+        const movesToTop = isUnarchiving && convs[aidx].parent_conversation_id == null;
+        let topSortOrder = convs[aidx].sort_order;
+        if (movesToTop) {
+          topSortOrder = conversationTopSortOrder(
+            convs,
+            targetCategoryId,
+            Boolean(convs[aidx].is_pinned),
+            1,
+            new Set([id]),
+          );
+        }
         convs[aidx].is_archived = !convs[aidx].is_archived;
+        if (movesToTop) convs[aidx].sort_order = topSortOrder;
         convs[aidx].updated_at = nowTs();
         setStore('conversations', convs);
-        return convs[aidx] as T;
+        return withConversationSortOrder(convs[aidx]) as T;
       }
       throw new Error('Conversation not found');
     }
@@ -1092,6 +1222,21 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
       const cats = getStore<any[]>('conversation_categories', []).filter((c: any) => c.id !== id);
       setStore('conversation_categories', cats);
       const convs = getStore<any[]>('conversations', []);
+      const movedRoots = convs
+        .filter((c: any) => (
+          c.category_id === id
+          && !c.is_archived
+          && c.parent_conversation_id == null
+        ))
+        .sort(compareConversationOrder);
+      const movedPinnedIds = movedRoots
+        .filter((conversation: any) => conversation.is_pinned)
+        .map((conversation: any) => conversation.id);
+      const movedUnpinnedIds = movedRoots
+        .filter((conversation: any) => !conversation.is_pinned)
+        .map((conversation: any) => conversation.id);
+      placeConversationsAtTop(convs, null, true, movedPinnedIds);
+      placeConversationsAtTop(convs, null, false, movedUnpinnedIds);
       convs.forEach((c: any) => { if (c.category_id === id) c.category_id = null; });
       setStore('conversations', convs);
       return undefined as T;
@@ -1105,6 +1250,48 @@ export async function handleCommand<T>(cmd: string, args?: Record<string, unknow
       }
       cats.sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
       setStore('conversation_categories', cats);
+      return undefined as T;
+    }
+    case 'reorder_conversations': {
+      const { categoryId = null, conversationIds } = args as any;
+      if (categoryId !== null && typeof categoryId !== 'string') {
+        throw new Error('categoryId must be a string or null');
+      }
+      if (!Array.isArray(conversationIds) || conversationIds.some((id: unknown) => typeof id !== 'string')) {
+        throw new Error('conversationIds must be an array of strings');
+      }
+      if (new Set(conversationIds).size !== conversationIds.length) {
+        throw new Error('conversationIds must not contain duplicates');
+      }
+      if (categoryId !== null) {
+        const categories = getStore<any[]>('conversation_categories', []);
+        if (!categories.some((category: any) => category.id === categoryId)) {
+          throw new Error('Category not found');
+        }
+      }
+
+      const conversations = getStore<any[]>('conversations', []);
+      const expectedIds = conversations
+        .filter((conversation: any) => (
+          !conversation.is_archived
+          && conversation.parent_conversation_id == null
+          && (conversation.category_id ?? null) === categoryId
+        ))
+        .map((conversation: any) => conversation.id);
+      const expectedIdSet = new Set(expectedIds);
+      if (
+        conversationIds.length !== expectedIds.length
+        || conversationIds.some((id: string) => !expectedIdSet.has(id))
+      ) {
+        throw new Error('conversationIds must contain every conversation in the container exactly once');
+      }
+
+      const orderById = new Map(conversationIds.map((id: string, index: number) => [id, index]));
+      const reordered = conversations.map((conversation: any) => {
+        const sortOrder = orderById.get(conversation.id);
+        return sortOrder === undefined ? conversation : { ...conversation, sort_order: sortOrder };
+      });
+      setStore('conversations', reordered);
       return undefined as T;
     }
     case 'set_conversation_category_collapsed': {

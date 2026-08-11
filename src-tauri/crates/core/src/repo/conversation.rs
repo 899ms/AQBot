@@ -3,7 +3,9 @@ use sea_orm::sea_query::Expr;
 use serde_json;
 use std::collections::HashSet;
 
-use crate::entity::{conversation_summaries, conversations, messages, stored_files};
+use crate::entity::{
+    conversation_categories, conversation_summaries, conversations, messages, stored_files,
+};
 use crate::error::{AQBotError, Result};
 use crate::types::{
     Attachment, ContextStrategy, Conversation, ConversationSearchResult, ConversationSummary,
@@ -72,6 +74,7 @@ fn conversation_from_entity(m: conversations::Model) -> Result<Conversation> {
         compression_keep_last_n,
         category_id: m.category_id,
         parent_conversation_id: m.parent_conversation_id,
+        sort_order: m.sort_order,
         mode: m.mode,
         created_at: m.created_at,
         updated_at: m.updated_at,
@@ -85,6 +88,138 @@ fn parse_string_list(raw: &str) -> Vec<String> {
 
 fn stringify_string_list(values: &[String]) -> String {
     serde_json::to_string(values).expect("failed to serialize conversation preference JSON")
+}
+
+fn transaction_failure(primary: AQBotError, rollback: Option<DbErr>) -> AQBotError {
+    match rollback {
+        None => primary,
+        Some(rollback) => AQBotError::Validation(format!(
+            "{primary}; transaction rollback failed: {rollback}"
+        )),
+    }
+}
+
+async fn ensure_category_exists<C>(db: &C, category_id: &str) -> Result<()>
+where
+    C: ConnectionTrait,
+{
+    if conversation_categories::Entity::find_by_id(category_id)
+        .one(db)
+        .await?
+        .is_none()
+    {
+        return Err(AQBotError::NotFound(format!(
+            "ConversationCategory {category_id}"
+        )));
+    }
+    Ok(())
+}
+
+async fn ordered_active_roots<C>(
+    db: &C,
+    category_id: Option<&str>,
+    pinned: bool,
+    excluded_ids: &[String],
+) -> Result<Vec<(String, i32)>>
+where
+    C: ConnectionTrait,
+{
+    let mut query = conversations::Entity::find()
+        .filter(conversations::Column::IsArchived.eq(0))
+        .filter(conversations::Column::ParentConversationId.is_null());
+    query = match category_id {
+        Some(category_id) => query.filter(conversations::Column::CategoryId.eq(category_id)),
+        None => query
+            .filter(conversations::Column::CategoryId.is_null())
+            .filter(conversations::Column::IsPinned.eq(if pinned { 1 } else { 0 })),
+    };
+    if !excluded_ids.is_empty() {
+        query = query.filter(conversations::Column::Id.is_not_in(excluded_ids.iter().cloned()));
+    }
+    Ok(query
+        .order_by_asc(conversations::Column::SortOrder)
+        .order_by_desc(conversations::Column::UpdatedAt)
+        .order_by_asc(conversations::Column::Id)
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|row| (row.id, row.sort_order))
+        .collect())
+}
+
+async fn write_sort_orders<C>(db: &C, ids: &[String], start: i32) -> Result<()>
+where
+    C: ConnectionTrait,
+{
+    for (offset, id) in ids.iter().enumerate() {
+        let offset = i32::try_from(offset).map_err(|_| {
+            AQBotError::Validation("Too many conversations to assign sort order".to_string())
+        })?;
+        let order = start.checked_add(offset).ok_or_else(|| {
+            AQBotError::Validation("Too many conversations to assign sort order".to_string())
+        })?;
+        let result = conversations::Entity::update_many()
+            .col_expr(conversations::Column::SortOrder, Expr::value(order))
+            .filter(conversations::Column::Id.eq(id))
+            .exec(db)
+            .await?;
+        if result.rows_affected != 1 {
+            return Err(AQBotError::NotFound(format!("Conversation {id}")));
+        }
+    }
+    Ok(())
+}
+
+async fn prepare_new_root_at_top<C>(db: &C, category_id: Option<&str>, pinned: bool) -> Result<i32>
+where
+    C: ConnectionTrait,
+{
+    let peers = ordered_active_roots(db, category_id, pinned, &[]).await?;
+    let Some((_, minimum_order)) = peers.first() else {
+        return Ok(0);
+    };
+    if let Some(order) = minimum_order.checked_sub(1) {
+        return Ok(order);
+    }
+
+    let peer_ids = peers.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+    write_sort_orders(db, &peer_ids, 1).await?;
+    Ok(0)
+}
+
+pub(crate) async fn place_existing_roots_at_top<C>(
+    db: &C,
+    category_id: Option<&str>,
+    pinned: bool,
+    conversation_ids: &[String],
+) -> Result<()>
+where
+    C: ConnectionTrait,
+{
+    if conversation_ids.is_empty() {
+        return Ok(());
+    }
+    let unique = conversation_ids.iter().collect::<HashSet<_>>();
+    if unique.len() != conversation_ids.len() {
+        return Err(AQBotError::Validation(
+            "Conversation order contains duplicate IDs".to_string(),
+        ));
+    }
+    let peers = ordered_active_roots(db, category_id, pinned, conversation_ids).await?;
+    let moved_count = i32::try_from(conversation_ids.len()).map_err(|_| {
+        AQBotError::Validation("Too many conversations to assign sort order".to_string())
+    })?;
+    if let Some(start) = peers
+        .first()
+        .map(|(_, minimum_order)| minimum_order.checked_sub(moved_count))
+        .unwrap_or(Some(0))
+    {
+        return write_sort_orders(db, conversation_ids, start).await;
+    }
+
+    write_sort_orders(db, conversation_ids, 0).await?;
+    let peer_ids = peers.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+    write_sort_orders(db, &peer_ids, moved_count).await
 }
 
 pub async fn list_conversations(db: &DatabaseConnection) -> Result<Vec<Conversation>> {
@@ -148,6 +283,57 @@ pub async fn get_conversation(db: &DatabaseConnection, id: &str) -> Result<Conve
     conversation_from_entity(row)
 }
 
+/// Persist the complete order of all active root conversations in one category
+/// (or in the uncategorized container). The validation and writes are atomic,
+/// and the operation intentionally leaves `updated_at` unchanged.
+pub async fn reorder_conversations(
+    db: &DatabaseConnection,
+    category_id: Option<&str>,
+    conversation_ids: &[String],
+) -> Result<()> {
+    let txn = db.begin().await?;
+    let operation = async {
+        if let Some(category_id) = category_id {
+            ensure_category_exists(&txn, category_id).await?;
+        }
+
+        let mut query = conversations::Entity::find()
+            .filter(conversations::Column::IsArchived.eq(0))
+            .filter(conversations::Column::ParentConversationId.is_null());
+        query = match category_id {
+            Some(category_id) => query.filter(conversations::Column::CategoryId.eq(category_id)),
+            None => query.filter(conversations::Column::CategoryId.is_null()),
+        };
+        let expected_ids = query
+            .all(&txn)
+            .await?
+            .into_iter()
+            .map(|row| row.id)
+            .collect::<HashSet<_>>();
+        let provided_ids = conversation_ids.iter().cloned().collect::<HashSet<_>>();
+        if provided_ids.len() != conversation_ids.len() {
+            return Err(AQBotError::Validation(
+                "Conversation order contains duplicate IDs".to_string(),
+            ));
+        }
+        if expected_ids != provided_ids {
+            return Err(AQBotError::Validation(
+                "Conversation order must contain every active root conversation in the target container exactly once"
+                    .to_string(),
+            ));
+        }
+
+        write_sort_orders(&txn, conversation_ids, 0).await
+    }
+    .await;
+    if let Err(error) = operation {
+        let rollback = txn.rollback().await.err();
+        return Err(transaction_failure(error, rollback));
+    }
+    txn.commit().await?;
+    Ok(())
+}
+
 pub async fn create_conversation(
     db: &DatabaseConnection,
     title: &str,
@@ -158,20 +344,32 @@ pub async fn create_conversation(
     let id = gen_id();
     let now = now_ts();
 
-    conversations::ActiveModel {
-        id: Set(id.clone()),
-        title: Set(title.to_string()),
-        model_id: Set(model_id.to_string()),
-        provider_id: Set(provider_id.to_string()),
-        system_prompt: Set(system_prompt.map(|s| s.to_string())),
-        message_count: Set(0),
-        is_pinned: Set(0),
-        created_at: Set(now),
-        updated_at: Set(now),
-        ..Default::default()
+    let txn = db.begin().await?;
+    let operation = async {
+        let sort_order = prepare_new_root_at_top(&txn, None, false).await?;
+        conversations::ActiveModel {
+            id: Set(id.clone()),
+            title: Set(title.to_string()),
+            model_id: Set(model_id.to_string()),
+            provider_id: Set(provider_id.to_string()),
+            system_prompt: Set(system_prompt.map(str::to_string)),
+            message_count: Set(0),
+            is_pinned: Set(0),
+            sort_order: Set(sort_order),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        }
+        .insert(&txn)
+        .await?;
+        Ok(())
     }
-    .insert(db)
-    .await?;
+    .await;
+    if let Err(error) = operation {
+        let rollback = txn.rollback().await.err();
+        return Err(transaction_failure(error, rollback));
+    }
+    txn.commit().await?;
 
     get_conversation(db, &id).await
 }
@@ -181,13 +379,40 @@ pub async fn update_conversation(
     id: &str,
     input: UpdateConversationInput,
 ) -> Result<Conversation> {
+    let inherited_context_strategy = if input.context_strategy_override == Some(None) {
+        Some(
+            crate::repo::settings::get_settings(db)
+                .await?
+                .default_context_strategy,
+        )
+    } else {
+        None
+    };
+    let txn = db.begin().await?;
     let row = conversations::Entity::find_by_id(id)
-        .one(db)
+        .one(&txn)
         .await?
         .ok_or_else(|| AQBotError::NotFound(format!("Conversation {}", id)))?;
 
     let now = now_ts();
     let existing = conversation_from_entity(row.clone())?;
+    let target_category_id = input
+        .category_id
+        .clone()
+        .unwrap_or_else(|| row.category_id.clone());
+    let target_parent_id = input
+        .parent_conversation_id
+        .clone()
+        .unwrap_or_else(|| row.parent_conversation_id.clone());
+    let target_is_pinned = input.is_pinned.unwrap_or(row.is_pinned != 0);
+    let target_is_archived = input.is_archived.unwrap_or(row.is_archived != 0);
+    let category_changed = target_category_id != row.category_id;
+    let enters_active_root = !target_is_archived
+        && target_parent_id.is_none()
+        && (category_changed
+            || row.is_archived != 0
+            || row.parent_conversation_id.is_some()
+            || (target_category_id.is_none() && target_is_pinned != (row.is_pinned != 0)));
 
     let context_message_limit = input
         .context_message_limit
@@ -269,9 +494,11 @@ pub async fn update_conversation(
     if let Some(context_strategy_override) = input.context_strategy_override {
         let legacy_strategy = match context_strategy_override {
             Some(strategy) => strategy,
-            None => crate::repo::settings::get_settings(db)
-                .await?
-                .default_context_strategy,
+            None => inherited_context_strategy.ok_or_else(|| {
+                AQBotError::Validation(
+                    "Inherited context strategy was not loaded before update".to_string(),
+                )
+            })?,
         };
         am.context_strategy_override =
             Set(context_strategy_override.map(|strategy| strategy.as_str().to_string()));
@@ -305,7 +532,31 @@ pub async fn update_conversation(
         am.mode = Set(mode);
     }
     am.updated_at = Set(now);
-    am.update(db).await?;
+
+    let operation = async {
+        if category_changed {
+            if let Some(category_id) = target_category_id.as_deref() {
+                ensure_category_exists(&txn, category_id).await?;
+            }
+        }
+        if enters_active_root {
+            place_existing_roots_at_top(
+                &txn,
+                target_category_id.as_deref(),
+                target_is_pinned,
+                &[id.to_string()],
+            )
+            .await?;
+        }
+        am.update(&txn).await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = operation {
+        let rollback = txn.rollback().await.err();
+        return Err(transaction_failure(error, rollback));
+    }
+    txn.commit().await?;
 
     get_conversation(db, id).await
 }
@@ -325,35 +576,67 @@ pub async fn update_conversation_title(
 }
 
 pub async fn toggle_pin(db: &DatabaseConnection, id: &str) -> Result<Conversation> {
+    let txn = db.begin().await?;
     let row = conversations::Entity::find_by_id(id)
-        .one(db)
+        .one(&txn)
         .await?
         .ok_or_else(|| AQBotError::NotFound(format!("Conversation {}", id)))?;
 
     let new_pinned = if row.is_pinned != 0 { 0 } else { 1 };
     let now = now_ts();
+    let move_to_group_top =
+        row.category_id.is_none() && row.parent_conversation_id.is_none() && row.is_archived == 0;
 
     let mut am: conversations::ActiveModel = row.into();
     am.is_pinned = Set(new_pinned);
     am.updated_at = Set(now);
-    am.update(db).await?;
+    let operation = async {
+        if move_to_group_top {
+            place_existing_roots_at_top(&txn, None, new_pinned != 0, &[id.to_string()]).await?;
+        }
+        am.update(&txn).await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = operation {
+        let rollback = txn.rollback().await.err();
+        return Err(transaction_failure(error, rollback));
+    }
+    txn.commit().await?;
 
     get_conversation(db, id).await
 }
 
 pub async fn toggle_archive(db: &DatabaseConnection, id: &str) -> Result<Conversation> {
+    let txn = db.begin().await?;
     let row = conversations::Entity::find_by_id(id)
-        .one(db)
+        .one(&txn)
         .await?
         .ok_or_else(|| AQBotError::NotFound(format!("Conversation {}", id)))?;
 
     let new_archived = if row.is_archived != 0 { 0 } else { 1 };
     let now = now_ts();
+    let category_id = row.category_id.clone();
+    let is_pinned = row.is_pinned != 0;
+    let move_to_container_top = new_archived == 0 && row.parent_conversation_id.is_none();
 
     let mut am: conversations::ActiveModel = row.into();
     am.is_archived = Set(new_archived);
     am.updated_at = Set(now);
-    am.update(db).await?;
+    let operation = async {
+        if move_to_container_top {
+            place_existing_roots_at_top(&txn, category_id.as_deref(), is_pinned, &[id.to_string()])
+                .await?;
+        }
+        am.update(&txn).await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = operation {
+        let rollback = txn.rollback().await.err();
+        return Err(transaction_failure(error, rollback));
+    }
+    txn.commit().await?;
 
     get_conversation(db, id).await
 }
@@ -471,11 +754,18 @@ pub async fn branch_conversation(
     as_child: bool,
     custom_title: Option<&str>,
 ) -> Result<Conversation> {
-    // 1. Load source conversation
+    let _file_reference_guard = crate::repo::stored_file::lock_file_references().await;
+    let txn = db.begin().await?;
+
+    // 1. Load source conversation and its messages from the same transaction
+    // snapshot used to create the branch.
     let source = conversations::Entity::find_by_id(conversation_id)
-        .one(db)
+        .one(&txn)
         .await?
         .ok_or_else(|| AQBotError::NotFound(format!("Conversation {}", conversation_id)))?;
+    if let Some(category_id) = source.category_id.as_deref() {
+        ensure_category_exists(&txn, category_id).await?;
+    }
 
     // 2. Load all active messages ordered by created_at
     let all_msgs = messages::Entity::find()
@@ -483,7 +773,7 @@ pub async fn branch_conversation(
         .filter(messages::Column::IsActive.eq(1))
         .order_by_asc(messages::Column::CreatedAt)
         .order_by(Expr::cust("rowid"), Order::Asc)
-        .all(db)
+        .all(&txn)
         .await?;
 
     // 3. Build the branch candidate list. Normal branches target an active
@@ -497,7 +787,7 @@ pub async fn branch_conversation(
         all_msgs[..=target_idx].to_vec()
     } else {
         let target = messages::Entity::find_by_id(until_message_id)
-            .one(db)
+            .one(&txn)
             .await?
             .ok_or_else(|| {
                 AQBotError::NotFound(format!("Message {} in conversation", until_message_id))
@@ -569,8 +859,11 @@ pub async fn branch_conversation(
         None
     };
 
-    let _file_reference_guard = crate::repo::stored_file::lock_file_references().await;
-    let txn = db.begin().await?;
+    let sort_order = if parent_id.is_none() {
+        prepare_new_root_at_top(&txn, source.category_id.as_deref(), false).await?
+    } else {
+        0
+    };
     conversations::ActiveModel {
         id: Set(new_id.clone()),
         title: Set(branch_title),
@@ -597,6 +890,7 @@ pub async fn branch_conversation(
         compression_keep_last_n: Set(source.compression_keep_last_n),
         category_id: Set(source.category_id.clone()),
         parent_conversation_id: Set(parent_id),
+        sort_order: Set(sort_order),
         research_mode: Set(source.research_mode),
         created_at: Set(now),
         updated_at: Set(now),
@@ -1048,6 +1342,340 @@ mod tests {
 
     fn update_input(value: serde_json::Value) -> UpdateConversationInput {
         serde_json::from_value(value).expect("deserialize conversation update")
+    }
+
+    async fn insert_test_category(db: &DatabaseConnection, id: &str) {
+        conversation_categories::ActiveModel {
+            id: Set(id.to_string()),
+            name: Set(id.to_string()),
+            sort_order: Set(0),
+            is_collapsed: Set(0),
+            created_at: Set(1),
+            updated_at: Set(1),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
+    async fn conversation_orders(db: &DatabaseConnection, ids: &[&str]) -> Vec<(String, i32, i64)> {
+        let mut values = Vec::new();
+        for id in ids {
+            let conversation = get_conversation(db, id).await.unwrap();
+            values.push((
+                conversation.id,
+                conversation.sort_order,
+                conversation.updated_at,
+            ));
+        }
+        values
+    }
+
+    #[tokio::test]
+    async fn reorder_conversations_is_atomic_and_preserves_updated_at() {
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+        let first = create_conversation(db, "First", "model", "provider", None)
+            .await
+            .unwrap();
+        let second = create_conversation(db, "Second", "model", "provider", None)
+            .await
+            .unwrap();
+        let third = create_conversation(db, "Third", "model", "provider", None)
+            .await
+            .unwrap();
+        for (id, sentinel) in [(&first.id, 101_i64), (&second.id, 202), (&third.id, 303)] {
+            conversations::Entity::update_many()
+                .col_expr(conversations::Column::UpdatedAt, Expr::value(sentinel))
+                .filter(conversations::Column::Id.eq(id))
+                .exec(db)
+                .await
+                .unwrap();
+        }
+        let order = vec![first.id.clone(), third.id.clone(), second.id.clone()];
+        let before = conversation_orders(db, &[&first.id, &third.id, &second.id]).await;
+
+        reorder_conversations(db, None, &order).await.unwrap();
+
+        let after = conversation_orders(db, &[&first.id, &third.id, &second.id]).await;
+        assert_eq!(
+            after.iter().map(|value| value.1).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+        assert_eq!(
+            after.iter().map(|value| value.2).collect::<Vec<_>>(),
+            before.iter().map(|value| value.2).collect::<Vec<_>>()
+        );
+
+        let stable = conversation_orders(db, &[&first.id, &third.id, &second.id]).await;
+        let missing = vec![first.id.clone(), third.id.clone()];
+        assert!(reorder_conversations(db, None, &missing).await.is_err());
+        assert_eq!(
+            conversation_orders(db, &[&first.id, &third.id, &second.id]).await,
+            stable
+        );
+        let duplicate = vec![
+            first.id.clone(),
+            first.id.clone(),
+            second.id.clone(),
+            third.id.clone(),
+        ];
+        let duplicate_error = reorder_conversations(db, None, &duplicate)
+            .await
+            .unwrap_err();
+        assert!(duplicate_error.to_string().contains("duplicate"));
+        assert_eq!(
+            conversation_orders(db, &[&first.id, &third.id, &second.id]).await,
+            stable
+        );
+    }
+
+    #[tokio::test]
+    async fn reorder_conversations_rolls_back_prior_writes_on_database_failure() {
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+        let first = create_conversation(db, "First", "model", "provider", None)
+            .await
+            .unwrap();
+        let second = create_conversation(db, "Second", "model", "provider", None)
+            .await
+            .unwrap();
+        let third = create_conversation(db, "Third", "model", "provider", None)
+            .await
+            .unwrap();
+        let before = conversation_orders(db, &[&first.id, &second.id, &third.id]).await;
+        db.execute_unprepared(
+            "CREATE TRIGGER fail_conversation_sort \
+             BEFORE UPDATE OF sort_order ON conversations \
+             WHEN OLD.title = 'Second' \
+             BEGIN SELECT RAISE(FAIL, 'forced reorder failure'); END;",
+        )
+        .await
+        .unwrap();
+
+        let result = reorder_conversations(
+            db,
+            None,
+            &[third.id.clone(), second.id.clone(), first.id.clone()],
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            conversation_orders(db, &[&first.id, &second.id, &third.id]).await,
+            before
+        );
+    }
+
+    #[tokio::test]
+    async fn reorder_conversations_rejects_wrong_container_children_and_archived_rows() {
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+        insert_test_category(db, "category").await;
+        let root = create_conversation(db, "Root", "model", "provider", None)
+            .await
+            .unwrap();
+        let child = create_conversation(db, "Child", "model", "provider", None)
+            .await
+            .unwrap();
+        update_conversation(
+            db,
+            &child.id,
+            update_input(serde_json::json!({"parent_conversation_id": root.id})),
+        )
+        .await
+        .unwrap();
+        let archived = create_conversation(db, "Archived", "model", "provider", None)
+            .await
+            .unwrap();
+        toggle_archive(db, &archived.id).await.unwrap();
+        let categorized = create_conversation(db, "Categorized", "model", "provider", None)
+            .await
+            .unwrap();
+        update_conversation(
+            db,
+            &categorized.id,
+            update_input(serde_json::json!({"category_id": "category"})),
+        )
+        .await
+        .unwrap();
+        let categorized_second =
+            create_conversation(db, "Categorized second", "model", "provider", None)
+                .await
+                .unwrap();
+        update_conversation(
+            db,
+            &categorized_second.id,
+            update_input(serde_json::json!({"category_id": "category"})),
+        )
+        .await
+        .unwrap();
+
+        for invalid in [
+            vec![root.id.clone(), child.id.clone()],
+            vec![root.id.clone(), archived.id.clone()],
+            vec![root.id.clone(), categorized.id.clone()],
+        ] {
+            assert!(reorder_conversations(db, None, &invalid).await.is_err());
+        }
+        assert!(reorder_conversations(db, Some("missing"), &[])
+            .await
+            .is_err());
+        reorder_conversations(
+            db,
+            Some("category"),
+            &[categorized.id.clone(), categorized_second.id.clone()],
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get_conversation(db, &categorized.id)
+                .await
+                .unwrap()
+                .sort_order,
+            0
+        );
+        assert_eq!(
+            get_conversation(db, &categorized_second.id)
+                .await
+                .unwrap()
+                .sort_order,
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn conversation_container_transitions_assign_top_sort_order() {
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+        insert_test_category(db, "category").await;
+        let first = create_conversation(db, "First", "model", "provider", None)
+            .await
+            .unwrap();
+        let second = create_conversation(db, "Second", "model", "provider", None)
+            .await
+            .unwrap();
+        assert_eq!(
+            get_conversation(db, &second.id).await.unwrap().sort_order,
+            -1
+        );
+        assert_eq!(get_conversation(db, &first.id).await.unwrap().sort_order, 0);
+
+        update_conversation(
+            db,
+            &first.id,
+            update_input(serde_json::json!({"category_id": "category"})),
+        )
+        .await
+        .unwrap();
+        update_conversation(
+            db,
+            &second.id,
+            update_input(serde_json::json!({"category_id": "category"})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            get_conversation(db, &second.id).await.unwrap().sort_order,
+            -1
+        );
+        assert_eq!(get_conversation(db, &first.id).await.unwrap().sort_order, 0);
+
+        toggle_archive(db, &first.id).await.unwrap();
+        toggle_archive(db, &first.id).await.unwrap();
+        assert_eq!(
+            get_conversation(db, &first.id).await.unwrap().sort_order,
+            -2
+        );
+        assert_eq!(
+            get_conversation(db, &second.id).await.unwrap().sort_order,
+            -1
+        );
+
+        update_conversation(
+            db,
+            &first.id,
+            update_input(serde_json::json!({"category_id": null})),
+        )
+        .await
+        .unwrap();
+        update_conversation(
+            db,
+            &second.id,
+            update_input(serde_json::json!({"category_id": null})),
+        )
+        .await
+        .unwrap();
+        toggle_pin(db, &first.id).await.unwrap();
+        toggle_pin(db, &second.id).await.unwrap();
+        assert_eq!(
+            get_conversation(db, &second.id).await.unwrap().sort_order,
+            -1
+        );
+        assert_eq!(get_conversation(db, &first.id).await.unwrap().sort_order, 0);
+    }
+
+    #[tokio::test]
+    async fn assigning_top_sort_order_renormalizes_at_i32_floor() {
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+        let first = create_conversation(db, "First", "model", "provider", None)
+            .await
+            .unwrap();
+        conversations::Entity::update_many()
+            .col_expr(conversations::Column::SortOrder, Expr::value(i32::MIN))
+            .filter(conversations::Column::Id.eq(&first.id))
+            .exec(db)
+            .await
+            .unwrap();
+
+        let second = create_conversation(db, "Second", "model", "provider", None)
+            .await
+            .unwrap();
+
+        assert_eq!(second.sort_order, 0);
+        assert_eq!(get_conversation(db, &first.id).await.unwrap().sort_order, 1);
+    }
+
+    #[tokio::test]
+    async fn deleting_category_moves_ordered_roots_to_uncategorized_top() {
+        let h = create_test_pool().await.unwrap();
+        let db = &h.conn;
+        insert_test_category(db, "category").await;
+        let existing = create_conversation(db, "Existing", "model", "provider", None)
+            .await
+            .unwrap();
+        let first = create_conversation(db, "First", "model", "provider", None)
+            .await
+            .unwrap();
+        let second = create_conversation(db, "Second", "model", "provider", None)
+            .await
+            .unwrap();
+        for conversation in [&first, &second] {
+            update_conversation(
+                db,
+                &conversation.id,
+                update_input(serde_json::json!({"category_id": "category"})),
+            )
+            .await
+            .unwrap();
+        }
+        reorder_conversations(db, Some("category"), &[first.id.clone(), second.id.clone()])
+            .await
+            .unwrap();
+
+        crate::repo::conversation_category::delete_conversation_category(db, "category")
+            .await
+            .unwrap();
+
+        let first = get_conversation(db, &first.id).await.unwrap();
+        let second = get_conversation(db, &second.id).await.unwrap();
+        let existing = get_conversation(db, &existing.id).await.unwrap();
+        assert_eq!(first.category_id, None);
+        assert_eq!(second.category_id, None);
+        assert!(first.sort_order < second.sort_order);
+        assert!(second.sort_order < existing.sort_order);
     }
 
     #[tokio::test]
@@ -1567,5 +2195,6 @@ mod tests {
         assert_eq!(branched_messages[0].content, "Compare answers");
         assert_eq!(branched_messages[1].content, "Inactive answer");
         assert!(branched_messages[1].is_active);
+        assert!(branched.sort_order < get_conversation(db, &conv.id).await.unwrap().sort_order);
     }
 }

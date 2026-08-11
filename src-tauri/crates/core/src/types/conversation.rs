@@ -72,6 +72,7 @@ pub struct Conversation {
     pub compression_keep_last_n: Option<u32>,
     pub category_id: Option<String>,
     pub parent_conversation_id: Option<String>,
+    pub sort_order: i32,
     pub mode: String,
     pub created_at: i64,
     pub updated_at: i64,

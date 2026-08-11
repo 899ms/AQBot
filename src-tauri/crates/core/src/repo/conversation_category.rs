@@ -127,20 +127,68 @@ pub async fn update_conversation_category(
 }
 
 pub async fn delete_conversation_category(db: &DatabaseConnection, id: &str) -> Result<()> {
-    // Unset category_id on conversations that belong to this category
     use crate::entity::conversations;
-    conversations::Entity::update_many()
-        .col_expr(
-            conversations::Column::CategoryId,
-            Expr::value(Option::<String>::None),
-        )
-        .filter(conversations::Column::CategoryId.eq(id))
-        .exec(db)
-        .await?;
+    let txn = db.begin().await?;
+    let operation = async {
+        if conversation_categories::Entity::find_by_id(id)
+            .one(&txn)
+            .await?
+            .is_none()
+        {
+            return Err(AQBotError::NotFound(format!("ConversationCategory {id}")));
+        }
 
-    conversation_categories::Entity::delete_by_id(id)
-        .exec(db)
-        .await?;
+        let roots = conversations::Entity::find()
+            .filter(conversations::Column::CategoryId.eq(id))
+            .filter(conversations::Column::IsArchived.eq(0))
+            .filter(conversations::Column::ParentConversationId.is_null())
+            .order_by_asc(conversations::Column::SortOrder)
+            .order_by_desc(conversations::Column::UpdatedAt)
+            .order_by_asc(conversations::Column::Id)
+            .all(&txn)
+            .await?;
+        let pinned_ids = roots
+            .iter()
+            .filter(|row| row.is_pinned != 0)
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>();
+        let unpinned_ids = roots
+            .iter()
+            .filter(|row| row.is_pinned == 0)
+            .map(|row| row.id.clone())
+            .collect::<Vec<_>>();
+        crate::repo::conversation::place_existing_roots_at_top(&txn, None, true, &pinned_ids)
+            .await?;
+        crate::repo::conversation::place_existing_roots_at_top(&txn, None, false, &unpinned_ids)
+            .await?;
+
+        conversations::Entity::update_many()
+            .col_expr(
+                conversations::Column::CategoryId,
+                Expr::value(Option::<String>::None),
+            )
+            .filter(conversations::Column::CategoryId.eq(id))
+            .exec(&txn)
+            .await?;
+        let deleted = conversation_categories::Entity::delete_by_id(id)
+            .exec(&txn)
+            .await?;
+        if deleted.rows_affected != 1 {
+            return Err(AQBotError::NotFound(format!("ConversationCategory {id}")));
+        }
+        Ok(())
+    }
+    .await;
+    if let Err(error) = operation {
+        let rollback = txn.rollback().await.err();
+        return Err(match rollback {
+            None => error,
+            Some(rollback) => {
+                AQBotError::Validation(format!("{error}; transaction rollback failed: {rollback}"))
+            }
+        });
+    }
+    txn.commit().await?;
     Ok(())
 }
 

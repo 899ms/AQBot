@@ -208,6 +208,7 @@ pub async fn import_chatgpt_export_from_path(
             compression_keep_last_n: Set(None),
             category_id: Set(None),
             parent_conversation_id: Set(None),
+            sort_order: Set(0),
             mode: Set("chat".to_string()),
         }
         .insert(&txn)

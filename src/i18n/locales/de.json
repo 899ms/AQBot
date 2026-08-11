@@ -57,6 +57,7 @@
     "clearContextToContinue": "Kontext leeren",
     "contextMessagesExcludedWarning": "{{count}} Nachrichten wurden aus dem Modellkontext ausgeschlossen",
     "newConversation": "Neues Gespräch",
+    "reorderConversation": "Unterhaltung zum Neuordnen ziehen",
     "newConversationInCurrentCategory": "In {{category}} neu erstellen",
     "newStandaloneConversation": "Eigenständig erstellen",
     "expandSidebar": "Chat-Seitenleiste erweitern",

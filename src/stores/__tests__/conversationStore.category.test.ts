@@ -187,6 +187,7 @@ describe('conversationStore batchMoveToCategory', () => {
       if (cmd === 'update_conversation') {
         return makeConversation(args!.id!, { category_id: args!.input!.category_id });
       }
+      if (cmd === 'reorder_conversations') return undefined;
       throw new Error(`unexpected command: ${cmd}`);
     });
 
@@ -198,24 +199,154 @@ describe('conversationStore batchMoveToCategory', () => {
     expect(byId.get('c1')?.category_id).toBe('cat-b');
     expect(byId.get('c2')?.category_id).toBe('cat-b');
     expect(byId.get('c3')?.category_id).toBe('cat-a');
+    expect(invokeMock).toHaveBeenCalledWith('reorder_conversations', {
+      categoryId: 'cat-b',
+      conversationIds: ['c1', 'c2'],
+    });
   });
 
-  it('removes category when categoryId is null and skips failed items', async () => {
+  it('removes category in reverse visible order and reports partial failures', async () => {
     invokeMock.mockImplementation(async (cmd: string, args?: { id?: string; input?: { category_id?: string | null } }) => {
       if (cmd === 'update_conversation') {
         if (args!.id === 'c2') throw new Error('boom');
         return makeConversation(args!.id!, { category_id: args!.input!.category_id });
       }
+      if (cmd === 'reorder_conversations') return undefined;
       throw new Error(`unexpected command: ${cmd}`);
     });
 
     const { useConversationStore } = await import('../conversationStore');
-    const moved = await useConversationStore.getState().batchMoveToCategory(['c1', 'c2', 'c3'], null);
+    await expect(
+      useConversationStore.getState().batchMoveToCategory(['c1', 'c2', 'c3'], null),
+    ).rejects.toThrow('c2: Error: boom');
 
-    expect(moved).toBe(2);
+    expect(invokeMock.mock.calls
+      .filter(([command]) => command === 'update_conversation')
+      .map(([, args]) => args.id))
+      .toEqual(['c3', 'c2']);
     const byId = new Map(useConversationStore.getState().conversations.map((c) => [c.id, c]));
     expect(byId.get('c1')?.category_id).toBeNull();
     expect(byId.get('c2')?.category_id).toBe('cat-a');
     expect(byId.get('c3')?.category_id).toBeNull();
+    expect(useConversationStore.getState().error).toContain('c2: Error: boom');
+    expect(invokeMock).toHaveBeenCalledWith('reorder_conversations', {
+      categoryId: null,
+      conversationIds: ['c1', 'c3'],
+    });
+  });
+
+  it('keeps selected conversations in visual order when some already belong to the target', async () => {
+    invokeMock.mockImplementation(async (
+      cmd: string,
+      args?: { id?: string; input?: { category_id?: string | null } },
+    ) => {
+      if (cmd === 'update_conversation') {
+        return makeConversation(args!.id!, { category_id: args!.input!.category_id });
+      }
+      if (cmd === 'reorder_conversations') return undefined;
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+    const { useConversationStore } = await import('../conversationStore');
+    useConversationStore.setState({
+      conversations: [
+        makeConversation('c1', { category_id: 'cat-b', sort_order: 0, updated_at: 123 }),
+        makeConversation('c2', { category_id: 'cat-a', sort_order: 1 }),
+        makeConversation('c3', { category_id: 'cat-b', sort_order: 2 }),
+      ] as never[],
+    });
+
+    await useConversationStore.getState().batchMoveToCategory(['c1', 'c2'], 'cat-b');
+
+    expect(invokeMock).toHaveBeenCalledWith('reorder_conversations', {
+      categoryId: 'cat-b',
+      conversationIds: ['c1', 'c2', 'c3'],
+    });
+    expect(invokeMock.mock.calls
+      .filter(([command]) => command === 'update_conversation')
+      .map(([, args]) => args.id))
+      .toEqual(['c2']);
+    expect(useConversationStore.getState().conversations.map((conversation) => ({
+      id: conversation.id,
+      categoryId: conversation.category_id,
+      sortOrder: conversation.sort_order,
+      updatedAt: conversation.updated_at,
+    }))).toEqual([
+      { id: 'c1', categoryId: 'cat-b', sortOrder: 0, updatedAt: 123 },
+      { id: 'c2', categoryId: 'cat-b', sortOrder: 1, updatedAt: 1 },
+      { id: 'c3', categoryId: 'cat-b', sortOrder: 2, updatedAt: 1 },
+    ]);
+  });
+
+  it('flattens an uncategorized target in pinned and date-group order', async () => {
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    invokeMock.mockImplementation(async (
+      cmd: string,
+      args?: { id?: string; input?: { category_id?: string | null } },
+    ) => {
+      if (cmd === 'update_conversation') {
+        return makeConversation(args!.id!, {
+          category_id: args!.input!.category_id,
+          sort_order: -1,
+          updated_at: nowSeconds,
+        });
+      }
+      if (cmd === 'reorder_conversations') return undefined;
+      throw new Error(`unexpected command: ${cmd}`);
+    });
+    const { useConversationStore } = await import('../conversationStore');
+    useConversationStore.setState({
+      conversations: [
+        makeConversation('pinned', { category_id: null, is_pinned: true }),
+        makeConversation('today', { category_id: null, updated_at: nowSeconds }),
+        makeConversation('earlier', { category_id: null, updated_at: 1 }),
+        makeConversation('moved', { category_id: 'cat-a', updated_at: nowSeconds }),
+      ] as never[],
+    });
+
+    await useConversationStore.getState().batchMoveToCategory(['moved'], null);
+
+    expect(invokeMock).toHaveBeenCalledWith('reorder_conversations', {
+      categoryId: null,
+      conversationIds: ['pinned', 'moved', 'today', 'earlier'],
+    });
+  });
+
+  it('persists a complete conversation order without changing updated_at', async () => {
+    invokeMock.mockResolvedValue(undefined);
+    const { useConversationStore } = await import('../conversationStore');
+    useConversationStore.setState({
+      conversations: [
+        makeConversation('c1', { category_id: 'cat-a', sort_order: 0, updated_at: 100 }),
+        makeConversation('c2', { category_id: 'cat-a', sort_order: 1, updated_at: 200 }),
+      ] as never[],
+    });
+
+    await useConversationStore.getState().reorderConversations('cat-a', ['c2', 'c1']);
+
+    expect(invokeMock).toHaveBeenCalledWith('reorder_conversations', {
+      categoryId: 'cat-a',
+      conversationIds: ['c2', 'c1'],
+    });
+    const byId = new Map(useConversationStore.getState().conversations.map((c) => [c.id, c]));
+    expect(byId.get('c2')).toMatchObject({ sort_order: 0, updated_at: 200 });
+    expect(byId.get('c1')).toMatchObject({ sort_order: 1, updated_at: 100 });
+    expect(useConversationStore.getState().error).toBeNull();
+  });
+
+  it('keeps local order and exposes the real reorder error when persistence fails', async () => {
+    invokeMock.mockRejectedValue(new Error('reorder failed'));
+    const { useConversationStore } = await import('../conversationStore');
+    const initial = [
+      makeConversation('c1', { sort_order: 0 }),
+      makeConversation('c2', { sort_order: 1 }),
+    ];
+    useConversationStore.setState({ conversations: initial as never[] });
+
+    await expect(
+      useConversationStore.getState().reorderConversations(null, ['c2', 'c1']),
+    ).rejects.toThrow('reorder failed');
+
+    expect(useConversationStore.getState().conversations).toEqual(initial);
+    expect(useConversationStore.getState().error).toBe('Error: reorder failed');
   });
 });

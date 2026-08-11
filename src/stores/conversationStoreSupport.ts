@@ -1308,6 +1308,7 @@ export interface ConversationState {
   ensureConversationsLoaded: (options?: EnsureLoadedOptions) => Promise<void>;
   invalidateConversations: (reason: ResourceInvalidationReason) => void;
   fetchConversations: () => Promise<void>;
+  reorderConversations: (categoryId: string | null, conversationIds: string[]) => Promise<void>;
   setActiveConversation: (id: string | null) => void;
   createConversation: (
     title: string,

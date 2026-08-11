@@ -4,6 +4,7 @@ import {
   buildConversationRows,
   filterConversationsWithParents,
   getSearchExpandedParentIds,
+  planConversationReorder,
 } from '../conversationListModel'
 
 function conversation(
@@ -38,6 +39,7 @@ function conversation(
     created_at: 1,
     updated_at: 1_704_067_200,
     ...overrides,
+    sort_order: overrides.sort_order ?? 0,
   }
 }
 
@@ -140,6 +142,113 @@ describe('buildConversationRows', () => {
       .toEqual(['parent'])
     expect(expanded.filter((row) => row.type === 'conversation').map((row) => row.conversation.id))
       .toEqual(['parent', 'child'])
+  })
+
+  it('uses fixed uncategorized groups and manual order within each group', () => {
+    const rows = buildConversationRows({
+      conversations: [
+        conversation('today-later-rank', { sort_order: 2, updated_at: 1_704_153_600 }),
+        conversation('earlier', { sort_order: 0, updated_at: 1_700_000_000 }),
+        conversation('pinned', { is_pinned: true, sort_order: 4, updated_at: 1 }),
+        conversation('today-first-rank', { sort_order: 1, updated_at: 1_704_153_500 }),
+      ],
+      categories: [],
+      expandedParentIds: new Set(),
+      expandedGroupKeys: new Set(),
+      nowSeconds: 1_704_153_600,
+    })
+
+    expect(rows.map((row) => (
+      row.type === 'conversation' ? row.conversation.id : row.group
+    ))).toEqual([
+      'pinned',
+      'pinned',
+      'today',
+      'today-first-rank',
+      'today-later-rank',
+      'earlier',
+      'earlier',
+    ])
+  })
+
+  it('uses updated time and id as deterministic rank tie breakers', () => {
+    const categorizedRows = buildConversationRows({
+      conversations: [
+        conversation('b', { category_id: 'work', sort_order: 0, updated_at: 20 }),
+        conversation('c', { category_id: 'work', sort_order: 0, updated_at: 30 }),
+        conversation('a', { category_id: 'work', sort_order: 0, updated_at: 20 }),
+      ],
+      categories: [category('work')],
+      expandedParentIds: new Set(),
+      expandedGroupKeys: new Set(['cat:work']),
+      nowSeconds: 1_704_153_600,
+    })
+    expect(categorizedRows
+      .filter((row) => row.type === 'conversation')
+      .map((row) => row.conversation.id))
+      .toEqual(['c', 'a', 'b'])
+  })
+})
+
+describe('planConversationReorder', () => {
+  it('moves a top-level category conversation and excludes its child from the payload', () => {
+    const rows = buildConversationRows({
+      conversations: [
+        conversation('parent-a', { category_id: 'work', sort_order: 0 }),
+        conversation('child-a', {
+          category_id: 'work',
+          parent_conversation_id: 'parent-a',
+          sort_order: 0,
+        }),
+        conversation('parent-b', { category_id: 'work', sort_order: 1 }),
+      ],
+      categories: [category('work')],
+      expandedParentIds: new Set(['parent-a']),
+      expandedGroupKeys: new Set(['cat:work']),
+    })
+
+    expect(planConversationReorder(rows, 'parent-a', 'parent-b')).toEqual({
+      categoryId: 'work',
+      conversationIds: ['parent-b', 'parent-a'],
+    })
+    expect(planConversationReorder(rows, 'child-a', 'parent-b')).toBeNull()
+    expect(planConversationReorder(rows, 'parent-b', 'child-a')).toBeNull()
+  })
+
+  it('keeps the complete uncategorized payload while only moving inside one date group', () => {
+    const rows = buildConversationRows({
+      conversations: [
+        conversation('pinned', { is_pinned: true, sort_order: 0 }),
+        conversation('today-a', { sort_order: 1, updated_at: 1_704_153_600 }),
+        conversation('today-b', { sort_order: 2, updated_at: 1_704_153_500 }),
+        conversation('earlier', { sort_order: 3, updated_at: 1_700_000_000 }),
+      ],
+      categories: [],
+      expandedParentIds: new Set(),
+      expandedGroupKeys: new Set(),
+      nowSeconds: 1_704_153_600,
+    })
+
+    expect(planConversationReorder(rows, 'today-a', 'today-b')).toEqual({
+      categoryId: null,
+      conversationIds: ['pinned', 'today-b', 'today-a', 'earlier'],
+    })
+    expect(planConversationReorder(rows, 'today-a', 'pinned')).toBeNull()
+    expect(planConversationReorder(rows, 'today-a', 'earlier')).toBeNull()
+  })
+
+  it('rejects moves across categories', () => {
+    const rows = buildConversationRows({
+      conversations: [
+        conversation('work-a', { category_id: 'work' }),
+        conversation('home-a', { category_id: 'home' }),
+      ],
+      categories: [category('work'), category('home')],
+      expandedParentIds: new Set(),
+      expandedGroupKeys: new Set(['cat:work', 'cat:home']),
+    })
+
+    expect(planConversationReorder(rows, 'work-a', 'home-a')).toBeNull()
   })
 })
 

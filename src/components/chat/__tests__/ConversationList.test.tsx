@@ -247,6 +247,27 @@ describe('ConversationList threshold behavior', () => {
     expect(screen.queryByText(`Conversation ${count - 1}`)).not.toBeInTheDocument()
   })
 
+  it.each([159, 160])('uses the same drag-capable label in the %s-row list branch', (count) => {
+    const onDragHandlePointerDown = vi.fn()
+    renderList(rows(count), {
+      getItem: (row) => ({
+        ...toItem(row),
+        label: row.type === 'conversation' ? (
+          <button
+            type="button"
+            aria-label={`drag-${row.conversation.id}`}
+            onPointerDown={() => onDragHandlePointerDown(row.conversation.id)}
+          >
+            {row.conversation.title}
+          </button>
+        ) : 'empty',
+      }),
+    })
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'drag-conv-0' }))
+    expect(onDragHandlePointerDown).toHaveBeenCalledWith('conv-0')
+  })
+
   it('keeps active state and click behavior in the virtual branch', () => {
     const onActiveChange = vi.fn()
     renderList(rows(160), { onActiveChange })

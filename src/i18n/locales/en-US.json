@@ -57,6 +57,7 @@
     "clearContextToContinue": "Clear context",
     "contextMessagesExcludedWarning": "{{count}} messages were excluded from the model context",
     "newConversation": "New Conversation",
+    "reorderConversation": "Drag to reorder conversation",
     "newConversationInCurrentCategory": "New in {{category}}",
     "newStandaloneConversation": "New standalone",
     "expandSidebar": "Expand chat sidebar",

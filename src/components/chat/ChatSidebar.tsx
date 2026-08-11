@@ -19,12 +19,17 @@ import { ConversationList, type ConversationMenuFactory } from './ConversationLi
 import { ArchivedConversationList } from './ArchivedConversationList'
 import {
   buildConversationRows,
+  compareConversationOrder,
+  getUncategorizedConversationGroup,
+  planConversationReorder,
+  UNCATEGORIZED_GROUP_ORDER,
   type ConversationListRow,
 } from './conversationListModel'
 import { usePageSuspendCleanup } from '@/components/layout/PageLifecycle'
 import {
   DndContext,
   closestCenter,
+  pointerWithin,
   PointerSensor,
   useSensor,
   useSensors,
@@ -34,7 +39,52 @@ import {
   type DragEndEvent,
   type DragStartEvent,
   type DragOverEvent,
+  type CollisionDetection,
 } from '@dnd-kit/core'
+
+const categoryDragId = (categoryId: string) => `category:${categoryId}`
+const conversationDragId = (conversationId: string) => `conversation:${conversationId}`
+
+function parseNamespacedDragId(rawId: string | number): {
+  type: 'category' | 'conversation' | null
+  id: string
+} {
+  const id = String(rawId)
+  if (id.startsWith('category:')) return { type: 'category', id: id.slice('category:'.length) }
+  if (id.startsWith('conversation:')) return { type: 'conversation', id: id.slice('conversation:'.length) }
+  return { type: null, id }
+}
+
+interface ConversationDragSnapshot {
+  conversationId: string
+  group: string
+  categoryId: string | null
+  conversationIds: string[]
+  sortOrderById: Map<string, number>
+}
+
+function applyConversationOrder(conversationIds: readonly string[]) {
+  const sortOrderById = new Map(conversationIds.map((id, index) => [id, index]))
+  useConversationStore.setState((state) => ({
+    conversations: state.conversations.map((conversation) => {
+      const sortOrder = sortOrderById.get(conversation.id)
+      return sortOrder === undefined
+        ? conversation
+        : { ...conversation, sort_order: sortOrder }
+    }),
+  }))
+}
+
+function restoreConversationOrder(snapshot: ConversationDragSnapshot) {
+  useConversationStore.setState((state) => ({
+    conversations: state.conversations.map((conversation) => {
+      const sortOrder = snapshot.sortOrderById.get(conversation.id)
+      return sortOrder === undefined
+        ? conversation
+        : { ...conversation, sort_order: sortOrder }
+    }),
+  }))
+}
 
 type DeleteShortcutEvent = Pick<React.MouseEvent<HTMLElement>, 'ctrlKey' | 'metaKey'>
 
@@ -95,6 +145,7 @@ function SortableCategoryLabel({
   editLabel,
   deleteLabel,
   systemPromptLabel,
+  disabled,
 }: {
   cat: ConversationCategory
   onCreateConversation: () => void
@@ -105,9 +156,20 @@ function SortableCategoryLabel({
   editLabel: string
   deleteLabel: string
   systemPromptLabel: string
+  disabled: boolean
 }) {
-  const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({ id: cat.id })
-  const { setNodeRef: setDropRef } = useDroppable({ id: cat.id })
+  const dragId = categoryDragId(cat.id)
+  const dragData = { type: 'category', categoryId: cat.id }
+  const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
+    id: dragId,
+    data: dragData,
+    disabled,
+  })
+  const { setNodeRef: setDropRef } = useDroppable({
+    id: dragId,
+    data: dragData,
+    disabled,
+  })
   const mergedRef = useCallback((node: HTMLDivElement | null) => {
     setDragRef(node)
     setDropRef(node)
@@ -152,6 +214,68 @@ function SortableCategoryLabel({
   )
 }
 
+function SortableConversationLabel({
+  conversation,
+  group,
+  reorderLabel,
+  children,
+}: {
+  conversation: Conversation
+  group: string
+  reorderLabel: string
+  children: React.ReactNode
+}) {
+  const dragId = conversationDragId(conversation.id)
+  const dragData = {
+    type: 'conversation',
+    conversationId: conversation.id,
+    group,
+  }
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setDragRef,
+    setActivatorNodeRef,
+    isDragging,
+  } = useDraggable({ id: dragId, data: dragData })
+  const { setNodeRef: setDropRef } = useDroppable({
+    id: dragId,
+    data: dragData,
+  })
+  const mergedRef = useCallback((node: HTMLSpanElement | null) => {
+    setDragRef(node)
+    setDropRef(node)
+  }, [setDragRef, setDropRef])
+
+  return (
+    <span
+      ref={mergedRef}
+      className="aqbot-chat-conversation-label"
+      style={{ opacity: isDragging ? 0.35 : 1 }}
+    >
+      <span
+        ref={setActivatorNodeRef}
+        {...attributes}
+        {...listeners}
+        role="button"
+        aria-label={reorderLabel}
+        title={reorderLabel}
+        onClick={(event) => event.stopPropagation()}
+        style={{
+          alignItems: 'center',
+          cursor: 'grab',
+          display: 'inline-flex',
+          flexShrink: 0,
+          lineHeight: 0,
+        }}
+      >
+        <GripVertical size={12} aria-hidden="true" style={{ opacity: 0.45 }} />
+      </span>
+      {children}
+    </span>
+  )
+}
+
 export function ChatSidebar() {
   const { t } = useTranslation()
   const { token } = theme.useToken()
@@ -170,6 +294,7 @@ export function ChatSidebar() {
   const batchDelete = useConversationStore((s) => s.batchDelete)
   const batchArchive = useConversationStore((s) => s.batchArchive)
   const batchMoveToCategory = useConversationStore((s) => s.batchMoveToCategory)
+  const reorderConversations = useConversationStore((s) => s.reorderConversations)
   const streamingConversationId = useConversationStore((s) => s.streamingConversationId)
   const titleGeneratingConversationId = useConversationStore((s) => s.titleGeneratingConversationId)
   const regenerateTitle = useConversationStore((s) => s.regenerateTitle)
@@ -196,25 +321,48 @@ export function ChatSidebar() {
   const dndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   )
+  const dndCollisionDetection = useCallback<CollisionDetection>((args) => {
+    const activeType = args.active.data.current?.type
+    if (activeType !== 'category' && activeType !== 'conversation') return []
+    const collisionDetection = activeType === 'conversation' ? pointerWithin : closestCenter
+    return collisionDetection({
+      ...args,
+      droppableContainers: args.droppableContainers.filter(
+        (container) => container.data.current?.type === activeType,
+      ),
+    })
+  }, [])
 
   const [activeDragCatId, setActiveDragCatId] = useState<string | null>(null)
+  const [activeDragConversationId, setActiveDragConversationId] = useState<string | null>(null)
+  const [conversationReorderSaving, setConversationReorderSaving] = useState(false)
   const dragInitialOrderRef = useRef<string[]>([])
+  const conversationDragSnapshotRef = useRef<ConversationDragSnapshot | null>(null)
+  const conversationDragPreviewOrderRef = useRef<string[] | null>(null)
+  const conversationDragLastOverIdRef = useRef<string | null>(null)
+  const conversationReorderSavingRef = useRef(false)
+  const conversationReorderQueueRef = useRef<Promise<void>>(Promise.resolve())
 
   const handleCategoryDragStart = useCallback((event: DragStartEvent) => {
-    setActiveDragCatId(String(event.active.id))
+    const parsed = parseNamespacedDragId(event.active.id)
+    const categoryId = String(event.active.data.current?.categoryId ?? parsed.id)
+    setActiveDragCatId(categoryId)
     dragInitialOrderRef.current = categories.map((c) => c.id)
   }, [categories])
 
   const handleCategoryDragOver = useCallback((event: DragOverEvent) => {
     const { active, over } = event
     if (!over || active.id === over.id) return
+    if (active.data.current?.type !== 'category' || over.data.current?.type !== 'category') return
+    const activeId = String(active.data.current.categoryId ?? parseNamespacedDragId(active.id).id)
+    const overId = String(over.data.current.categoryId ?? parseNamespacedDragId(over.id).id)
     const ids = categories.map((c) => c.id)
-    const oldIndex = ids.indexOf(String(active.id))
-    const newIndex = ids.indexOf(String(over.id))
+    const oldIndex = ids.indexOf(activeId)
+    const newIndex = ids.indexOf(overId)
     if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return
     const newIds = [...ids]
     newIds.splice(oldIndex, 1)
-    newIds.splice(newIndex, 0, String(active.id))
+    newIds.splice(newIndex, 0, activeId)
     useCategoryStore.setState((s) => ({
       categories: newIds
         .map((id, i) => {
@@ -443,15 +591,22 @@ export function ChatSidebar() {
     const categorized = conversations.filter((c) => c.category_id)
     const uncategorized = conversations.filter((c) => !c.category_id)
     const catOrderMap = new Map(categories.map((cat) => [cat.id, cat.sort_order]))
+    const uncategorizedGroupOrder = new Map<string, number>(
+      UNCATEGORIZED_GROUP_ORDER.map((group, index) => [group, index]),
+    )
+    const nowSeconds = Date.now() / 1000
     categorized.sort((a, b) => {
       const oa = catOrderMap.get(a.category_id!) ?? 0
       const ob = catOrderMap.get(b.category_id!) ?? 0
       if (oa !== ob) return oa - ob
-      return b.updated_at - a.updated_at
+      return compareConversationOrder(a, b)
     })
     uncategorized.sort((a, b) => {
-      if (a.is_pinned !== b.is_pinned) return a.is_pinned ? -1 : 1
-      return b.updated_at - a.updated_at
+      const aGroup = getUncategorizedConversationGroup(a, nowSeconds)
+      const bGroup = getUncategorizedConversationGroup(b, nowSeconds)
+      const groupOrderDiff = (uncategorizedGroupOrder.get(aGroup) ?? Number.MAX_SAFE_INTEGER)
+        - (uncategorizedGroupOrder.get(bGroup) ?? Number.MAX_SAFE_INTEGER)
+      return groupOrderDiff || compareConversationOrder(a, b)
     })
     return [...categorized, ...uncategorized]
   }, [conversations, categories])
@@ -520,14 +675,20 @@ export function ChatSidebar() {
   }, [selectedIds, batchArchive, exitMultiSelect, messageApi, t])
 
   const handleBatchMoveToCategory = useCallback(async (categoryId: string | null) => {
-    const ids = Array.from(selectedIds)
+    const ids = filteredConversations
+      .filter((conversation) => selectedIds.has(conversation.id))
+      .map((conversation) => conversation.id)
     if (ids.length === 0) return
-    const moved = await batchMoveToCategory(ids, categoryId)
-    exitMultiSelect()
-    if (moved > 0) {
-      messageApi.success(t('chat.batchMovedSuccess', { count: moved }))
+    try {
+      const moved = await batchMoveToCategory(ids, categoryId)
+      exitMultiSelect()
+      if (moved > 0) {
+        messageApi.success(t('chat.batchMovedSuccess', { count: moved }))
+      }
+    } catch {
+      messageApi.error(t('error.saveFailed'))
     }
-  }, [selectedIds, batchMoveToCategory, exitMultiSelect, messageApi, t])
+  }, [selectedIds, filteredConversations, batchMoveToCategory, exitMultiSelect, messageApi, t])
 
   const handleShowArchived = useCallback(async () => {
     await fetchArchivedConversations()
@@ -552,13 +713,26 @@ export function ChatSidebar() {
   }, [])
 
   const handleBatchUnarchive = useCallback(async () => {
-    const ids = Array.from(archivedSelectedIds)
+    const ids = archivedConversations
+      .filter((conversation) => archivedSelectedIds.has(conversation.id))
+      .map((conversation) => conversation.id)
     if (ids.length === 0) return
-    await Promise.all(ids.map(id => toggleArchive(id)))
+    try {
+      // Each unarchived root enters its target container at the top. Applying
+      // the visible selection in reverse preserves the original row order.
+      for (const id of [...ids].reverse()) {
+        await toggleArchive(id)
+      }
+    } catch (error) {
+      await fetchArchivedConversations()
+      useConversationStore.setState({ error: String(error) })
+      messageApi.error(t('error.saveFailed'))
+      return
+    }
     await fetchArchivedConversations()
     setArchivedSelectedIds(new Set())
     setArchivedMultiSelect(false)
-  }, [archivedSelectedIds, toggleArchive, fetchArchivedConversations])
+  }, [archivedConversations, archivedSelectedIds, toggleArchive, fetchArchivedConversations, messageApi, t])
 
   const handleBatchDeleteArchived = useCallback(async () => {
     const ids = Array.from(archivedSelectedIds)
@@ -627,6 +801,160 @@ export function ChatSidebar() {
     [categories, filteredConversations, expandedParentIds, expandedGroupKeySet],
   )
 
+  const handleConversationDragStart = useCallback((event: DragStartEvent) => {
+    if (conversationReorderSavingRef.current) return
+    const parsed = parseNamespacedDragId(event.active.id)
+    const conversationId = String(event.active.data.current?.conversationId ?? parsed.id)
+    const activeRow = conversationRows.find((row) => (
+      row.type === 'conversation' && row.conversation.id === conversationId
+    ))
+    if (activeRow?.type !== 'conversation' || activeRow.isChild) return
+
+    const categoryId = activeRow.conversation.category_id ?? null
+    const conversationIds = conversationRows
+      .filter((row): row is Extract<ConversationListRow, { type: 'conversation' }> => (
+        row.type === 'conversation'
+        && !row.isChild
+        && (row.conversation.category_id ?? null) === categoryId
+      ))
+      .map((row) => row.conversation.id)
+    const sortOrderById = new Map(
+      useConversationStore.getState().conversations
+        .filter((conversation) => conversationIds.includes(conversation.id))
+        .map((conversation, index) => [
+          conversation.id,
+          Number.isFinite(conversation.sort_order) ? conversation.sort_order : index,
+        ]),
+    )
+    conversationDragSnapshotRef.current = {
+      conversationId,
+      group: activeRow.group,
+      categoryId,
+      conversationIds,
+      sortOrderById,
+    }
+    conversationDragPreviewOrderRef.current = conversationIds
+    conversationDragLastOverIdRef.current = null
+    setActiveDragConversationId(conversationId)
+    setActiveDragCatId(null)
+  }, [conversationRows])
+
+  const handleConversationDragOver = useCallback((event: DragOverEvent) => {
+    const { active, over } = event
+    if (!over || active.data.current?.type !== 'conversation') return
+    if (over.data.current?.type !== 'conversation') return
+    const activeId = String(
+      active.data.current.conversationId ?? parseNamespacedDragId(active.id).id,
+    )
+    const overId = String(
+      over.data.current.conversationId ?? parseNamespacedDragId(over.id).id,
+    )
+    if (conversationDragLastOverIdRef.current === overId) return
+    conversationDragLastOverIdRef.current = overId
+
+    const reorderPlan = planConversationReorder(conversationRows, activeId, overId)
+    if (!reorderPlan) return
+    const snapshot = conversationDragSnapshotRef.current
+    if (!snapshot || snapshot.categoryId !== reorderPlan.categoryId) return
+    conversationDragPreviewOrderRef.current = reorderPlan.conversationIds
+    applyConversationOrder(reorderPlan.conversationIds)
+  }, [conversationRows])
+
+  const resetConversationDragState = useCallback(() => {
+    setActiveDragConversationId(null)
+    conversationDragSnapshotRef.current = null
+    conversationDragPreviewOrderRef.current = null
+    conversationDragLastOverIdRef.current = null
+  }, [])
+
+  const handleConversationDragCancel = useCallback(() => {
+    const snapshot = conversationDragSnapshotRef.current
+    if (snapshot) restoreConversationOrder(snapshot)
+    resetConversationDragState()
+  }, [resetConversationDragState])
+
+  const handleConversationDragEnd = useCallback((event: DragEndEvent) => {
+    const snapshot = conversationDragSnapshotRef.current
+    const previewOrder = conversationDragPreviewOrderRef.current
+    const overData = event.over?.data.current
+    const overId = event.over
+      ? String(overData?.conversationId ?? parseNamespacedDragId(event.over.id).id)
+      : null
+    const isValidDrop = Boolean(
+      snapshot
+      && previewOrder
+      && overData?.type === 'conversation'
+      && typeof overData.conversationId === 'string'
+      && overData.group === snapshot.group
+      && overId !== snapshot.conversationId,
+    )
+    const orderChanged = Boolean(
+      snapshot
+      && previewOrder
+      && previewOrder.some((id, index) => id !== snapshot.conversationIds[index]),
+    )
+
+    resetConversationDragState()
+    if (!snapshot || !previewOrder || !isValidDrop || !orderChanged) {
+      if (snapshot) restoreConversationOrder(snapshot)
+      return
+    }
+
+    conversationReorderSavingRef.current = true
+    setConversationReorderSaving(true)
+    const savePromise = conversationReorderQueueRef.current
+      .catch(() => undefined)
+      .then(() => reorderConversations(snapshot.categoryId, previewOrder))
+    conversationReorderQueueRef.current = savePromise
+    void savePromise
+      .catch(() => {
+        restoreConversationOrder(snapshot)
+        messageApi.error(t('error.saveFailed'))
+      })
+      .finally(() => {
+        conversationReorderSavingRef.current = false
+        setConversationReorderSaving(false)
+      })
+  }, [messageApi, reorderConversations, resetConversationDragState, t])
+
+  const handleSidebarDragStart = useCallback((event: DragStartEvent) => {
+    if (event.active.data.current?.type === 'conversation') {
+      handleConversationDragStart(event)
+      return
+    }
+    if (event.active.data.current?.type === 'category') {
+      handleCategoryDragStart(event)
+    }
+  }, [handleCategoryDragStart, handleConversationDragStart])
+
+  const handleSidebarDragOver = useCallback((event: DragOverEvent) => {
+    if (event.active.data.current?.type === 'conversation') {
+      handleConversationDragOver(event)
+      return
+    }
+    if (event.active.data.current?.type === 'category') {
+      handleCategoryDragOver(event)
+    }
+  }, [handleCategoryDragOver, handleConversationDragOver])
+
+  const handleSidebarDragEnd = useCallback((event: DragEndEvent) => {
+    if (event.active.data.current?.type === 'conversation') {
+      handleConversationDragEnd(event)
+      return
+    }
+    if (event.active.data.current?.type === 'category') {
+      handleCategoryDragEnd(event)
+    }
+  }, [handleCategoryDragEnd, handleConversationDragEnd])
+
+  const handleSidebarDragCancel = useCallback(() => {
+    if (conversationDragSnapshotRef.current) {
+      handleConversationDragCancel()
+      return
+    }
+    handleCategoryDragCancel()
+  }, [handleCategoryDragCancel, handleConversationDragCancel])
+
   const getConversationItem = useCallback(
     (row: Exclude<ConversationListRow, { type: 'groupHeader' }>): ConversationItemType => {
       if (row.type === 'emptyCategory') {
@@ -694,13 +1022,24 @@ export function ChatSidebar() {
           />
         </span>
       ) : null
-      const label = (
-        <span className="aqbot-chat-conversation-label">
+      const labelContent = (
+        <>
           {expandToggleNode}
           <ConversationTitleText title={conv.title} className="flex-1" />
           {generatingTitleNode}
           {pinNode}
-        </span>
+        </>
+      )
+      const label = isChild || multiSelectMode || conversationReorderSaving ? (
+        <span className="aqbot-chat-conversation-label">{labelContent}</span>
+      ) : (
+        <SortableConversationLabel
+          conversation={conv}
+          group={row.group}
+          reorderLabel={t('chat.reorderConversation')}
+        >
+          {labelContent}
+        </SortableConversationLabel>
       )
 
       return {
@@ -721,7 +1060,7 @@ export function ChatSidebar() {
         ...(isChild ? { style: { paddingInlineStart: 20 } } : {}),
       }
     },
-    [buildIcon, multiSelectMode, selectedIds, t, titleGeneratingConversationId, toggleSelect, token.colorPrimary, token.colorTextQuaternary],
+    [buildIcon, conversationReorderSaving, multiSelectMode, selectedIds, t, titleGeneratingConversationId, toggleSelect, token.colorPrimary, token.colorTextQuaternary],
   )
 
   const groupLabels: Record<string, string> = useMemo(
@@ -833,6 +1172,7 @@ export function ChatSidebar() {
             editLabel={t('chat.editCategory')}
             deleteLabel={t('chat.deleteCategory')}
             systemPromptLabel={t('roles.systemPrompt')}
+            disabled={conversationReorderSaving}
             onEdit={() => {
               setEditingCategory(cat)
               setCategoryModalOpen(true)
@@ -843,7 +1183,7 @@ export function ChatSidebar() {
       }
       return groupLabels[group] ?? group
     },
-    [categoryById, groupLabels, t, handleDeleteCategory, handleNewConversation],
+    [categoryById, conversationReorderSaving, groupLabels, t, handleDeleteCategory, handleNewConversation],
   )
 
   const groupableConfig = useMemo(
@@ -1335,7 +1675,14 @@ export function ChatSidebar() {
             archivedMultiSelect ? (
               <div className="flex items-center gap-1">
                 <Tooltip title={t('chat.unarchive')}>
-                  <Button type="text" icon={<Undo2 size={16} />} size="small" disabled={archivedSelectedIds.size === 0} onClick={handleBatchUnarchive} />
+                  <Button
+                    type="text"
+                    icon={<Undo2 size={16} />}
+                    size="small"
+                    aria-label={t('chat.unarchive')}
+                    disabled={archivedSelectedIds.size === 0}
+                    onClick={handleBatchUnarchive}
+                  />
                 </Tooltip>
                 <Tooltip title={t('chat.delete')}>
                   <Button type="text" danger icon={<Trash2 size={16} />} size="small" disabled={archivedSelectedIds.size === 0} onClick={handleBatchDeleteArchived} />
@@ -1445,6 +1792,7 @@ export function ChatSidebar() {
                         <Button
                           type="text"
                           size="small"
+                          aria-label={t('chat.unarchive')}
                           icon={<Undo2 size={14} />}
                           onClick={async (e) => {
                             e.stopPropagation()
@@ -1605,11 +1953,11 @@ export function ChatSidebar() {
               {conversationRows.length > 0 ? (
                 <DndContext
                   sensors={dndSensors}
-                  collisionDetection={closestCenter}
-                  onDragStart={handleCategoryDragStart}
-                  onDragOver={handleCategoryDragOver}
-                  onDragEnd={handleCategoryDragEnd}
-                  onDragCancel={handleCategoryDragCancel}
+                  collisionDetection={dndCollisionDetection}
+                  onDragStart={handleSidebarDragStart}
+                  onDragOver={handleSidebarDragOver}
+                  onDragEnd={handleSidebarDragEnd}
+                  onDragCancel={handleSidebarDragCancel}
                 >
                   <ConversationList
                     rows={conversationRows}
@@ -1631,6 +1979,16 @@ export function ChatSidebar() {
                           <GripVertical size={12} style={{ opacity: 0.4 }} />
                           <CategoryIcon cat={cat} size={14} />
                           <span>{cat.name}</span>
+                        </div>
+                      )
+                    })() : activeDragConversationId ? (() => {
+                      const conversation = conversationById.get(activeDragConversationId)
+                      if (!conversation) return null
+                      return (
+                        <div className="flex items-center gap-1" style={{ opacity: 0.85, cursor: 'grabbing', fontSize: 13 }}>
+                          <GripVertical size={12} style={{ opacity: 0.45 }} />
+                          {buildIcon(conversation)}
+                          <ConversationTitleText title={conversation.title} />
                         </div>
                       )
                     })() : null}

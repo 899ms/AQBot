@@ -287,6 +287,7 @@ pub fn run() {
         commands::conversations::get_conversation_snapshot,
         commands::conversations::create_conversation,
         commands::conversations::update_conversation,
+        commands::conversations::reorder_conversations,
         commands::conversations::delete_conversation,
         commands::conversations::branch_conversation,
         commands::conversations::search_conversations,

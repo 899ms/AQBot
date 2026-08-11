@@ -1,4 +1,15 @@
 import type { Conversation, ConversationCategory } from '@/types'
+import {
+  compareConversationOrder,
+  getUncategorizedConversationGroup,
+  UNCATEGORIZED_GROUP_ORDER,
+} from '@/lib/conversationOrder'
+
+export {
+  compareConversationOrder,
+  getUncategorizedConversationGroup,
+  UNCATEGORIZED_GROUP_ORDER,
+} from '@/lib/conversationOrder'
 
 export const NATIVE_LIST_MAX_ROWS = 159
 export const VIRTUAL_LIST_MIN_ROWS = 160
@@ -35,6 +46,54 @@ interface BuildConversationRowsInput {
   expandedParentIds: ReadonlySet<string>
   expandedGroupKeys: ReadonlySet<string>
   nowSeconds?: number
+}
+
+export interface ConversationReorderPlan {
+  categoryId: string | null
+  conversationIds: string[]
+}
+
+/**
+ * Build the complete final order expected by the atomic reorder command.
+ * Only top-level conversations are draggable, and a move may not cross the
+ * visible category/date/pin group boundary.
+ */
+export function planConversationReorder(
+  rows: readonly ConversationListRow[],
+  activeConversationId: string,
+  overConversationId: string,
+): ConversationReorderPlan | null {
+  if (activeConversationId === overConversationId) return null
+
+  const activeRow = rows.find((row) => (
+    row.type === 'conversation' && row.conversation.id === activeConversationId
+  ))
+  const overRow = rows.find((row) => (
+    row.type === 'conversation' && row.conversation.id === overConversationId
+  ))
+  if (
+    activeRow?.type !== 'conversation'
+    || overRow?.type !== 'conversation'
+    || activeRow.isChild
+    || overRow.isChild
+    || activeRow.group !== overRow.group
+  ) return null
+
+  const categoryId = activeRow.conversation.category_id ?? null
+  const containerRows = rows.filter((row): row is Extract<ConversationListRow, { type: 'conversation' }> => (
+    row.type === 'conversation'
+    && !row.isChild
+    && (row.conversation.category_id ?? null) === categoryId
+  ))
+  const conversationIds = containerRows.map((row) => row.conversation.id)
+  const oldIndex = conversationIds.indexOf(activeConversationId)
+  const newIndex = conversationIds.indexOf(overConversationId)
+  if (oldIndex === -1 || newIndex === -1) return null
+
+  const reorderedIds = [...conversationIds]
+  reorderedIds.splice(oldIndex, 1)
+  reorderedIds.splice(newIndex, 0, activeConversationId)
+  return { categoryId, conversationIds: reorderedIds }
 }
 
 export function filterConversationsWithParents(
@@ -82,21 +141,6 @@ export function getSearchExpandedParentIds(
   return expandedParentIds
 }
 
-function getDateGroup(timestamp: number, nowSeconds: number): string {
-  const now = new Date(nowSeconds * 1000)
-  const date = new Date(timestamp * 1000)
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const startOfYesterday = new Date(startOfToday.getTime() - 86_400_000)
-  const startOfWeek = new Date(startOfToday.getTime() - startOfToday.getDay() * 86_400_000)
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1)
-
-  if (date >= startOfToday) return 'today'
-  if (date >= startOfYesterday) return 'yesterday'
-  if (date >= startOfWeek) return 'thisWeek'
-  if (date >= startOfMonth) return 'thisMonth'
-  return 'earlier'
-}
-
 export function buildConversationRows({
   conversations,
   categories,
@@ -115,6 +159,10 @@ export function buildConversationRows({
     } else {
       topLevel.push(conversation)
     }
+  }
+
+  for (const children of childrenByParent.values()) {
+    children.sort(compareConversationOrder)
   }
 
   const conversationsByCategory = new Map<string, Conversation[]>()
@@ -170,7 +218,9 @@ export function buildConversationRows({
 
     const grouped = conversationsByCategory.get(category.id)
     if (grouped?.length) {
-      for (const conversation of grouped) pushConversation(conversation, group)
+      for (const conversation of [...grouped].sort(compareConversationOrder)) {
+        pushConversation(conversation, group)
+      }
     } else {
       rows.push({
         type: 'emptyCategory',
@@ -183,15 +233,15 @@ export function buildConversationRows({
 
   const uncategorizedGroups = new Map<string, Conversation[]>()
   for (const conversation of uncategorized) {
-    const group = conversation.is_pinned
-      ? 'pinned'
-      : getDateGroup(conversation.updated_at, nowSeconds)
+    const group = getUncategorizedConversationGroup(conversation, nowSeconds)
     const grouped = uncategorizedGroups.get(group)
     if (grouped) grouped.push(conversation)
     else uncategorizedGroups.set(group, [conversation])
   }
 
-  for (const [group, grouped] of uncategorizedGroups) {
+  for (const group of UNCATEGORIZED_GROUP_ORDER) {
+    const grouped = uncategorizedGroups.get(group)
+    if (!grouped?.length) continue
     rows.push({
       type: 'groupHeader',
       key: `group:${group}`,
@@ -200,7 +250,9 @@ export function buildConversationRows({
       collapsible: false,
       expanded: true,
     })
-    for (const conversation of grouped) pushConversation(conversation, group)
+    for (const conversation of [...grouped].sort(compareConversationOrder)) {
+      pushConversation(conversation, group)
+    }
   }
 
   return rows

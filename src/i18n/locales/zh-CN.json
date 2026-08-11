@@ -57,6 +57,7 @@
     "clearContextToContinue": "清空上下文",
     "contextMessagesExcludedWarning": "已有 {{count}} 条消息未发送给模型",
     "newConversation": "新建对话",
+    "reorderConversation": "拖动以重新排序对话",
     "newConversationInCurrentCategory": "在 {{category}} 下新建",
     "newStandaloneConversation": "独立新建",
     "expandSidebar": "展开左侧对话栏",

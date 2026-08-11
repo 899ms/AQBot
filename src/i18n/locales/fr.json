@@ -57,6 +57,7 @@
     "clearContextToContinue": "Effacer le contexte",
     "contextMessagesExcludedWarning": "{{count}} messages ont été exclus du contexte du modèle",
     "newConversation": "Nouvelle conversation",
+    "reorderConversation": "Faire glisser pour réorganiser la conversation",
     "newConversationInCurrentCategory": "Créer dans {{category}}",
     "newStandaloneConversation": "Créer séparément",
     "expandSidebar": "Développer la barre latérale de discussion",

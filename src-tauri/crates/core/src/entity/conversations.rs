@@ -41,6 +41,7 @@ pub struct Model {
     pub compression_keep_last_n: Option<i32>,
     pub category_id: Option<String>,
     pub parent_conversation_id: Option<String>,
+    pub sort_order: i32,
     pub mode: String,
 }
 

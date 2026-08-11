@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatSidebar } from '../ChatSidebar';
 
@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   fetchArchivedConversations: vi.fn(),
   batchDelete: vi.fn(),
   batchArchive: vi.fn(),
+  batchMoveToCategory: vi.fn(),
+  reorderConversations: vi.fn(),
   regenerateTitle: vi.fn(),
   saveSettings: vi.fn(),
   ensureCategoriesLoaded: vi.fn(),
@@ -20,7 +22,12 @@ const mocks = vi.hoisted(() => ({
   updateCategory: vi.fn(),
   deleteCategory: vi.fn(),
   setCollapsed: vi.fn(),
+  messageError: vi.fn(),
+  closestCenter: vi.fn(() => []),
+  pointerWithin: vi.fn(() => []),
 }));
+
+const dndContextProps = vi.hoisted(() => ({ current: null as any }));
 
 const conversationState: any = {
   conversations: [
@@ -34,6 +41,7 @@ const conversationState: any = {
       is_pinned: false,
       is_archived: false,
       message_count: 0,
+      sort_order: 0,
       created_at: 1,
       updated_at: 1,
     },
@@ -49,6 +57,8 @@ const conversationState: any = {
   fetchArchivedConversations: mocks.fetchArchivedConversations,
   batchDelete: mocks.batchDelete,
   batchArchive: mocks.batchArchive,
+  batchMoveToCategory: mocks.batchMoveToCategory,
+  reorderConversations: mocks.reorderConversations,
   streamingConversationId: null,
   titleGeneratingConversationId: null,
   regenerateTitle: mocks.regenerateTitle,
@@ -91,6 +101,7 @@ const categoryState: any = {
 };
 
 vi.mock('react-i18next', () => ({
+  initReactI18next: { type: '3rdParty', init: vi.fn() },
   useTranslation: () => ({
     t: (key: string, options?: Record<string, string>) => ({
       'chat.delete': '删除',
@@ -98,11 +109,12 @@ vi.mock('react-i18next', () => ({
       'chat.deleteConfirm': '确定删除此对话？',
       'chat.searchPlaceholder': '搜索对话...',
       'chat.archived': '已归档',
+      'chat.unarchive': '取消归档',
+      'chat.multiSelect': '多选',
       'chat.createCategory': '新建分类',
       'chat.newConversation': '新建对话',
       'chat.newConversationInCurrentCategory': `在 ${options?.category ?? '当前分类'} 下新建`,
       'chat.newStandaloneConversation': '独立新建',
-      'chat.multiSelect': '多选',
       'chat.noConversations': '暂无对话',
       'chat.today': '今天',
       'chat.yesterday': '昨天',
@@ -112,6 +124,7 @@ vi.mock('react-i18next', () => ({
       'chat.pin': '置顶',
       'chat.unpin': '取消置顶',
       'chat.pinned': '已置顶',
+      'chat.reorderConversation': '拖拽排序对话',
       'chat.archive': '归档',
       'chat.rename': '重命名',
       'chat.generateTitle': '生成标题',
@@ -119,6 +132,7 @@ vi.mock('react-i18next', () => ({
       'chat.export': '导出',
       'common.agentMode': 'Agent',
       'nav.roles': 'Role Label',
+      'error.saveFailed': '保存失败',
     }[key] ?? key),
   }),
 }));
@@ -126,7 +140,7 @@ vi.mock('react-i18next', () => ({
 vi.mock('antd', () => ({
   App: {
     useApp: () => ({
-      message: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
+      message: { success: vi.fn(), warning: vi.fn(), error: mocks.messageError },
       modal: { confirm: mocks.confirm },
     }),
   },
@@ -219,9 +233,13 @@ vi.mock('@ant-design/x/es/conversations', () => ({
 }));
 
 vi.mock('@dnd-kit/core', () => ({
-  DndContext: ({ children }: any) => <>{children}</>,
+  DndContext: ({ children, ...props }: any) => {
+    dndContextProps.current = props;
+    return <>{children}</>;
+  },
   DragOverlay: ({ children }: any) => <>{children}</>,
-  closestCenter: vi.fn(),
+  closestCenter: mocks.closestCenter,
+  pointerWithin: mocks.pointerWithin,
   PointerSensor: vi.fn(),
   useSensor: vi.fn(() => ({})),
   useSensors: vi.fn(() => []),
@@ -229,6 +247,7 @@ vi.mock('@dnd-kit/core', () => ({
     attributes: {},
     listeners: {},
     setNodeRef: vi.fn(),
+    setActivatorNodeRef: vi.fn(),
     isDragging: false,
   }),
   useDroppable: () => ({
@@ -244,7 +263,13 @@ vi.mock('@lobehub/icons', () => ({
 vi.mock('@/stores', () => ({
   useConversationStore: Object.assign(
     (selector: (state: typeof conversationState) => unknown) => selector(conversationState),
-    { getState: () => ({ ...conversationState, fetchConversations: vi.fn() }) },
+    {
+      getState: () => ({ ...conversationState, fetchConversations: vi.fn() }),
+      setState: (updater: any) => {
+        const partial = typeof updater === 'function' ? updater(conversationState) : updater;
+        Object.assign(conversationState, partial);
+      },
+    },
   ),
   useProviderStore: (selector: (state: typeof providerState) => unknown) => selector(providerState),
   useSettingsStore: Object.assign(
@@ -306,15 +331,21 @@ describe('ChatSidebar direct delete shortcut', () => {
         is_pinned: false,
         is_archived: false,
         message_count: 0,
+        sort_order: 0,
         created_at: 1,
         updated_at: 1,
       },
     ];
     conversationState.activeConversationId = 'conv-1';
     conversationState.titleGeneratingConversationId = null;
+    conversationState.archivedConversations = [];
+    conversationState.error = null;
     categoryState.categories = [];
     mocks.ensureCategoriesLoaded.mockResolvedValue(undefined);
+    mocks.fetchArchivedConversations.mockResolvedValue(undefined);
+    mocks.toggleArchive.mockResolvedValue(undefined);
     mocks.regenerateTitle.mockResolvedValue(undefined);
+    mocks.reorderConversations.mockResolvedValue(undefined);
     mocks.createConversation.mockResolvedValue({
       id: 'conv-new',
       title: '新建对话',
@@ -325,6 +356,7 @@ describe('ChatSidebar direct delete shortcut', () => {
       is_pinned: false,
       is_archived: false,
       message_count: 0,
+      sort_order: 0,
       created_at: 2,
       updated_at: 2,
     });
@@ -419,12 +451,14 @@ describe('ChatSidebar direct delete shortcut', () => {
 
     render(<ChatSidebar />);
     expect(screen.queryByText('子对话')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '拖拽排序对话' })).toHaveLength(1);
 
     const toggle = screen.getByText('父对话').closest('li')?.querySelector('.lucide-chevron-right');
     expect(toggle).not.toBeNull();
     fireEvent.click(toggle!);
 
     expect(screen.getByText('子对话')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: '拖拽排序对话' })).toHaveLength(1);
   });
 
   it('turns the more trigger into direct delete while Ctrl is held', async () => {
@@ -614,6 +648,102 @@ describe('ChatSidebar direct delete shortcut', () => {
     fireEvent.click(generateTitleButton);
 
     expect(mocks.regenerateTitle).not.toHaveBeenCalled();
+  });
+
+  it('restores the initial conversation order when a drag is cancelled', () => {
+    conversationState.conversations = [
+      { ...conversationState.conversations[0], id: 'conv-a', title: 'A', sort_order: 0 },
+      { ...conversationState.conversations[0], id: 'conv-b', title: 'B', sort_order: 1 },
+    ];
+    conversationState.activeConversationId = 'conv-a';
+    render(<ChatSidebar />);
+
+    const active = {
+      id: 'conversation:conv-a',
+      data: { current: { type: 'conversation', conversationId: 'conv-a', group: 'earlier' } },
+    };
+    const over = {
+      id: 'conversation:conv-b',
+      data: { current: { type: 'conversation', conversationId: 'conv-b', group: 'earlier' } },
+    };
+    act(() => dndContextProps.current.onDragStart({ active }));
+    act(() => dndContextProps.current.onDragOver({ active, over }));
+    expect(conversationState.conversations.map((conversation: any) => conversation.sort_order))
+      .toEqual([1, 0]);
+
+    act(() => dndContextProps.current.onDragCancel());
+
+    expect(conversationState.conversations.map((conversation: any) => conversation.sort_order))
+      .toEqual([0, 1]);
+    expect(mocks.reorderConversations).not.toHaveBeenCalled();
+  });
+
+  it('requires the pointer to hit a real conversation drop target', () => {
+    render(<ChatSidebar />);
+    const conversationTarget = { data: { current: { type: 'conversation' } } };
+    const categoryTarget = { data: { current: { type: 'category' } } };
+
+    dndContextProps.current.collisionDetection({
+      active: { data: { current: { type: 'conversation' } } },
+      droppableContainers: [conversationTarget, categoryTarget],
+    });
+
+    expect(mocks.pointerWithin).toHaveBeenCalledWith(expect.objectContaining({
+      droppableContainers: [conversationTarget],
+    }));
+    expect(mocks.closestCenter).not.toHaveBeenCalled();
+  });
+
+  it('rolls back the optimistic preview and reports a failed reorder save', async () => {
+    conversationState.conversations = [
+      { ...conversationState.conversations[0], id: 'conv-a', title: 'A', sort_order: 0 },
+      { ...conversationState.conversations[0], id: 'conv-b', title: 'B', sort_order: 1 },
+    ];
+    conversationState.activeConversationId = 'conv-a';
+    mocks.reorderConversations.mockRejectedValueOnce(new Error('database unavailable'));
+    render(<ChatSidebar />);
+
+    const active = {
+      id: 'conversation:conv-a',
+      data: { current: { type: 'conversation', conversationId: 'conv-a', group: 'earlier' } },
+    };
+    const over = {
+      id: 'conversation:conv-b',
+      data: { current: { type: 'conversation', conversationId: 'conv-b', group: 'earlier' } },
+    };
+    act(() => dndContextProps.current.onDragStart({ active }));
+    act(() => dndContextProps.current.onDragOver({ active, over }));
+    act(() => dndContextProps.current.onDragEnd({ active, over }));
+
+    await waitFor(() => {
+      expect(mocks.reorderConversations).toHaveBeenCalledWith(null, ['conv-b', 'conv-a']);
+      expect(mocks.messageError).toHaveBeenCalledWith('保存失败');
+    });
+    expect(conversationState.conversations.map((conversation: any) => conversation.sort_order))
+      .toEqual([0, 1]);
+  });
+
+  it('unarchives a visual selection in reverse order to preserve its final order', async () => {
+    conversationState.archivedConversations = [
+      { ...conversationState.conversations[0], id: 'archived-a', title: 'Archived A', is_archived: true },
+      { ...conversationState.conversations[0], id: 'archived-b', title: 'Archived B', is_archived: true },
+      { ...conversationState.conversations[0], id: 'archived-c', title: 'Archived C', is_archived: true },
+    ];
+    render(<ChatSidebar />);
+
+    fireEvent.click(screen.getByRole('button', { name: '已归档' }));
+    await screen.findByText('Archived A');
+    fireEvent.click(screen.getByRole('button', { name: '多选' }));
+    fireEvent.click(screen.getByText('Archived A'));
+    fireEvent.click(screen.getByText('Archived B'));
+    fireEvent.click(screen.getByRole('button', { name: '取消归档' }));
+
+    await waitFor(() => {
+      expect(mocks.toggleArchive.mock.calls.map(([id]) => id)).toEqual([
+        'archived-b',
+        'archived-a',
+      ]);
+    });
   });
 
 });

@@ -57,6 +57,7 @@
     "clearContextToContinue": "مسح السياق",
     "contextMessagesExcludedWarning": "تم استبعاد {{count}} من الرسائل من سياق النموذج",
     "newConversation": "محادثة جديدة",
+    "reorderConversation": "اسحب لإعادة ترتيب المحادثة",
     "newConversationInCurrentCategory": "إنشاء في {{category}}",
     "newStandaloneConversation": "إنشاء مستقل",
     "expandSidebar": "قم بتوسيع الشريط الجانبي للدردشة",

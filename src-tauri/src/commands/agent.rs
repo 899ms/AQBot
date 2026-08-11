@@ -2316,6 +2316,7 @@ mod tests {
             compression_keep_last_n: None,
             category_id: None,
             parent_conversation_id: None,
+            sort_order: 0,
             mode: "agent".to_string(),
             created_at,
             updated_at: created_at,

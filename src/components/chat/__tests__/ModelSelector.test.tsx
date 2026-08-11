@@ -69,6 +69,7 @@ function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
     created_at: 0,
     updated_at: 0,
     ...overrides,
+    sort_order: overrides.sort_order ?? 0,
   };
 }
 

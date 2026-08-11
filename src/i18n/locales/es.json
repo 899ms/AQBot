@@ -57,6 +57,7 @@
     "clearContextToContinue": "Borrar contexto",
     "contextMessagesExcludedWarning": "Se excluyeron {{count}} mensajes del contexto del modelo",
     "newConversation": "Nueva conversación",
+    "reorderConversation": "Arrastrar para reordenar la conversación",
     "newConversationInCurrentCategory": "Crear en {{category}}",
     "newStandaloneConversation": "Crear independiente",
     "expandSidebar": "Expandir la barra lateral del chat",

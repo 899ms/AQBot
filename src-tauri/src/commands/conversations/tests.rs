@@ -76,6 +76,7 @@ mod tests {
             compression_keep_last_n: None,
             category_id: None,
             parent_conversation_id: None,
+            sort_order: 0,
             mode: "chat".to_string(),
             created_at: 0,
             updated_at: 0,

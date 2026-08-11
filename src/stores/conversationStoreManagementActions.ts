@@ -1,5 +1,10 @@
 import { invoke } from '@/lib/invoke';
 import {
+  compareConversationOrder,
+  getUncategorizedConversationGroup,
+  UNCATEGORIZED_GROUP_ORDER,
+} from '@/lib/conversationOrder';
+import {
   mergeAssistantVersionGroup,
   mergeAssistantVersionsAfterSwitch,
 } from '@/lib/chatMultiModel';
@@ -67,6 +72,7 @@ type ConversationManagementActions = Pick<ConversationState,
   | 'ensureConversationsLoaded'
   | 'invalidateConversations'
   | 'fetchConversations'
+  | 'reorderConversations'
   | 'setActiveConversation'
   | 'createConversation'
   | 'updateConversation'
@@ -91,6 +97,42 @@ type ConversationManagementActions = Pick<ConversationState,
   | 'forkConversation'
   | 'compareResponses'
 >;
+
+function buildTargetContainerOrder(
+  conversations: readonly Conversation[],
+  categoryId: string | null,
+  priorityIds: readonly string[],
+): string[] {
+  const roots = conversations.filter((conversation) => (
+    !conversation.is_archived
+    && conversation.parent_conversation_id === null
+    && (conversation.category_id ?? null) === categoryId
+  ));
+  const rootById = new Map(roots.map((conversation) => [conversation.id, conversation]));
+  const priority = priorityIds.filter((id, index) => (
+    rootById.has(id) && priorityIds.indexOf(id) === index
+  ));
+  const priorityIndex = new Map(priority.map((id, index) => [id, index]));
+  const nowSeconds = Date.now() / 1000;
+  const groupIndex = new Map(
+    UNCATEGORIZED_GROUP_ORDER.map((group, index) => [group, index]),
+  );
+  return roots.sort((a, b) => {
+    if (categoryId === null) {
+      const aGroup = getUncategorizedConversationGroup(a, nowSeconds);
+      const bGroup = getUncategorizedConversationGroup(b, nowSeconds);
+      const groupDiff = (groupIndex.get(aGroup) ?? Number.MAX_SAFE_INTEGER)
+        - (groupIndex.get(bGroup) ?? Number.MAX_SAFE_INTEGER);
+      if (groupDiff !== 0) return groupDiff;
+    }
+    const aPriority = priorityIndex.get(a.id);
+    const bPriority = priorityIndex.get(b.id);
+    if (aPriority !== undefined && bPriority !== undefined) return aPriority - bPriority;
+    if (aPriority !== undefined) return -1;
+    if (bPriority !== undefined) return 1;
+    return compareConversationOrder(a, b);
+  }).map((conversation) => conversation.id);
+}
 
 export function createConversationManagementActions(
   set: ConversationStoreSet,
@@ -480,6 +522,27 @@ export function createConversationManagementActions(
       },
     })),
     fetchConversations: () => get().ensureConversationsLoaded({ force: true }),
+    reorderConversations: async (categoryId, conversationIds) => {
+      try {
+        await invoke('reorder_conversations', { categoryId, conversationIds });
+        const sortOrderById = new Map(
+          conversationIds.map((conversationId, index) => [conversationId, index]),
+        );
+        set((state) => ({
+          conversations: state.conversations.map((conversation) => {
+            const sortOrder = sortOrderById.get(conversation.id);
+            return sortOrder === undefined
+              ? conversation
+              : { ...conversation, sort_order: sortOrder };
+          }),
+          conversationsMeta: mutateConversationsMeta(state.conversationsMeta),
+          error: null,
+        }));
+      } catch (error) {
+        set({ error: String(error) });
+        throw error;
+      }
+    },
     setActiveConversation: (id) => {
       const previousState = get();
       const previousConversationId = previousState.activeConversationId;
@@ -800,28 +863,61 @@ export function createConversationManagementActions(
     },
     batchMoveToCategory: async (ids, categoryId) => {
       const updatedList: Conversation[] = [];
-      for (const id of ids) {
+      const successfulIds = new Set<string>();
+      const errors: string[] = [];
+      const currentById = new Map(get().conversations.map((conversation) => (
+        [conversation.id, conversation]
+      )));
+      // Each successful move enters the target container at the top. Applying
+      // the visible selection in reverse preserves its original relative order.
+      for (const id of [...ids].reverse()) {
+        const current = currentById.get(id);
+        if (current && (current.category_id ?? null) === categoryId) {
+          successfulIds.add(id);
+          continue;
+        }
         try {
           const updated = await invoke<Conversation>('update_conversation', {
             id,
             input: { category_id: categoryId },
           });
           updatedList.push(updated);
-        } catch (_) { /* skip failed items */ }
+          successfulIds.add(id);
+        } catch (error) {
+          errors.push(`${id}: ${String(error)}`);
+        }
       }
-      if (updatedList.length > 0) {
+      if (successfulIds.size > 0) {
         const byId = new Map(updatedList.map((c) => [c.id, c]));
-        set((s) => ({
-          conversations: s.conversations.map((c) => byId.get(c.id) ?? c),
-          archivedConversations: s.archivedConversations.map((c) => byId.get(c.id) ?? c),
-          conversationsMeta: mutateConversationsMeta(s.conversationsMeta),
-          ...(s.activeConversationId && byId.has(s.activeConversationId)
-            ? conversationPreferenceStateFromConversation(byId.get(s.activeConversationId)!)
-            : {}),
-          error: null,
-        }));
+        if (updatedList.length > 0) {
+          set((s) => ({
+            conversations: s.conversations.map((c) => byId.get(c.id) ?? c),
+            archivedConversations: s.archivedConversations.map((c) => byId.get(c.id) ?? c),
+            conversationsMeta: mutateConversationsMeta(s.conversationsMeta),
+            ...(s.activeConversationId && byId.has(s.activeConversationId)
+              ? conversationPreferenceStateFromConversation(byId.get(s.activeConversationId)!)
+              : {}),
+          }));
+        }
+        const targetOrder = buildTargetContainerOrder(
+          get().conversations,
+          categoryId,
+          ids.filter((id) => successfulIds.has(id)),
+        );
+        try {
+          await get().reorderConversations(categoryId, targetOrder);
+        } catch (error) {
+          errors.push(`reorder: ${String(error)}`);
+        }
+      } else if (errors.length > 0) {
+        set({ error: errors.join('; ') });
       }
-      return updatedList.length;
+      if (errors.length > 0) {
+        const message = errors.join('; ');
+        set({ error: message });
+        throw new Error(message);
+      }
+      return successfulIds.size;
     },
     hydrateMessageVersions: (parentMessageId, versions, activeMessageId) => {
       const resolvedPendingSelections: Array<{ pending: PendingLocalVersionSelection; messageId: string }> = [];

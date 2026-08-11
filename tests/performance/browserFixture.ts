@@ -62,6 +62,7 @@ function buildConversations(
     category_id: null,
     parent_conversation_id: null,
     mode: 'chat',
+    sort_order: index,
     message_count: index < messageConversationCount ? messageCount : 0,
     created_at: FIXED_NOW_SECONDS - index,
     updated_at: FIXED_NOW_SECONDS - index,

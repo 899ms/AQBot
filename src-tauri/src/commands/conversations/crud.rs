@@ -55,6 +55,21 @@ pub async fn update_conversation(
 }
 
 #[tauri::command]
+pub async fn reorder_conversations(
+    state: State<'_, AppState>,
+    category_id: Option<String>,
+    conversation_ids: Vec<String>,
+) -> Result<(), String> {
+    aqbot_core::repo::conversation::reorder_conversations(
+        &state.sea_db,
+        category_id.as_deref(),
+        &conversation_ids,
+    )
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn delete_conversation(state: State<'_, AppState>, id: String) -> Result<(), String> {
     delete_conversation_with_attachments(&state.sea_db, &id).await
 }

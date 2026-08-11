@@ -57,6 +57,7 @@
     "clearContextToContinue": "Очистить контекст",
     "contextMessagesExcludedWarning": "Из контекста модели исключено сообщений: {{count}}",
     "newConversation": "Новый чат",
+    "reorderConversation": "Перетащите, чтобы изменить порядок чата",
     "newConversationInCurrentCategory": "Создать в {{category}}",
     "newStandaloneConversation": "Создать отдельно",
     "expandSidebar": "Развернуть боковую панель чата",

@@ -57,6 +57,7 @@
     "clearContextToContinue": "コンテキストを消去",
     "contextMessagesExcludedWarning": "{{count}} 件のメッセージがモデルのコンテキストから除外されました",
     "newConversation": "新しい会話",
+    "reorderConversation": "ドラッグして会話を並べ替え",
     "newConversationInCurrentCategory": "{{category}} 内に新規作成",
     "newStandaloneConversation": "単独で新規作成",
     "expandSidebar": "チャット サイドバーを展開します",

@@ -57,6 +57,7 @@
     "clearContextToContinue": "컨텍스트 지우기",
     "contextMessagesExcludedWarning": "모델 컨텍스트에서 메시지 {{count}}개가 제외되었습니다",
     "newConversation": "새 대화",
+    "reorderConversation": "드래그하여 대화 순서 변경",
     "newConversationInCurrentCategory": "{{category}}에서 새로 만들기",
     "newStandaloneConversation": "독립 새 대화",
     "expandSidebar": "채팅 사이드바 확장",

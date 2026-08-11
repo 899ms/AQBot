@@ -49,6 +49,7 @@ mod m20260811_000001_acp_project_sort_order;
 mod m20260812_000001_acp_thread_pin_sort;
 mod m20260813_000001_acp_project_kind;
 mod m20260814_000001_add_context_strategy;
+mod m20260815_000001_add_conversation_sort_order;
 
 pub struct Migrator;
 
@@ -105,6 +106,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260812_000001_acp_thread_pin_sort::Migration),
             Box::new(m20260813_000001_acp_project_kind::Migration),
             Box::new(m20260814_000001_add_context_strategy::Migration),
+            Box::new(m20260815_000001_add_conversation_sort_order::Migration),
         ]
     }
 }
@@ -309,12 +311,111 @@ mod tests {
         for index_name in [
             "idx_conversations_active_order",
             "idx_conversations_archived_order",
+            "idx_conversations_category_active_root_sort",
         ] {
             assert!(
                 conversation_indexes.contains(&index_name.to_string()),
                 "missing conversations performance index {index_name}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn conversation_sort_order_migration_backfills_current_visual_order() {
+        let db = sqlite_test_db().await;
+        db.execute_unprepared(
+            r#"
+            CREATE TABLE conversations (
+                id TEXT PRIMARY KEY NOT NULL,
+                category_id TEXT NULL,
+                is_pinned INTEGER NOT NULL,
+                is_archived INTEGER NOT NULL DEFAULT 0,
+                parent_conversation_id TEXT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            INSERT INTO conversations (id, category_id, is_pinned, updated_at) VALUES
+                ('cat-b', 'category', 0, 20),
+                ('cat-a', 'category', 1, 20),
+                ('cat-c', 'category', 0, 10),
+                ('pin-b', NULL, 1, 30),
+                ('pin-a', NULL, 1, 30),
+                ('plain-b', NULL, 0, 20),
+                ('plain-a', NULL, 0, 20);
+            INSERT INTO conversations
+                (id, category_id, is_pinned, is_archived, parent_conversation_id, updated_at)
+            VALUES
+                ('cat-child', 'category', 0, 0, 'cat-a', 40),
+                ('pin-archived', NULL, 1, 1, NULL, 40);
+            "#,
+        )
+        .await
+        .expect("create legacy conversations");
+
+        let manager = SchemaManager::new(&db);
+        m20260815_000001_add_conversation_sort_order::Migration
+            .up(&manager)
+            .await
+            .expect("add conversation sort order");
+
+        let rows = db
+            .query_all(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT id, sort_order FROM conversations ORDER BY id".to_string(),
+            ))
+            .await
+            .expect("query conversation sort order");
+        let actual = rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.try_get::<String>("", "id").expect("conversation id"),
+                    row.try_get::<i32>("", "sort_order").expect("sort order"),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                ("cat-a".to_string(), 1),
+                ("cat-b".to_string(), 2),
+                ("cat-c".to_string(), 3),
+                ("cat-child".to_string(), 0),
+                ("pin-a".to_string(), 1),
+                ("pin-archived".to_string(), 0),
+                ("pin-b".to_string(), 2),
+                ("plain-a".to_string(), 3),
+                ("plain-b".to_string(), 4),
+            ]
+        );
+
+        for (where_clause, expected) in [
+            (
+                "category_id = 'category'",
+                vec!["cat-a", "cat-b", "cat-c"],
+            ),
+            ("category_id IS NULL", vec!["pin-a", "pin-b", "plain-a", "plain-b"]),
+        ] {
+            let rows = db
+                .query_all(Statement::from_string(
+                    DbBackend::Sqlite,
+                    format!(
+                        "SELECT id FROM conversations WHERE {where_clause} \
+                         AND is_archived = 0 AND parent_conversation_id IS NULL \
+                         ORDER BY sort_order"
+                    ),
+                ))
+                .await
+                .expect("query active root visual order");
+            assert_eq!(
+                rows.into_iter()
+                    .map(|row| row.try_get::<String>("", "id").expect("conversation id"))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+        assert!(sqlite_index_names(&db, "conversations")
+            .await
+            .contains(&"idx_conversations_category_active_root_sort".to_string()));
     }
 
     #[tokio::test]

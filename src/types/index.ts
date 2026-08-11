@@ -399,6 +399,7 @@ export interface Conversation {
   compression_keep_last_n: number | null;
   category_id: string | null;
   parent_conversation_id: string | null;
+  sort_order: number;
   mode?: 'chat' | 'agent' | 'role';
   message_count: number;
   created_at: number;
