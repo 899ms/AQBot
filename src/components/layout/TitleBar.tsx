@@ -176,27 +176,30 @@ export function TitleBar() {
     loadBackupSettings();
 
     invoke<{ lastSyncTime: string | null }>('get_webdav_sync_status')
-      .then((s) => {
-        if (s.lastSyncTime) {
-          const d = new Date(s.lastSyncTime);
-          if (!Number.isNaN(d.getTime())) {
-            setLastWebDavSync(d.toLocaleString());
-          }
+      .then((status) => {
+        if (!status.lastSyncTime) return;
+        const date = new Date(status.lastSyncTime);
+        if (!Number.isNaN(date.getTime())) {
+          setLastWebDavSync(date.toLocaleString());
         }
       })
-      .catch(() => {});
+      .catch((error) => {
+        console.error('Failed to refresh WebDAV sync status', error);
+      });
 
     invoke<Array<{ createdAt: string }>>('list_backups')
       .then((list) => {
-        if (list.length > 0) {
-          const raw = list[0].createdAt;
-          const d = new Date(raw.includes('T') || raw.includes('Z') ? raw : raw + 'Z');
-          if (!Number.isNaN(d.getTime())) setLastLocalBackup(d.toLocaleString());
+        if (list.length === 0) return;
+        const raw = list[0].createdAt;
+        const date = new Date(raw.includes('T') || raw.includes('Z') ? raw : `${raw}Z`);
+        if (!Number.isNaN(date.getTime())) {
+          setLastLocalBackup(date.toLocaleString());
         }
       })
-      .catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [backupPopoverOpen]);
+      .catch((error) => {
+        console.error('Failed to refresh local backup status', error);
+      });
+  }, [backupPopoverOpen, loadBackupSettings]);
 
   // Calculate next WebDAV sync timestamp (re-run when settings or lastWebDavSync change)
   useEffect(() => {
@@ -248,11 +251,21 @@ export function TitleBar() {
     const tick = () => {
       const now = Date.now();
       let soonest: number | null = null;
-      if (nextLocalTs) {
-        if (!soonest || nextLocalTs < soonest) soonest = nextLocalTs;
+      let localTs = nextLocalTs;
+      if (localTs) {
+        if (localTs <= now) {
+          localTs = now + (backupSettings?.intervalHours ?? 24) * 3600000;
+          setNextLocalTs(localTs);
+        }
+        if (!soonest || localTs < soonest) soonest = localTs;
       }
-      if (nextWebDavTs) {
-        if (!soonest || nextWebDavTs < soonest) soonest = nextWebDavTs;
+      let webDavTs = nextWebDavTs;
+      if (webDavTs) {
+        if (webDavTs <= now) {
+          webDavTs = now + (settings.webdav_sync_interval_minutes ?? 60) * 60000;
+          setNextWebDavTs(webDavTs);
+        }
+        if (!soonest || webDavTs < soonest) soonest = webDavTs;
       }
       if (soonest) {
         setCountdownText(fmtCountdown(soonest - now));
@@ -264,7 +277,12 @@ export function TitleBar() {
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [nextLocalTs, nextWebDavTs]);
+  }, [
+    backupSettings?.intervalHours,
+    nextLocalTs,
+    nextWebDavTs,
+    settings.webdav_sync_interval_minutes,
+  ]);
 
   // Live countdown in popover — tick every second only when open
   useEffect(() => {
