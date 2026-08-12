@@ -37,15 +37,18 @@ use windows::Win32::{
         },
         WindowsAndMessaging::{
             CallNextHookEx, GetForegroundWindow, GetMessageW, GetWindowThreadProcessId,
-            PeekMessageW, PostThreadMessageW, SendMessageW, SetForegroundWindow, SetWindowsHookExW,
-            UnhookWindowsHookEx, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL,
-            WH_MOUSE_LL, WM_COPY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-            WM_QUIT, WM_RBUTTONDOWN,
+            PeekMessageW, PostThreadMessageW, SendMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
+            KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL,
+            WM_COPY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_QUIT,
+            WM_RBUTTONDOWN,
         },
     },
 };
 
-use super::{DismissReason, PlatformEvent, PlatformMonitorHandle, PlatformStartError};
+use super::{
+    is_windows_copy_target_active, should_try_windows_clipboard_fallback, DismissReason,
+    PlatformEvent, PlatformMonitorHandle, PlatformStartError,
+};
 use crate::selection_toolbar::{
     is_actionable_selection_text, PermissionSettingsOutcome, PermissionState, RuntimeError,
     ScreenPoint, ScreenRect, SelectionAnchorKind, SelectionObservation,
@@ -55,9 +58,6 @@ const SELECTION_PROBE_DELAYS_MS: [u64; 3] = [80, 150, 400];
 const CLIPBOARD_FALLBACK_INTERVAL_MS: u64 = 5;
 const CLIPBOARD_FALLBACK_TIMEOUT_MS: u64 = 350;
 const CF_UNICODETEXT: u32 = 13;
-/// Process basenames for apps that often lack a usable UIA TextPattern (WeChat 4.x).
-const WEAK_UIA_PROCESS_MARKERS: &[&str] = &["wechat", "weixin", "wxwork", "wework", "wechatappex"];
-
 thread_local! {
     static GLOBAL_EVENT_SENDER: RefCell<Option<UnboundedSender<PlatformEvent>>> =
         const { RefCell::new(None) };
@@ -257,7 +257,6 @@ fn schedule_selection_probe(sender: UnboundedSender<PlatformEvent>, point: Scree
     thread::spawn(move || {
         for (attempt, delay_ms) in SELECTION_PROBE_DELAYS_MS.iter().copied().enumerate() {
             thread::sleep(Duration::from_millis(delay_ms));
-            let is_last = attempt + 1 >= SELECTION_PROBE_DELAYS_MS.len();
             match probe_selection_at(point) {
                 Some(observation) => {
                     let _ = sender.send(PlatformEvent::Selection(observation));
@@ -266,19 +265,15 @@ fn schedule_selection_probe(sender: UnboundedSender<PlatformEvent>, point: Scree
                 None => {
                     // WeChat 4.x often has no TextPattern at all — escalate to
                     // clipboard after the first miss instead of waiting ~630ms.
-                    let escalate = is_last
-                        || (attempt == 0
-                            && foreground_process_id()
-                                .and_then(process_image_basename)
-                                .is_some_and(|name| is_weak_uia_process(&name)));
+                    let process_id = foreground_process_id();
+                    let process_name = process_id.and_then(process_image_basename);
+                    let escalate =
+                        should_try_windows_clipboard_fallback(attempt, process_name.as_deref());
                     if escalate {
-                        if let Some(observation) = try_clipboard_selection_fallback(point) {
+                        if let Some(observation) =
+                            try_clipboard_selection_fallback(point, process_id.unwrap_or_default())
+                        {
                             let _ = sender.send(PlatformEvent::Selection(observation));
-                            return;
-                        }
-                        if is_last {
-                            // Do not Clear: empty mouse-ups include UI chrome clicks.
-                            // Real deselection still arrives via UIA selection-changed.
                             return;
                         }
                     }
@@ -286,13 +281,6 @@ fn schedule_selection_probe(sender: UnboundedSender<PlatformEvent>, point: Scree
             }
         }
     });
-}
-
-fn is_weak_uia_process(process_name: &str) -> bool {
-    let lowered = process_name.to_ascii_lowercase();
-    WEAK_UIA_PROCESS_MARKERS
-        .iter()
-        .any(|marker| lowered.contains(marker))
 }
 
 fn probe_selection_at(point: ScreenPoint) -> Option<SelectionObservation> {
@@ -403,27 +391,31 @@ fn read_selection_with_pointer(
     }))
 }
 
-fn try_clipboard_selection_fallback(pointer: ScreenPoint) -> Option<SelectionObservation> {
+fn try_clipboard_selection_fallback(
+    pointer: ScreenPoint,
+    target_process_id: u32,
+) -> Option<SelectionObservation> {
     let previous = read_clipboard_text();
 
     // Prefer Ctrl+C (works for most custom UIs). Try virtual-key then scan-code
     // forms, then WM_COPY for classic edit controls.
     let mut text = None;
-    if ensure_foreground_for_copy() {
-        for use_scancode in [false, true] {
-            let sequence_before = unsafe { GetClipboardSequenceNumber() };
-            if !post_control_copy(use_scancode) {
-                continue;
-            }
-            text = wait_for_clipboard_text(sequence_before);
-            if text.is_some() {
-                break;
-            }
+    for use_scancode in [false, true] {
+        if !is_copy_target_active(target_process_id) {
+            break;
+        }
+        let sequence_before = unsafe { GetClipboardSequenceNumber() };
+        if !post_control_copy(target_process_id, use_scancode) {
+            continue;
+        }
+        text = wait_for_clipboard_text(sequence_before);
+        if text.is_some() {
+            break;
         }
     }
     if text.is_none() {
         let sequence_before_wm = unsafe { GetClipboardSequenceNumber() };
-        if post_wm_copy() {
+        if post_wm_copy(target_process_id) {
             text = wait_for_clipboard_text(sequence_before_wm);
         }
     }
@@ -436,15 +428,14 @@ fn try_clipboard_selection_fallback(pointer: ScreenPoint) -> Option<SelectionObs
     if !is_actionable_selection_text(&text) {
         return None;
     }
-    let process_id = foreground_process_id().unwrap_or(0);
-    let source_app =
-        process_image_basename(process_id).unwrap_or_else(|| format!("process:{process_id}"));
+    let source_app = process_image_basename(target_process_id)
+        .unwrap_or_else(|| format!("process:{target_process_id}"));
     let mut hasher = DefaultHasher::new();
     text.hash(&mut hasher);
     Some(SelectionObservation {
         text,
         source_app,
-        source_window: format!("window:{process_id}"),
+        source_window: format!("window:{target_process_id}"),
         range_signature: format!("clipboard:{:016x}", hasher.finish()),
         anchor: ScreenRect {
             x: pointer.x,
@@ -468,19 +459,14 @@ fn foreground_process_id() -> Option<u32> {
     }
 }
 
-fn ensure_foreground_for_copy() -> bool {
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return false;
-        }
-        // Best-effort: if something stole focus, try to put the target back.
-        let _ = SetForegroundWindow(hwnd);
-        true
-    }
+fn is_copy_target_active(target_process_id: u32) -> bool {
+    is_windows_copy_target_active(target_process_id, foreground_process_id())
 }
 
-fn post_control_copy(use_scancode: bool) -> bool {
+fn post_control_copy(target_process_id: u32, use_scancode: bool) -> bool {
+    if !is_copy_target_active(target_process_id) {
+        return false;
+    }
     // Virtual-key and scan-code forms: some apps only honour one of the two.
     let mut inputs = [
         keyboard_input(VK_CONTROL, false, use_scancode),
@@ -491,10 +477,15 @@ fn post_control_copy(use_scancode: bool) -> bool {
     unsafe { SendInput(&mut inputs, std::mem::size_of::<INPUT>() as i32) == inputs.len() as u32 }
 }
 
-fn post_wm_copy() -> bool {
+fn post_wm_copy(target_process_id: u32) -> bool {
     unsafe {
         let hwnd = GetForegroundWindow();
         if hwnd.0.is_null() {
+            return false;
+        }
+        let mut foreground_process_id = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut foreground_process_id));
+        if !is_windows_copy_target_active(target_process_id, Some(foreground_process_id)) {
             return false;
         }
         // WM_COPY is handled by standard edit controls; custom UIs may ignore it.
