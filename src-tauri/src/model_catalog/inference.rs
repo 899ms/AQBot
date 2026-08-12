@@ -11,6 +11,8 @@ use aqbot_core::types::{
 use std::collections::{BTreeMap, BTreeSet};
 
 const UNSUPPORTED_MODE_REASON: &str = "LiteLLM catalog mode is not supported by AQBot";
+const OPENAI_GPT_56_REASONING_OPTIONS: [&str; 7] =
+    ["default", "none", "low", "medium", "high", "xhigh", "max"];
 
 pub fn infer_remote_models(
     provider: &ProviderConfig,
@@ -135,8 +137,14 @@ pub(super) fn infer_candidate(
     catalog_provider: Option<&str>,
     reset: bool,
 ) -> ModelSyncCandidate {
+    let explicit_reasoning_options = protected_reasoning_options(&remote_model, reset);
     let matched = find_catalog_entry(entries, catalog_provider, &remote_model.model_id);
     let (mut proposed, inference_source) = automatic_model(remote_model, matched);
+    complete_openai_gpt_56_reasoning_options(
+        &mut proposed,
+        catalog_provider,
+        explicit_reasoning_options,
+    );
     let catalog_mode = matched.map(|(_, entry)| entry.mode.clone());
     let unsupported_reason = matched
         .filter(|(_, entry)| model_type_for_mode(&entry.mode).is_none())
@@ -158,6 +166,65 @@ pub(super) fn infer_candidate(
         changes,
         unsupported_reason,
     }
+}
+
+fn protected_reasoning_options(
+    model: &Model,
+    reset: bool,
+) -> Option<(ModelMetadataSource, Option<Vec<String>>)> {
+    let source = model.metadata_state.as_ref()?.reasoning_options;
+    if source != ModelMetadataSource::Provider && (reset || source != ModelMetadataSource::User) {
+        return None;
+    }
+    let options = model
+        .param_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.reasoning_options.clone());
+    Some((source, options))
+}
+
+fn complete_openai_gpt_56_reasoning_options(
+    model: &mut Model,
+    catalog_provider: Option<&str>,
+    explicit: Option<(ModelMetadataSource, Option<Vec<String>>)>,
+) {
+    if catalog_provider != Some("openai") || !is_gpt_56_family(&model.model_id) {
+        return;
+    }
+    let state = model
+        .metadata_state
+        .get_or_insert_with(ModelMetadataState::default);
+    if let Some((source, options)) = explicit {
+        if let Some(options) = options {
+            model
+                .param_overrides
+                .get_or_insert_with(ModelParamOverrides::default)
+                .reasoning_options = Some(options);
+        } else if let Some(overrides) = &mut model.param_overrides {
+            overrides.reasoning_options = None;
+        }
+        state.reasoning_options = source;
+        return;
+    }
+    if matches!(
+        state.reasoning_options,
+        ModelMetadataSource::User | ModelMetadataSource::Provider
+    ) {
+        return;
+    }
+    let options = OPENAI_GPT_56_REASONING_OPTIONS
+        .iter()
+        .map(|option| (*option).to_string())
+        .collect();
+    model
+        .param_overrides
+        .get_or_insert_with(ModelParamOverrides::default)
+        .reasoning_options = Some(options);
+    state.reasoning_options = ModelMetadataSource::Catalog;
+}
+
+fn is_gpt_56_family(model_id: &str) -> bool {
+    model_id == "gpt-5.6" || model_id.starts_with("gpt-5.6-")
 }
 
 fn automatic_model(

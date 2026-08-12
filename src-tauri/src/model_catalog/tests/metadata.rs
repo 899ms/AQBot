@@ -226,6 +226,49 @@ fn catalog(entries: BTreeMap<String, CatalogEntry>) -> CatalogLoadResult {
     }
 }
 
+const COMPLETE_GPT_56_REASONING_OPTIONS: &[&str] =
+    &["default", "none", "low", "medium", "high", "xhigh", "max"];
+
+fn catalog_without_reasoning_flags(entries: &[(&str, &str)]) -> CatalogLoadResult {
+    let mut raw_catalog = serde_json::Map::new();
+    for (model_id, provider_id) in entries {
+        raw_catalog.insert(
+            (*model_id).to_string(),
+            serde_json::json!({
+                "litellm_provider": provider_id,
+                "mode": "chat",
+                "supports_reasoning": true
+            }),
+        );
+    }
+    let bytes = serde_json::to_vec(&raw_catalog).expect("serialize catalog fixture");
+    catalog(parse_catalog(&bytes).expect("parse catalog fixture"))
+}
+
+fn catalog_with_stale_reasoning_flags(model_id: &str, provider_id: &str) -> CatalogLoadResult {
+    let mut raw_catalog = serde_json::Map::new();
+    raw_catalog.insert(
+        model_id.to_string(),
+        serde_json::json!({
+            "litellm_provider": provider_id,
+            "mode": "chat",
+            "supports_reasoning": true,
+            "supports_none_reasoning_effort": true,
+            "supports_xhigh_reasoning_effort": true
+        }),
+    );
+    let bytes = serde_json::to_vec(&raw_catalog).expect("serialize catalog fixture");
+    catalog(parse_catalog(&bytes).expect("parse catalog fixture"))
+}
+
+fn reasoning_options(model: &Model) -> Option<Vec<&str>> {
+    model
+        .param_overrides
+        .as_ref()
+        .and_then(|overrides| overrides.reasoning_options.as_ref())
+        .map(|options| options.iter().map(String::as_str).collect())
+}
+
 #[test]
 fn exact_catalog_metadata_beats_name_heuristics() {
     let entries = parse_catalog(SAMPLE_CATALOG.as_bytes()).unwrap();
@@ -398,6 +441,176 @@ fn user_metadata_and_explicit_token_clears_win_over_catalog_updates() {
     assert_eq!(
         overrides.reasoning_options.as_deref(),
         Some(&["low".into()][..])
+    );
+}
+
+#[test]
+fn openai_gpt_56_family_completes_reasoning_options_when_catalog_flags_are_missing() {
+    let result = infer_remote_models(
+        &provider(
+            ProviderType::OpenAI,
+            Some("openai"),
+            "https://api.openai.com",
+        ),
+        vec![model("gpt-5.6"), model("gpt-5.6-sol")],
+        catalog_without_reasoning_flags(&[("gpt-5.6", "openai"), ("gpt-5.6-sol", "openai")]),
+    );
+
+    for candidate in result.candidates {
+        assert_eq!(
+            reasoning_options(&candidate.proposed_model),
+            Some(COMPLETE_GPT_56_REASONING_OPTIONS.to_vec()),
+            "{} should expose the complete reasoning selector",
+            candidate.proposed_model.model_id
+        );
+        assert_eq!(
+            candidate
+                .proposed_model
+                .metadata_state
+                .as_ref()
+                .expect("metadata state")
+                .reasoning_options,
+            ModelMetadataSource::Catalog
+        );
+    }
+}
+
+#[test]
+fn openai_responses_gpt_56_completes_reasoning_options_when_catalog_flags_are_missing() {
+    let result = infer_remote_models(
+        &provider(
+            ProviderType::OpenAIResponses,
+            Some("openai_responses"),
+            "https://api.openai.com",
+        ),
+        vec![model("gpt-5.6-terra")],
+        catalog_without_reasoning_flags(&[("gpt-5.6-terra", "openai")]),
+    );
+
+    assert_eq!(
+        reasoning_options(&result.candidates[0].proposed_model),
+        Some(COMPLETE_GPT_56_REASONING_OPTIONS.to_vec())
+    );
+    assert_eq!(
+        result.candidates[0]
+            .proposed_model
+            .metadata_state
+            .as_ref()
+            .expect("metadata state")
+            .reasoning_options,
+        ModelMetadataSource::Catalog
+    );
+}
+
+#[test]
+fn gpt_56_reasoning_completion_does_not_change_other_providers_or_model_families() {
+    let openai = infer_remote_models(
+        &provider(
+            ProviderType::OpenAI,
+            Some("openai"),
+            "https://api.openai.com",
+        ),
+        vec![
+            model("gpt-5.5"),
+            model("gpt-5.60"),
+            model("gpt-5.6_preview"),
+        ],
+        catalog_without_reasoning_flags(&[
+            ("gpt-5.5", "openai"),
+            ("gpt-5.60", "openai"),
+            ("gpt-5.6_preview", "openai"),
+        ]),
+    );
+    let xai = infer_remote_models(
+        &provider(ProviderType::XAI, Some("xai"), "https://api.x.ai"),
+        vec![model("gpt-5.6")],
+        catalog_without_reasoning_flags(&[("gpt-5.6", "xai")]),
+    );
+    let openrouter = infer_remote_models(
+        &provider(
+            ProviderType::OpenAI,
+            Some("openai"),
+            "https://openrouter.ai/api/v1",
+        ),
+        vec![model("gpt-5.6")],
+        catalog_without_reasoning_flags(&[("gpt-5.6", "openrouter")]),
+    );
+
+    assert!(openai
+        .candidates
+        .iter()
+        .all(|candidate| reasoning_options(&candidate.proposed_model).is_none()));
+    assert!(reasoning_options(&xai.candidates[0].proposed_model).is_none());
+    assert!(reasoning_options(&openrouter.candidates[0].proposed_model).is_none());
+}
+
+#[test]
+fn user_reasoning_options_win_over_gpt_56_automatic_completion() {
+    let mut provider = provider(
+        ProviderType::OpenAI,
+        Some("openai"),
+        "https://api.openai.com",
+    );
+    let mut local = model("gpt-5.6");
+    local.param_overrides = Some(ModelParamOverrides {
+        reasoning_options: Some(vec!["high".to_string()]),
+        ..Default::default()
+    });
+    local.metadata_state = Some(ModelMetadataState {
+        reasoning_options: ModelMetadataSource::User,
+        ..Default::default()
+    });
+    provider.models.push(local);
+
+    let result = infer_remote_models(
+        &provider,
+        vec![model("gpt-5.6")],
+        catalog_with_stale_reasoning_flags("gpt-5.6", "openai"),
+    );
+    let proposed = &result.candidates[0].proposed_model;
+
+    assert_eq!(reasoning_options(proposed), Some(vec!["high"]));
+    assert_eq!(
+        proposed
+            .metadata_state
+            .as_ref()
+            .expect("metadata state")
+            .reasoning_options,
+        ModelMetadataSource::User
+    );
+}
+
+#[test]
+fn provider_reasoning_options_are_not_forced_to_the_gpt_56_family_defaults() {
+    let mut remote = model("gpt-5.6");
+    remote.param_overrides = Some(ModelParamOverrides {
+        reasoning_options: Some(vec!["high".to_string()]),
+        ..Default::default()
+    });
+    remote.metadata_state = Some(ModelMetadataState {
+        reasoning_options: ModelMetadataSource::Provider,
+        ..Default::default()
+    });
+
+    let result = infer_remote_models(
+        &provider(
+            ProviderType::OpenAIResponses,
+            Some("openai_responses"),
+            "https://api.openai.com",
+        ),
+        vec![remote],
+        catalog_with_stale_reasoning_flags("gpt-5.6", "openai"),
+    );
+    let proposed = &result.candidates[0].proposed_model;
+
+    assert_eq!(reasoning_options(proposed), Some(vec!["high"]));
+    assert_eq!(
+        proposed
+            .metadata_state
+            .as_ref()
+            .expect("metadata state")
+            .reasoning_options,
+        ModelMetadataSource::Provider
     );
 }
 

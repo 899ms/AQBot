@@ -1118,6 +1118,19 @@ mod tests {
     }
 
     #[test]
+    fn gpt_5_6_max_serializes_as_top_level_reasoning_effort_for_chat_completions() {
+        let mut request = base_chat_request("gpt-5.6");
+        request.thinking_level = Some("max".to_string());
+        request.reasoning_profile = Some("openai_reasoning_effort".to_string());
+
+        let body = build_request(&OpenAIPolicy, &request, &request.messages, false);
+        let serialized = serde_json::to_value(body).expect("request json");
+
+        assert_eq!(serialized["reasoning_effort"], json!("max"));
+        assert!(serialized.get("reasoning").is_none());
+    }
+
+    #[test]
     fn openai_policy_ignores_nonofficial_reasoning_profile_body_fields() {
         let mut request = base_chat_request("gpt-4o");
         request.thinking_level = Some("high".to_string());

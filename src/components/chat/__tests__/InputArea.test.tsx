@@ -122,6 +122,15 @@ const memoryState = {
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, options?: string | Record<string, unknown>) => {
+      const thinkingLabels: Record<string, string> = {
+        'chat.thinking.minimal': 'Minimal',
+        'chat.thinking.low': 'Low',
+        'chat.thinking.medium': 'Medium',
+        'chat.thinking.high': 'High',
+        'chat.thinking.xhigh': 'XHigh',
+        'chat.thinking.max': 'Max',
+      };
+      if (thinkingLabels[key]) return thinkingLabels[key];
       if (typeof options === 'string') return options;
       if (options && typeof options === 'object') {
         if (key === 'chat.pastedTextLabel') {
@@ -433,6 +442,25 @@ describe('InputArea', () => {
     expect(screen.queryByText('Low')).not.toBeInTheDocument();
     expect(screen.queryByText('Medium')).not.toBeInTheDocument();
     expect(screen.queryByText('XHigh')).not.toBeInTheDocument();
+  });
+
+  it('selects max reasoning for GPT-5.6 models', async () => {
+    providerState.providers[0].provider_type = 'openai';
+    providerState.providers[0].models[0].model_id = 'gpt-5.6-sol';
+    providerState.providers[0].models[0].name = 'GPT-5.6 Sol';
+    providerState.providers[0].models[0].capabilities = ['Reasoning'];
+    conversationState.conversations[0].model_id = 'gpt-5.6-sol';
+
+    render(
+      <App>
+        <InputArea />
+      </App>,
+    );
+
+    await userEvent.click(screen.getByLabelText('chat.thinkingIntensity'));
+    await userEvent.click(await screen.findByText('Max'));
+
+    expect(setThinkingLevel).toHaveBeenCalledWith('max');
   });
 
   it('uses the backend dynamic input budget for context usage', async () => {

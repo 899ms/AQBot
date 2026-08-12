@@ -1,8 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { resolveReasoningProfile, resolveReasoningRequest } from '../reasoningProfile';
-import type { Model, ProviderType } from '@/types';
+import type { Model, ModelMetadataSource, ProviderType } from '@/types';
 
-function model(modelId: string, overrides: Model['param_overrides'] = null): Model {
+function metadataState(reasoningOptions: ModelMetadataSource): NonNullable<Model['metadata_state']> {
+  return {
+    schema_version: 1,
+    catalog_key: null,
+    catalog_mode: null,
+    model_type: 'default',
+    capabilities: 'default',
+    context_window: 'default',
+    max_output_tokens: 'default',
+    no_system_role: 'default',
+    omit_sampling_params: 'default',
+    reasoning_options: reasoningOptions,
+  };
+}
+
+function model(
+  modelId: string,
+  overrides: Model['param_overrides'] = null,
+  reasoningOptionsSource?: ModelMetadataSource,
+): Model {
   return {
     provider_id: 'provider-1',
     model_id: modelId,
@@ -12,6 +31,7 @@ function model(modelId: string, overrides: Model['param_overrides'] = null): Mod
     context_window: 128000,
     enabled: true,
     param_overrides: overrides,
+    metadata_state: reasoningOptionsSource ? metadataState(reasoningOptionsSource) : null,
   };
 }
 
@@ -31,6 +51,78 @@ describe('reasoning profile resolution', () => {
       reasoningEffort: 'xhigh',
       suppressSamplingParams: true,
     });
+  });
+
+  it('exposes every supported reasoning effort for the GPT-5.6 family only', () => {
+    const expected = ['default', 'none', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+    for (const providerType of ['openai', 'openai_responses'] as const) {
+      for (const modelId of ['gpt-5.6', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
+        expect(optionKeys(providerType, modelId), `${providerType}/${modelId}`).toEqual(expected);
+      }
+    }
+
+    expect(optionKeys('openai', 'gpt-5.5')).toEqual([
+      'default',
+      'none',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+    ]);
+    expect(optionKeys('openai', 'gpt-5.60')).not.toContain('max');
+    expect(optionKeys('openai', 'gpt-5.6_preview')).not.toContain('max');
+
+    const profile = resolveReasoningProfile('openai', model('gpt-5.6-sol'));
+    expect(resolveReasoningRequest(profile, 'max')).toMatchObject({
+      level: 'max',
+      apiStyle: 'openai_reasoning_effort',
+      reasoningEffort: 'max',
+    });
+  });
+
+  it('repairs stale catalog reasoning options for GPT-5.6 models', () => {
+    const profile = resolveReasoningProfile(
+      'openai',
+      model(
+        'gpt-5.6-sol',
+        {
+          reasoning_options: ['default', 'none', 'medium', 'high', 'xhigh'],
+          reasoning_default: 'medium',
+        },
+        'catalog',
+      ),
+    );
+
+    expect(profile.options.map((option) => option.key)).toEqual([
+      'default',
+      'none',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ]);
+    expect(profile.defaultOptionKey).toBe('medium');
+  });
+
+  it('strictly respects user and provider reasoning option whitelists for GPT-5.6', () => {
+    for (const source of ['user', 'provider'] as const) {
+      const profile = resolveReasoningProfile(
+        'openai_responses',
+        model(
+          'gpt-5.6-terra',
+          { reasoning_options: ['default', 'none', 'high'] },
+          source,
+        ),
+      );
+
+      expect(profile.options.map((option) => option.key), source).toEqual([
+        'default',
+        'none',
+        'high',
+      ]);
+    }
   });
 
   it('uses Gemini thinkingLevel options and removes minimal for 3.1 Pro', () => {

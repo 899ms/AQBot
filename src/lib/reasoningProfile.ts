@@ -140,6 +140,8 @@ function normalizedModelId(model: Pick<Model, 'model_id'> | null | undefined): s
   return model?.model_id.toLowerCase().replace(/[_\s]+/g, '-') ?? '';
 }
 
+const GPT_56_MODEL_PATTERN = /^gpt-5\.6(?:$|-)/;
+
 function overrideProfile(model: Pick<Model, 'param_overrides'> | null | undefined): ReasoningApiStyle | null {
   const profile = model?.param_overrides?.reasoning_profile;
   if (!profile) return null;
@@ -156,7 +158,11 @@ function overrideProfile(model: Pick<Model, 'param_overrides'> | null | undefine
   ].includes(profile) ? (profile as ReasoningApiStyle) : null;
 }
 
-function openAiProfile(providerType: ProviderType, modelId: string): ReasoningProfile {
+function openAiProfile(
+  providerType: ProviderType,
+  modelId: string,
+  supportsMax = GPT_56_MODEL_PATTERN.test(modelId),
+): ReasoningProfile {
   const apiStyle = providerType === 'openai_responses'
     ? 'openai_responses_reasoning'
     : 'openai_reasoning_effort';
@@ -164,9 +170,13 @@ function openAiProfile(providerType: ProviderType, modelId: string): ReasoningPr
   return {
     apiStyle,
     defaultOptionKey: 'default',
-    options: options(supportsXHigh
-      ? ['default', 'none', 'low', 'medium', 'high', 'xhigh']
-      : ['default', 'none', 'low', 'medium', 'high']),
+    options: options(
+      supportsMax
+        ? ['default', 'none', 'low', 'medium', 'high', 'xhigh', 'max']
+        : supportsXHigh
+          ? ['default', 'none', 'low', 'medium', 'high', 'xhigh']
+          : ['default', 'none', 'low', 'medium', 'high'],
+    ),
   };
 }
 
@@ -246,7 +256,11 @@ function siliconFlowProfile(): ReasoningProfile {
   };
 }
 
-function overriddenProfile(apiStyle: ReasoningApiStyle, modelId: string): ReasoningProfile {
+function overriddenProfile(
+  apiStyle: ReasoningApiStyle,
+  modelId: string,
+  supportsGpt56Max: boolean,
+): ReasoningProfile {
   if (apiStyle === 'glm_thinking') return glmProfile();
   if (apiStyle === 'anthropic_budget_tokens') {
     return {
@@ -270,7 +284,11 @@ function overriddenProfile(apiStyle: ReasoningApiStyle, modelId: string): Reason
   if (apiStyle === 'gemini_thinking_level') return geminiProfile('gemini-3.1-flash');
   if (apiStyle === 'gemini_thinking_budget') return geminiProfile('gemini-2.5-pro');
   if (apiStyle === 'anthropic_adaptive') return anthropicProfile(modelId);
-  return openAiProfile(apiStyle === 'openai_responses_reasoning' ? 'openai_responses' : 'openai', modelId);
+  return openAiProfile(
+    apiStyle === 'openai_responses_reasoning' ? 'openai_responses' : 'openai',
+    modelId,
+    supportsGpt56Max,
+  );
 }
 
 export function resolveReasoningProfile(
@@ -278,19 +296,24 @@ export function resolveReasoningProfile(
   model: Model | null | undefined,
 ): ReasoningProfile {
   const modelId = normalizedModelId(model);
+  const supportsGpt56Max = GPT_56_MODEL_PATTERN.test(model?.model_id.toLowerCase() ?? '');
   const explicitProfile = overrideProfile(model);
   let profile: ReasoningProfile;
-  if (explicitProfile) profile = overriddenProfile(explicitProfile, modelId);
+  if (explicitProfile) profile = overriddenProfile(explicitProfile, modelId, supportsGpt56Max);
   else if (providerType === 'gemini') profile = geminiProfile(modelId);
   else if (providerType === 'anthropic') profile = anthropicProfile(modelId);
   else if (providerType === 'deepseek') profile = deepSeekProfile();
   else if (providerType === 'xai') profile = xaiProfile(modelId);
   else if (providerType === 'glm') profile = glmProfile();
   else if (providerType === 'siliconflow') profile = siliconFlowProfile();
-  else if (providerType === 'openai' || providerType === 'openai_responses') profile = openAiProfile(providerType, modelId);
+  else if (providerType === 'openai' || providerType === 'openai_responses') {
+    profile = openAiProfile(providerType, modelId, supportsGpt56Max);
+  }
   else if (modelId.includes('claude')) profile = anthropicProfile(modelId);
   else if (modelId.includes('gemini')) profile = geminiProfile(modelId);
-  else if (modelId.startsWith('gpt-') || modelId.startsWith('o')) profile = openAiProfile('openai', modelId);
+  else if (modelId.startsWith('gpt-') || modelId.startsWith('o')) {
+    profile = openAiProfile('openai', modelId, supportsGpt56Max);
+  }
   else profile = { apiStyle: 'none', defaultOptionKey: 'default', options: options(['default']) };
 
   const allowed = model?.param_overrides?.reasoning_options;
@@ -299,6 +322,16 @@ export function resolveReasoningProfile(
     allowed.filter((key): key is ReasoningOptionKey => key in OPTION_DEFS),
   );
   allowedKeys.add('default');
+  if (
+    supportsGpt56Max
+    && model?.metadata_state?.reasoning_options === 'catalog'
+    && (
+      profile.apiStyle === 'openai_reasoning_effort'
+      || profile.apiStyle === 'openai_responses_reasoning'
+    )
+  ) {
+    profile.options.forEach((option) => allowedKeys.add(option.key));
+  }
   const filteredOptions = profile.options.filter((option) => allowedKeys.has(option.key));
   const defaultOptionKey = allowedKeys.has(
     model?.param_overrides?.reasoning_default as ReasoningOptionKey,

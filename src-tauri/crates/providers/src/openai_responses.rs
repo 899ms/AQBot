@@ -1224,4 +1224,38 @@ mod tests {
         assert_eq!(built.temperature, None);
         assert_eq!(built.top_p, None);
     }
+
+    #[test]
+    fn gpt_5_6_max_serializes_as_nested_reasoning_with_auto_summary_for_responses() {
+        let request = ChatRequest {
+            model: "gpt-5.6".to_string(),
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: ChatContent::Text("hi".to_string()),
+                reasoning_content: None,
+                tool_calls: None,
+                tool_call_id: None,
+            }],
+            stream: false,
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            max_tokens: Some(100),
+            tools: None,
+            thinking_budget: None,
+            thinking_level: Some("max".to_string()),
+            reasoning_profile: Some("openai_responses_reasoning".to_string()),
+            use_max_completion_tokens: None,
+            thinking_param_style: None,
+            extra_body: None,
+        };
+
+        let body = build_request(&request, false);
+        let serialized = serde_json::to_value(body).expect("request json");
+
+        assert_eq!(
+            serialized["reasoning"],
+            json!({ "effort": "max", "summary": "auto" })
+        );
+        assert!(serialized.get("reasoning_effort").is_none());
+    }
 }
