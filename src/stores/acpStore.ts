@@ -457,6 +457,7 @@ interface AcpStore {
   createThread: (projectId: string, agentId: string, title?: string) => Promise<AcpThread>;
   createRecentThread: (agentId: string, title?: string) => Promise<AcpThread>;
   deleteThread: (threadId: string) => Promise<void>;
+  batchDeleteThreads: (threadIds: string[]) => Promise<void>;
   renameThread: (threadId: string, title: string) => Promise<AcpThread>;
   toggleThreadPin: (threadId: string) => Promise<AcpThread>;
   /** Optimistic local reorder within a project (sidebar drag). */
@@ -1471,6 +1472,75 @@ export const useAcpStore = create<AcpStore>()(
     }));
     if (activeProjectId && activeProjectId !== recentProjectId) {
       await get().loadThreads(activeProjectId);
+    }
+    await get().loadAllThreads();
+  },
+
+  batchDeleteThreads: async (threadIds) => {
+    const uniqueIds = [...new Set(threadIds)].filter(Boolean);
+    if (uniqueIds.length === 0) return;
+
+    const stateBeforeDelete = get();
+    const knownThreads = [...stateBeforeDelete.threads, ...stateBeforeDelete.allThreads];
+    const threadById = new Map(knownThreads.map((item) => [item.id, item]));
+    const deletedIds: string[] = [];
+    const errors: string[] = [];
+
+    for (const threadId of uniqueIds) {
+      try {
+        await invoke('acp_delete_thread', { threadId });
+        deletedIds.push(threadId);
+        retireAcpSessionKey(threadId);
+      } catch (error) {
+        errors.push(String(error));
+      }
+    }
+
+    if (deletedIds.length === 0) {
+      if (errors.length) set({ error: errors.join('; ') });
+      return;
+    }
+
+    const deletedKeys = new Set(deletedIds);
+    const deletedComposerScopes = new Set(
+      deletedIds.flatMap((threadId) => {
+        const thread = threadById.get(threadId);
+        return thread ? [`${thread.project_id}:${threadId}`] : [];
+      }),
+    );
+    const recentProjectIds = new Set(
+      deletedIds.flatMap((threadId) => {
+        const thread = threadById.get(threadId);
+        if (!thread) return [];
+        const recentProject = stateBeforeDelete.projects.find(
+          (item) => item.id === thread.project_id && item.kind === 'recent',
+        );
+        return recentProject ? [recentProject.id] : [];
+      }),
+    );
+    const streamingMessageIds = takeStreamingMessageIdsForSessions(deletedKeys);
+    const { activeProjectId } = get();
+
+    set((state) => ({
+      ...clearAcpSessionState(state, deletedKeys, streamingMessageIds),
+      threads: state.threads.filter((item) => !deletedKeys.has(item.id)),
+      allThreads: state.allThreads.filter((item) => !deletedKeys.has(item.id)),
+      composerDraftsByScope: omitComposerDrafts(
+        state.composerDraftsByScope,
+        (scopeKey) => deletedComposerScopes.has(scopeKey),
+      ),
+      ...(recentProjectIds.size > 0
+        ? { projects: state.projects.filter((item) => !recentProjectIds.has(item.id)) }
+        : {}),
+      ...(activeProjectId && recentProjectIds.has(activeProjectId)
+        ? { activeProjectId: null }
+        : {}),
+      error: errors.length ? errors.join('; ') : null,
+    }));
+
+    const remainingActiveProjectId = get().activeProjectId;
+    if (remainingActiveProjectId) {
+      await get().loadThreads(remainingActiveProjectId);
     }
     await get().loadAllThreads();
   },

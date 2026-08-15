@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   App,
   Button,
+  Checkbox,
   Dropdown,
   Empty,
   Input,
@@ -18,6 +19,7 @@ import {
   FolderOpen,
   FolderPlus,
   GripVertical,
+  ListTodo,
   Loader,
   MessageSquarePlus,
   Pencil,
@@ -27,6 +29,7 @@ import {
   Search,
   Settings,
   Trash2,
+  X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -52,6 +55,7 @@ import { useResolvedAvatarSrc } from '@/hooks/useResolvedAvatarSrc';
 import type { AcpProject, AcpThread } from '@/types/acp';
 import type { AvatarType } from '@/stores/userProfileStore';
 import { AcpProjectSettingsModal } from './AcpProjectSettingsModal';
+import { AcpThreadSelectCheckbox } from './AcpThreadSelectCheckbox';
 
 /** Platform-aware "Reveal in Finder / Explorer / file manager" label. */
 function useRevealInFolderLabel(): string {
@@ -79,6 +83,21 @@ async function revealPathInFolder(path: string): Promise<void> {
 
 function isThreadPinned(thread: AcpThread): boolean {
   return !!thread.is_pinned;
+}
+
+type DeleteShortcutEvent = Pick<React.MouseEvent<HTMLElement>, 'ctrlKey' | 'metaKey'>;
+
+function isDirectDeleteEvent(event?: DeleteShortcutEvent): boolean {
+  return Boolean(event?.ctrlKey || event?.metaKey);
+}
+
+function getDirectDeleteShortcutLabel(): string {
+  if (typeof navigator === 'undefined') return 'Ctrl';
+  const platform = navigator.platform || '';
+  const userAgent = navigator.userAgent || '';
+  const isMac = /Mac|iPhone|iPad|iPod/i.test(platform)
+    || (/Mac OS/i.test(userAgent) && !/Windows|Linux|Android/i.test(userAgent));
+  return isMac ? '⌘' : 'Ctrl';
 }
 
 /** Same title ellipsis shell as ChatSidebar ConversationTitleText */
@@ -381,6 +400,7 @@ export function AcpSidebar() {
   const selectProject = useAcpStore((s) => s.selectProject);
   const selectThread = useAcpStore((s) => s.selectThread);
   const deleteThread = useAcpStore((s) => s.deleteThread);
+  const batchDeleteThreads = useAcpStore((s) => s.batchDeleteThreads);
   const renameThread = useAcpStore((s) => s.renameThread);
   const toggleThreadPin = useAcpStore((s) => s.toggleThreadPin);
   const duplicateThread = useAcpStore((s) => s.duplicateThread);
@@ -407,6 +427,9 @@ export function AcpSidebar() {
   });
   const [settingsProject, setSettingsProject] = useState<AcpProject | null>(null);
   const [rightClickedThreadId, setRightClickedThreadId] = useState<string | null>(null);
+  const [multiSelectMode, setMultiSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [directDeleteMode, setDirectDeleteMode] = useState(false);
   const menuActionRef = useRef(false);
   /**
    * When the user collapses a project via label click, selectProject may change
@@ -443,6 +466,22 @@ export function AcpSidebar() {
     const key = `proj:${activeProjectId}`;
     setExpandedKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
   }, [activeProjectId]);
+
+  useEffect(() => {
+    const updateFromKeyboard = (event: KeyboardEvent) => {
+      setDirectDeleteMode(event.ctrlKey || event.metaKey);
+    };
+    const reset = () => setDirectDeleteMode(false);
+
+    window.addEventListener('keydown', updateFromKeyboard);
+    window.addEventListener('keyup', updateFromKeyboard);
+    window.addEventListener('blur', reset);
+    return () => {
+      window.removeEventListener('keydown', updateFromKeyboard);
+      window.removeEventListener('keyup', updateFromKeyboard);
+      window.removeEventListener('blur', reset);
+    };
+  }, []);
 
   const agentName = useCallback(
     (id: string) => agents.find((a) => a.id === id)?.name ?? id,
@@ -499,6 +538,73 @@ export function AcpSidebar() {
         || agentName(thread.agent_id).toLowerCase().includes(q);
     });
   }, [projects, allThreads, query, agentName]);
+
+  const visibleThreads = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    const matchesQuery = (thread: AcpThread) => {
+      if (!q) return true;
+      return thread.title.toLowerCase().includes(q)
+        || thread.agent_id.toLowerCase().includes(q)
+        || agentName(thread.agent_id).toLowerCase().includes(q);
+    };
+    return [
+      ...filteredProjects.flatMap((project) => threadsForProject(project.id).filter(matchesQuery)),
+      ...filteredRecentThreads,
+    ];
+  }, [agentName, filteredProjects, filteredRecentThreads, query, threadsForProject]);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const setSelectChecked = useCallback((id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const exitMultiSelect = useCallback(() => {
+    setMultiSelectMode(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const isAllSelected = useMemo(
+    () => visibleThreads.length > 0 && selectedIds.size === visibleThreads.length,
+    [selectedIds, visibleThreads],
+  );
+
+  const handleSelectAll = useCallback(() => {
+    if (isAllSelected) {
+      setSelectedIds(new Set());
+      return;
+    }
+    setSelectedIds(new Set(visibleThreads.map((thread) => thread.id)));
+  }, [isAllSelected, visibleThreads]);
+
+  const handleBatchDelete = useCallback(() => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    modal.confirm({
+      title: t('chat.deleteConfirm'),
+      content: t('chat.batchDeleteContent', { count: ids.length }),
+      mask: { enabled: true, blur: true },
+      okButtonProps: { danger: true },
+      okText: t('common.confirm'),
+      cancelText: t('common.cancel'),
+      onOk: async () => {
+        await batchDeleteThreads(ids);
+        exitMultiSelect();
+      },
+    });
+  }, [batchDeleteThreads, exitMultiSelect, modal, selectedIds, t]);
 
   const parseDragId = useCallback((raw: string | number) => {
     const id = String(raw);
@@ -724,21 +830,35 @@ export function AcpSidebar() {
     [duplicateThread, messageApi, selectThread, t],
   );
 
+  const directDeleteShortcutLabel = useMemo(() => getDirectDeleteShortcutLabel(), []);
+  const directDeleteHint = t('chat.directDeleteHint', { shortcut: directDeleteShortcutLabel });
+
   const handleDeleteThread = useCallback(
-    (thread: AcpThread) => {
+    (thread: AcpThread, event?: DeleteShortcutEvent) => {
+      const runDelete = async () => {
+        await deleteThread(thread.id);
+      };
+      if (isDirectDeleteEvent(event)) {
+        void runDelete();
+        return;
+      }
       modal.confirm({
         title: t('agentPage.deleteThread'),
         content: thread.title,
+        mask: { enabled: true, blur: true },
         okButtonProps: { danger: true },
         okText: t('common.confirm'),
         cancelText: t('common.cancel'),
-        onOk: async () => {
-          await deleteThread(thread.id);
-        },
+        onOk: runDelete,
       });
     },
     [deleteThread, modal, t],
   );
+
+  const syncDirectDeleteModeFromMouse = useCallback((event: DeleteShortcutEvent) => {
+    const next = isDirectDeleteEvent(event);
+    setDirectDeleteMode((current) => (current === next ? current : next));
+  }, []);
 
   const handleGroupExpand = useCallback(
     (keys: string[]) => {
@@ -939,20 +1059,38 @@ export function AcpSidebar() {
 
       for (const th of projectThreads) {
         const running = !!runningByThread[th.id];
+        const icon = (
+          <ThreadListIcon
+            agentId={th.agent_id}
+            agentName={agentName(th.agent_id)}
+            agentIcon={agentIcon(th.agent_id)}
+            isStreaming={running}
+            size={20}
+          />
+        );
         items.push({
           key: th.id,
           group,
           // Avatar + streaming loader badge (chat ConversationIcon parity)
-          icon: (
-            <ThreadListIcon
-              agentId={th.agent_id}
-              agentName={agentName(th.agent_id)}
-              agentIcon={agentIcon(th.agent_id)}
-              isStreaming={running}
-              size={20}
-            />
+          icon: multiSelectMode ? (
+            <span className="flex items-center gap-1.5">
+              <AcpThreadSelectCheckbox
+                checked={selectedIds.has(th.id)}
+                onCheckedChange={(checked) => setSelectChecked(th.id, checked)}
+              />
+              {icon}
+            </span>
+          ) : icon,
+          label: multiSelectMode ? (
+            <span className="aqbot-chat-conversation-label" data-conv-id={th.id}>
+              {isThreadPinned(th) ? (
+                <Pin size={12} style={{ opacity: 0.55, flexShrink: 0 }} aria-hidden />
+              ) : null}
+              <ThreadTitleText title={th.title} className="flex-1" />
+            </span>
+          ) : (
+            <SortableThreadLabel thread={th} title={th.title} />
           ),
-          label: <SortableThreadLabel thread={th} title={th.title} />,
           'data-conv-id': th.id,
         } as ConversationItemType);
       }
@@ -969,22 +1107,34 @@ export function AcpSidebar() {
     runningByThread,
     token.colorTextQuaternary,
     t,
+    multiSelectMode,
+    selectedIds,
+    setSelectChecked,
   ]);
 
   const recentConversationItems: ConversationItemType[] = useMemo(() => {
     const items: ConversationItemType[] = [];
     for (const thread of filteredRecentThreads) {
+      const icon = (
+        <ThreadListIcon
+          agentId={thread.agent_id}
+          agentName={agentName(thread.agent_id)}
+          agentIcon={agentIcon(thread.agent_id)}
+          isStreaming={!!runningByThread[thread.id]}
+          size={20}
+        />
+      );
       items.push({
         key: thread.id,
-        icon: (
-          <ThreadListIcon
-            agentId={thread.agent_id}
-            agentName={agentName(thread.agent_id)}
-            agentIcon={agentIcon(thread.agent_id)}
-            isStreaming={!!runningByThread[thread.id]}
-            size={20}
-          />
-        ),
+        icon: multiSelectMode ? (
+          <span className="flex items-center gap-1.5">
+            <AcpThreadSelectCheckbox
+              checked={selectedIds.has(thread.id)}
+              onCheckedChange={(checked) => setSelectChecked(thread.id, checked)}
+            />
+            {icon}
+          </span>
+        ) : icon,
         label: <ThreadTitleText title={thread.title} />,
         'data-conv-id': thread.id,
       } as ConversationItemType);
@@ -995,6 +1145,9 @@ export function AcpSidebar() {
     agentIcon,
     runningByThread,
     filteredRecentThreads,
+    multiSelectMode,
+    selectedIds,
+    setSelectChecked,
   ]);
 
   const renderGroupLabel = useCallback(
@@ -1044,6 +1197,10 @@ export function AcpSidebar() {
   const handleActiveChange = useCallback(
     (key: string) => {
       if (key.startsWith('__')) return;
+      if (multiSelectMode) {
+        toggleSelect(key);
+        return;
+      }
       const thread =
         allThreads.find((th) => th.id === key)
         ?? threads.find((th) => th.id === key);
@@ -1051,7 +1208,7 @@ export function AcpSidebar() {
       // selectThread also switches activeProjectId when needed (without clearing the thread)
       void selectThread(thread.id);
     },
-    [allThreads, threads, selectThread],
+    [allThreads, threads, selectThread, multiSelectMode, toggleSelect],
   );
 
   const buildThreadMenuItems = useCallback(
@@ -1093,7 +1250,9 @@ export function AcpSidebar() {
           danger: true,
           icon: <Trash2 size={14} />,
           label: t('agentPage.deleteThread'),
-          onClick: () => handleDeleteThread(thread),
+          onClick: ({ domEvent }: { domEvent?: DeleteShortcutEvent }) => {
+            handleDeleteThread(thread, domEvent);
+          },
         },
       ];
     },
@@ -1112,26 +1271,63 @@ export function AcpSidebar() {
   /** Hover ⋯ menu on each thread row (same actions as right-click). */
   const menuFactory = useCallback(
     (item: ConversationItemType) => {
+      if (multiSelectMode) return undefined;
       const id = String(item.key);
       if (id.startsWith('__')) return undefined;
       const thread =
         allThreads.find((th) => th.id === id)
         ?? threads.find((th) => th.id === id);
       if (!thread) return undefined;
-      return { items: buildThreadMenuItems(thread) };
+      return {
+        trigger: (_conversation: ConversationItemType, info: { originNode: React.ReactNode }) => {
+          if (!directDeleteMode) {
+            return <Tooltip title={directDeleteHint}>{info.originNode}</Tooltip>;
+          }
+          return (
+            <Tooltip title={directDeleteHint}>
+              <Button
+                type="text"
+                danger
+                size="small"
+                aria-label={t('chat.delete')}
+                className="ant-conversations-menu-icon aqbot-chat-conversation-menu-delete"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  handleDeleteThread(thread, event);
+                }}
+              >
+                <Trash2 size={14} strokeWidth={2} style={{ display: 'block' }} />
+              </Button>
+            </Tooltip>
+          );
+        },
+        items: directDeleteMode ? [] : buildThreadMenuItems(thread),
+      };
     },
-    [allThreads, threads, buildThreadMenuItems],
+    [
+      allThreads,
+      threads,
+      buildThreadMenuItems,
+      multiSelectMode,
+      directDeleteMode,
+      directDeleteHint,
+      handleDeleteThread,
+      t,
+    ],
   );
 
   /** List-level context menu (covers icon + padding, parity with chat). */
   const rightClickMenuConfig = useMemo(() => {
-    if (!rightClickedThreadId) return { items: [] as ReturnType<typeof buildThreadMenuItems> };
+    if (multiSelectMode || !rightClickedThreadId) {
+      return { items: [] as ReturnType<typeof buildThreadMenuItems> };
+    }
     const thread =
       allThreads.find((th) => th.id === rightClickedThreadId)
       ?? threads.find((th) => th.id === rightClickedThreadId);
     if (!thread) return { items: [] as ReturnType<typeof buildThreadMenuItems> };
     return { items: buildThreadMenuItems(thread) };
-  }, [rightClickedThreadId, allThreads, threads, buildThreadMenuItems]);
+  }, [rightClickedThreadId, allThreads, threads, buildThreadMenuItems, multiSelectMode]);
 
   // ── Layout: identical to ChatSidebar outer structure ────────────────
   return (
@@ -1145,45 +1341,97 @@ export function AcpSidebar() {
         }}
       >
         <div className="flex items-center gap-1">
-          <Tooltip title={t('chat.searchPlaceholder')}>
-            <Button
-              type="text"
-              icon={<Search size={16} />}
-              size="small"
-              aria-label={t('chat.searchPlaceholder')}
-              onClick={() => setSearchOpen((v) => !v)}
-            />
-          </Tooltip>
-          <Tooltip title={t('agentPage.addProject')}>
-            <Button
-              type="text"
-              icon={<FolderPlus size={16} />}
-              size="small"
-              aria-label={t('agentPage.addProject')}
-              onClick={() => void handleAddProject()}
-            />
-          </Tooltip>
-          <Tooltip title={t('agentPage.newThread')}>
-            <Button
-              type="text"
-              icon={<MessageSquarePlus size={16} />}
-              size="small"
-              aria-label={t('agentPage.newThread')}
-              disabled={newConversationLocked || agents.length === 0}
-              onClick={handleNewRecentThread}
-            />
-          </Tooltip>
+          {multiSelectMode ? (
+            <>
+              <Tooltip title={t('common.cancel')}>
+                <Button
+                  type="text"
+                  icon={<X size={16} />}
+                  size="small"
+                  aria-label={t('common.cancel')}
+                  onClick={exitMultiSelect}
+                />
+              </Tooltip>
+              <Tooltip title={t('chat.selectAll')}>
+                <Checkbox
+                  checked={isAllSelected}
+                  indeterminate={selectedIds.size > 0 && !isAllSelected}
+                  onChange={handleSelectAll}
+                  style={{ marginLeft: 4 }}
+                />
+              </Tooltip>
+              <span style={{ fontSize: 12, color: token.colorTextSecondary }}>
+                {selectedIds.size} {t('chat.selected')}
+              </span>
+            </>
+          ) : (
+            <>
+              <Tooltip title={t('chat.searchPlaceholder')}>
+                <Button
+                  type="text"
+                  icon={<Search size={16} />}
+                  size="small"
+                  aria-label={t('chat.searchPlaceholder')}
+                  onClick={() => setSearchOpen((v) => !v)}
+                />
+              </Tooltip>
+              <Tooltip title={t('agentPage.addProject')}>
+                <Button
+                  type="text"
+                  icon={<FolderPlus size={16} />}
+                  size="small"
+                  aria-label={t('agentPage.addProject')}
+                  onClick={() => void handleAddProject()}
+                />
+              </Tooltip>
+              <Tooltip title={t('agentPage.newThread')}>
+                <Button
+                  type="text"
+                  icon={<MessageSquarePlus size={16} />}
+                  size="small"
+                  aria-label={t('agentPage.newThread')}
+                  disabled={newConversationLocked || agents.length === 0}
+                  onClick={handleNewRecentThread}
+                />
+              </Tooltip>
+            </>
+          )}
         </div>
         <div className="flex items-center gap-1">
-          <Tooltip title={t('settings.acpAgents.title')}>
-            <Button
-              type="text"
-              icon={<Settings size={16} />}
-              size="small"
-              aria-label={t('settings.acpAgents.title')}
-              onClick={openSettings}
-            />
-          </Tooltip>
+          {multiSelectMode ? (
+            <Tooltip title={t('chat.delete')}>
+              <Button
+                type="text"
+                danger
+                icon={<Trash2 size={16} />}
+                size="small"
+                aria-label={t('chat.delete')}
+                disabled={selectedIds.size === 0}
+                onClick={handleBatchDelete}
+              />
+            </Tooltip>
+          ) : (
+            <>
+              <Tooltip title={t('settings.acpAgents.title')}>
+                <Button
+                  type="text"
+                  icon={<Settings size={16} />}
+                  size="small"
+                  aria-label={t('settings.acpAgents.title')}
+                  onClick={openSettings}
+                />
+              </Tooltip>
+              <Tooltip title={t('chat.multiSelect')}>
+                <Button
+                  type="text"
+                  icon={<ListTodo size={16} />}
+                  size="small"
+                  aria-label={t('chat.multiSelect')}
+                  onClick={() => setMultiSelectMode(true)}
+                />
+              </Tooltip>
+            </>
+          )}
         </div>
       </div>
 
@@ -1270,6 +1518,37 @@ export function AcpSidebar() {
                 flex-shrink: 0;
                 box-sizing: border-box;
               }
+              .aqbot-chat-conversation-menu-delete {
+                width: 22px !important;
+                height: 22px !important;
+                min-width: 22px !important;
+                padding: 0 !important;
+                display: inline-flex !important;
+                align-items: center;
+                justify-content: center;
+                line-height: 1;
+              }
+              .aqbot-chat-conversation-menu-delete .ant-btn-icon {
+                display: inline-flex !important;
+                align-items: center;
+                justify-content: center;
+                margin-inline-end: 0 !important;
+                line-height: 0;
+              }
+              .aqbot-chat-conversation-menu-delete .ant-btn-icon > svg,
+              .aqbot-chat-conversation-menu-delete svg {
+                display: block;
+              }
+              .ant-conversations .ant-conversations-item-active .aqbot-chat-conversation-menu-delete {
+                opacity: 0;
+              }
+              .ant-conversations .ant-conversations-item:hover .aqbot-chat-conversation-menu-delete,
+              .aqbot-chat-conversation-menu-delete:focus-visible {
+                opacity: 0.85;
+              }
+              .aqbot-chat-conversation-menu-delete:hover {
+                opacity: 1 !important;
+              }
               .aqbot-chat-conversation-label {
                 display: flex;
                 align-items: center;
@@ -1306,7 +1585,13 @@ export function AcpSidebar() {
               }}
             >
               <div
+                onMouseMove={syncDirectDeleteModeFromMouse}
                 onContextMenu={(e) => {
+                  if (multiSelectMode) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                  }
                   // Only claim context menu on thread rows. Project group labels
                   // keep their own Dropdown — do not preventDefault on those.
                   const listItem = (e.target as HTMLElement).closest('[data-conv-id]') as HTMLElement | null;
