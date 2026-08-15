@@ -150,6 +150,8 @@
     "sendMessage": "Enviar mensaje",
     "attachFile": "Adjuntar archivo",
     "dropToAttach": "Suelte los archivos para adjuntarlos",
+    "attachmentReadFailed": "No se pudo leer el archivo adjunto: {{name}}",
+    "attachmentTypeUnsupported": "Esta conversación no admite ese tipo de archivo adjunto",
     "pastedTextLabel": "Texto pegado #{{n}} · {{lines}} líneas",
     "previewPastedText": "Vista previa del texto pegado",
     "expandPastedText": "Ampliar",

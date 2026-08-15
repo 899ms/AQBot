@@ -150,6 +150,8 @@
     "sendMessage": "संदेश भेजें",
     "attachFile": "फ़ाइल संलग्न करें",
     "dropToAttach": "संलग्न करने के लिए फ़ाइलें छोड़ें",
+    "attachmentReadFailed": "संलग्नक पढ़ा नहीं जा सका: {{name}}",
+    "attachmentTypeUnsupported": "यह बातचीत उस अनुलग्नक प्रकार का समर्थन नहीं करती",
     "pastedTextLabel": "पाठ #{{n}} · {{lines}} पंक्तियाँ चिपकाई गईं",
     "previewPastedText": "चिपकाए गए पाठ का पूर्वावलोकन करें",
     "expandPastedText": "विस्तार करें",

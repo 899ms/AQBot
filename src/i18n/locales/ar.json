@@ -150,6 +150,8 @@
     "sendMessage": "إرسال رسالة",
     "attachFile": "إرفاق ملف",
     "dropToAttach": "أسقط الملفات للإرفاق",
+    "attachmentReadFailed": "تعذّرت قراءة المرفق: {{name}}",
+    "attachmentTypeUnsupported": "هذه المحادثة لا تدعم نوع المرفق هذا",
     "pastedTextLabel": "تم لصق النص #{{n}} · {{lines}} أسطر",
     "previewPastedText": "معاينة النص الملصق",
     "expandPastedText": "وسع",

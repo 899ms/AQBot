@@ -150,6 +150,8 @@
     "sendMessage": "メッセージを送信",
     "attachFile": "ファイルを添付",
     "dropToAttach": "ファイルをドロップして添付",
+    "attachmentReadFailed": "添付ファイルを読み込めませんでした：{{name}}",
+    "attachmentTypeUnsupported": "この会話ではその添付ファイル形式に対応していません",
     "pastedTextLabel": "テキスト #{{n}} · {{lines}} 行を貼り付けました",
     "previewPastedText": "貼り付けたテキストをプレビューする",
     "expandPastedText": "展開する",

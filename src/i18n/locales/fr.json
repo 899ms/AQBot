@@ -150,6 +150,8 @@
     "sendMessage": "Envoyer le message",
     "attachFile": "Joindre un fichier",
     "dropToAttach": "Déposer les fichiers à joindre",
+    "attachmentReadFailed": "Impossible de lire la pièce jointe : {{name}}",
+    "attachmentTypeUnsupported": "Cette conversation ne prend pas en charge ce type de pièce jointe",
     "pastedTextLabel": "Texte collé #{{n}} · {{lines}} lignes",
     "previewPastedText": "Aperçu du texte collé",
     "expandPastedText": "Développer",

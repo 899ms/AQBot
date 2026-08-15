@@ -958,9 +958,14 @@ export function InputArea() {
     ),
     [documentAttachmentReadingEnabled, hasVision],
   );
+  const handleRejectedAttachments = useCallback(() => {
+    messageApi.warning(t('chat.attachmentTypeUnsupported'));
+  }, [messageApi, t]);
   const handleAttachmentReadError = useCallback((filePath: string, error: unknown) => {
     console.error('[drag-drop] Failed to read file:', filePath, error);
-  }, []);
+    const name = filePath.split(/[\\/]/).pop() || filePath || t('common.unknown');
+    messageApi.error(t('chat.attachmentReadFailed', { name }));
+  }, [messageApi, t]);
   const {
     attachments: attachedFiles,
     attachmentsRef: attachedFilesRef,
@@ -977,6 +982,7 @@ export function InputArea() {
   } = useComposerAttachments({
     enabled: canAttachFiles,
     acceptFile: acceptChatAttachment,
+    onRejected: handleRejectedAttachments,
     onReadError: handleAttachmentReadError,
   });
 
@@ -2122,6 +2128,7 @@ export function InputArea() {
             justifyContent: 'center',
             backgroundColor: 'rgba(0, 0, 0, 0.45)',
             backdropFilter: 'blur(4px)',
+            pointerEvents: 'none',
           }}
         >
           <div

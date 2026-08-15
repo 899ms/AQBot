@@ -160,6 +160,8 @@
     "sendMessage": "Send message",
     "attachFile": "Attach file",
     "dropToAttach": "Drop images or files to attach",
+    "attachmentReadFailed": "Could not read attachment: {{name}}",
+    "attachmentTypeUnsupported": "This conversation does not support that attachment type",
     "pastedTextLabel": "Pasted text #{{n}} · {{lines}} lines",
     "previewPastedText": "Preview pasted text",
     "expandPastedText": "Expand",

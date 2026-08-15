@@ -150,6 +150,8 @@
     "sendMessage": "Nachricht senden",
     "attachFile": "Datei anhängen",
     "dropToAttach": "Dateien hierher ziehen",
+    "attachmentReadFailed": "Anhang konnte nicht gelesen werden: {{name}}",
+    "attachmentTypeUnsupported": "Dieser Chat unterstützt diesen Anhangstyp nicht",
     "pastedTextLabel": "Eingefügter Text #{{n}} · {{lines}} Zeilen",
     "previewPastedText": "Vorschau des eingefügten Texts",
     "expandPastedText": "Erweitern",

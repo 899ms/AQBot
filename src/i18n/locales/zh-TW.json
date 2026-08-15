@@ -150,6 +150,8 @@
     "sendMessage": "傳送訊息",
     "attachFile": "附加檔案",
     "dropToAttach": "拖放檔案以新增附件",
+    "attachmentReadFailed": "無法讀取附件：{{name}}",
+    "attachmentTypeUnsupported": "目前對話不支援該附件類型",
     "pastedTextLabel": "已貼上文字 #{{n}} · {{lines}} 行",
     "previewPastedText": "預覽貼上文字",
     "expandPastedText": "展開",

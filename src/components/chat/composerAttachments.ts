@@ -90,12 +90,33 @@ function nativePathFileDescriptor(filePath: string): File {
   return new File([], fileName, { type: getAttachmentMimeType(fileName), lastModified: 0 });
 }
 
+function dataTransferHasFiles(dataTransfer: DataTransfer | null | undefined): boolean {
+  return Boolean(dataTransfer?.types.includes('Files'));
+}
+
+export function filesFromDataTransfer(dataTransfer: DataTransfer | null | undefined): File[] {
+  if (!dataTransfer) return [];
+  const listed = Array.from(dataTransfer.files ?? []);
+  if (listed.length > 0) return listed;
+  return Array.from(dataTransfer.items ?? [])
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
+}
+
 async function nativePathToFile(filePath: string, descriptor: File): Promise<File> {
   const { readFile, stat } = await import('@tauri-apps/plugin-fs');
-  const [bytes, info] = await Promise.all([readFile(filePath), stat(filePath)]);
+  const bytes = await readFile(filePath);
+  let lastModified = 0;
+  try {
+    const info = await stat(filePath);
+    lastModified = info.mtime?.getTime() ?? 0;
+  } catch {
+    // `stat` is optional: dropped paths may lack that permission even when read succeeds.
+  }
   return new File([bytes], descriptor.name, {
     type: descriptor.type,
-    lastModified: info.mtime?.getTime() ?? 0,
+    lastModified,
   });
 }
 
@@ -294,7 +315,7 @@ export function useComposerAttachments({
   }, [enabled]);
 
   const handleDragEnter = useCallback((event: DragEvent) => {
-    if (!enabled || !event.dataTransfer.types.includes('Files')) return;
+    if (!enabled || !dataTransferHasFiles(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
     htmlDragDepthRef.current += 1;
@@ -302,10 +323,10 @@ export function useComposerAttachments({
   }, [enabled]);
 
   const handleDragOver = useCallback((event: DragEvent) => {
-    if (!enabled || !event.dataTransfer.types.includes('Files')) return;
+    if (!enabled || !dataTransferHasFiles(event.dataTransfer)) return;
     event.preventDefault();
     event.stopPropagation();
-    event.dataTransfer.dropEffect = 'copy';
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
   }, [enabled]);
 
   const handleDragLeave = useCallback((event: DragEvent) => {
@@ -322,8 +343,30 @@ export function useComposerAttachments({
     event.stopPropagation();
     htmlDragDepthRef.current = 0;
     setIsDragging(false);
-    addFiles(Array.from(event.dataTransfer.files ?? []));
+    addFiles(filesFromDataTransfer(event.dataTransfer));
   }, [addFiles, enabled]);
+
+  useEffect(() => {
+    if (!enabled || !isDragging || typeof window === 'undefined') return;
+    const onDragOver = (event: globalThis.DragEvent) => {
+      if (!dataTransferHasFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    };
+    const onDrop = (event: globalThis.DragEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      htmlDragDepthRef.current = 0;
+      setIsDragging(false);
+      addFiles(filesFromDataTransfer(event.dataTransfer));
+    };
+    window.addEventListener('dragover', onDragOver, true);
+    window.addEventListener('drop', onDrop, true);
+    return () => {
+      window.removeEventListener('dragover', onDragOver, true);
+      window.removeEventListener('drop', onDrop, true);
+    };
+  }, [addFiles, enabled, isDragging]);
 
   return {
     attachments,

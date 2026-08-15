@@ -677,6 +677,26 @@ describe('InputArea', () => {
     }
   });
 
+  it('lets the drop overlay pass through pointer events so the drop stays on the composer', () => {
+    providerState.providers[0].models[0].capabilities = ['Vision'];
+
+    render(
+      <App>
+        <InputArea />
+      </App>,
+    );
+
+    const composer = document.querySelector('.px-4.pb-3.pt-1');
+    expect(composer).toBeTruthy();
+    fireEvent.dragEnter(composer as HTMLElement, {
+      dataTransfer: { types: ['Files'], files: [] },
+    });
+
+    const label = screen.getByText('chat.dropToAttach');
+    const overlay = label.parentElement?.parentElement;
+    expect(overlay).toHaveStyle({ pointerEvents: 'none' });
+  });
+
   it('shows document attachment controls for non-vision models when document reading is enabled', () => {
     settingsState.settings.document_attachment_reading_enabled = true;
 

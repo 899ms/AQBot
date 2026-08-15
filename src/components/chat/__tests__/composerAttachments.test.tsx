@@ -191,6 +191,68 @@ describe('composerAttachments', () => {
     expect(event.stopPropagation).toHaveBeenCalled();
   });
 
+  it('reads dropped files from dataTransfer items when the FileList is empty', () => {
+    const { result } = renderHook(() => useComposerAttachments({
+      acceptFile: () => true,
+    }));
+    const document = new File(['notes'], 'notes.txt', { type: 'text/plain' });
+    const event = {
+      dataTransfer: {
+        types: ['Files'],
+        files: [],
+        items: [{ kind: 'file', getAsFile: () => document }],
+      },
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as React.DragEvent;
+
+    act(() => result.current.dragHandlers.onDrop(event));
+
+    expect(result.current.attachments.map(({ file }) => file.name)).toEqual(['notes.txt']);
+  });
+
+  it('accepts a window-level drop while the overlay is visible', () => {
+    const { result } = renderHook(() => useComposerAttachments({
+      acceptFile: () => true,
+    }));
+    const enterEvent = {
+      dataTransfer: { types: ['Files'] },
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as React.DragEvent;
+    const image = new File(['image'], 'photo.png', { type: 'image/png' });
+
+    act(() => result.current.dragHandlers.onDragEnter(enterEvent));
+    expect(result.current.isDragging).toBe(true);
+
+    act(() => {
+      const dropEvent = new Event('drop', { bubbles: true, cancelable: true });
+      Object.defineProperty(dropEvent, 'dataTransfer', {
+        value: { types: ['Files'], files: [image], items: [] },
+      });
+      window.dispatchEvent(dropEvent);
+    });
+
+    expect(result.current.isDragging).toBe(false);
+    expect(result.current.attachments.map(({ file }) => file.name)).toEqual(['photo.png']);
+  });
+
+  it('does not throw when a drop has no dataTransfer', () => {
+    const { result } = renderHook(() => useComposerAttachments({
+      acceptFile: () => true,
+    }));
+    const event = {
+      dataTransfer: null,
+      preventDefault: vi.fn(),
+      stopPropagation: vi.fn(),
+    } as unknown as React.DragEvent;
+
+    act(() => result.current.dragHandlers.onDrop(event));
+
+    expect(result.current.attachments).toEqual([]);
+    expect(result.current.isDragging).toBe(false);
+  });
+
   it('keeps the HTML drag overlay until the outermost drag leave', () => {
     const { result } = renderHook(() => useComposerAttachments({ acceptFile: () => true }));
     const event = {
@@ -273,6 +335,38 @@ describe('composerAttachments', () => {
 
     unmount();
     expect(unlisten).toHaveBeenCalledOnce();
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
+  });
+
+  it('still attaches a native drop when stat is unavailable', async () => {
+    let listener: ((event: { payload: { type: string; paths?: string[] } }) => Promise<void>)
+      | undefined;
+    tauriMocks.onDragDropEvent.mockImplementation(async (nextListener) => {
+      listener = nextListener;
+      return vi.fn();
+    });
+    tauriMocks.readFile.mockResolvedValue(new Uint8Array([1, 2, 3]));
+    tauriMocks.stat.mockRejectedValue(new Error('stat not allowed'));
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {},
+    });
+    const { result, unmount } = renderHook(() => useComposerAttachments({
+      acceptFile: () => true,
+    }));
+
+    await waitFor(() => expect(listener).toBeDefined());
+    await act(async () => {
+      await listener?.({
+        payload: { type: 'drop', paths: ['/tmp/photo.png'] },
+      });
+    });
+
+    expect(tauriMocks.readFile).toHaveBeenCalledWith('/tmp/photo.png');
+    expect(result.current.attachments).toHaveLength(1);
+    expect(result.current.attachments[0].file.name).toBe('photo.png');
+    expect(result.current.attachments[0].file.type).toBe('image/png');
+    unmount();
     Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
   });
 

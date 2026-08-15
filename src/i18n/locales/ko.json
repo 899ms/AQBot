@@ -150,6 +150,8 @@
     "sendMessage": "메시지 전송",
     "attachFile": "파일 첨부",
     "dropToAttach": "파일을 드롭하여 첨부",
+    "attachmentReadFailed": "첨부 파일을 읽을 수 없습니다: {{name}}",
+    "attachmentTypeUnsupported": "이 대화에서는 해당 첨부 파일 형식을 지원하지 않습니다",
     "pastedTextLabel": "텍스트 #{{n}} · {{lines}}줄을 붙여넣었습니다.",
     "previewPastedText": "붙여넣은 텍스트 미리보기",
     "expandPastedText": "확장하다",

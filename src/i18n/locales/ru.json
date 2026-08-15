@@ -150,6 +150,8 @@
     "sendMessage": "Отправить сообщение",
     "attachFile": "Прикрепить файл",
     "dropToAttach": "Перетащите файлы для прикрепления",
+    "attachmentReadFailed": "Не удалось прочитать вложение: {{name}}",
+    "attachmentTypeUnsupported": "Этот чат не поддерживает такой тип вложения",
     "pastedTextLabel": "Вставлен текст #{{n}} · {{lines}} строк.",
     "previewPastedText": "Предварительный просмотр вставленного текста",
     "expandPastedText": "Развернуть",
