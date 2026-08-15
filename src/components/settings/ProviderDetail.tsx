@@ -380,7 +380,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
         });
         if (!cancelled) {
           setAddModelPreview(preview);
-          if (!addModelTypeDirty.current && preview.unsupported_reason == null) {
+          if (!addModelTypeDirty.current) {
             setAddModelType(preview.proposed_model.model_type);
           }
         }
@@ -656,10 +656,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
       return;
     }
 
-    if (addModelPreview?.unsupported_reason) {
-      message.error(addModelPreview.unsupported_reason);
-      return;
-    }
     const nextModel: Model = {
       ...(addModelPreview?.proposed_model ?? {
         provider_id: providerId,
@@ -2102,7 +2098,7 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
         okText={t('settings.addModel')}
         cancelText={t('common.cancel')}
         okButtonProps={{
-          disabled: addModelInferring || Boolean(addModelPreview?.unsupported_reason),
+          disabled: addModelInferring,
         }}
         destroyOnHidden
       >
@@ -2167,11 +2163,6 @@ export function ProviderDetail({ providerId }: ProviderDetailProps) {
           <div style={{ marginTop: 12 }}>
             {addModelInferring ? (
               <Space size="small"><Spin size="small" />{t('settings.inferringMetadata')}</Space>
-            ) : addModelPreview?.unsupported_reason ? (
-              <Text type="danger">
-                {addModelPreview.unsupported_reason}
-                {addModelPreview.catalog_mode ? ` (${addModelPreview.catalog_mode})` : ''}
-              </Text>
             ) : addModelPreview ? (
               <Space wrap size={[4, 4]}>
                 <Tag color="blue">{t(`settings.modelType.${addModelType}`)}</Tag>

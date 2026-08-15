@@ -415,6 +415,34 @@ describe('ProviderDetail', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('still adds a model when catalog inference reports an unknown mode', async () => {
+    mocks.inferModelMetadata.mockImplementation(async (_providerId, model: Model) => ({
+      ...syncCandidate(model, 'remote-only'),
+      catalog_mode: 'search',
+      unsupported_reason: 'LiteLLM catalog mode is not supported by AQBot: search',
+    }));
+    render(
+      <App>
+        <ProviderDetail providerId="provider-1" />
+      </App>,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'settings.addModel' }));
+    const dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getAllByRole('textbox')[0], 'web-search-model');
+    await waitFor(() => expect(mocks.inferModelMetadata).toHaveBeenCalled());
+    await userEvent.click(within(dialog).getByRole('button', { name: 'settings.addModel' }));
+
+    expect(mocks.updateModelMetadata).toHaveBeenCalledWith(
+      'provider-1',
+      expect.objectContaining({
+        model_id: 'web-search-model',
+        model_type: 'Chat',
+      }),
+      [],
+    );
+  });
+
   it('prefills the current group when adding a model from a group header', async () => {
     render(
       <App>
@@ -1229,30 +1257,34 @@ describe('ProviderDetail', () => {
     expect(screen.queryByText(/模型目录已同步|模型目录已过期|modelDiscoveryFresh|modelDiscoveryStale/)).toBeNull();
   });
 
-  it('preserves an existing local model when its exact catalog mode is unsupported', async () => {
+  it('lets the user import a remote model whose catalog mode is unknown', async () => {
     const supportedLocal = {
       ...provider.models[0],
       model_id: 'local-chat',
       name: 'Local Chat',
     };
-    provider.models.push(supportedLocal);
-    const unsupported = {
-      ...syncCandidate(provider.models[0], 'unsupported'),
+    provider.models = [supportedLocal];
+    const remoteSearch = {
+      ...syncCandidate({
+        ...supportedLocal,
+        model_id: 'web-search-model',
+        name: 'web-search-model',
+        model_type: 'Chat' as const,
+      }, 'remote-only'),
       catalog_mode: 'search',
-      unsupported_reason: 'LiteLLM catalog mode is not supported by AQBot: search',
     };
     mocks.fetchRemoteModels.mockResolvedValue({
-      candidates: [unsupported, syncCandidate(supportedLocal, 'local-only')],
+      candidates: [remoteSearch, syncCandidate(supportedLocal, 'local-only')],
       catalog: {
         configured_source: 'builtin',
         source: 'builtin',
         freshness: 'fresh',
         matched_context_windows: 0,
-        total_chat_models: 1,
+        total_chat_models: 2,
         matched_models: 1,
         autofilled_fields: 0,
         inferred_types: 0,
-        unsupported_models: 1,
+        unsupported_models: 0,
         checked_at: null,
         warning: null,
       },
@@ -1265,14 +1297,19 @@ describe('ProviderDetail', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'settings.syncModels' }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByRole('checkbox', { name: 'gpt-5.4' })).toBeDisabled();
-    expect(within(dialog).getByRole('checkbox', { name: 'local-chat' })).toBeChecked();
+    const remoteCheckbox = within(dialog).getByRole('checkbox', { name: 'web-search-model' });
+    expect(remoteCheckbox).not.toBeDisabled();
+    expect(remoteCheckbox).not.toBeChecked();
+    await userEvent.click(remoteCheckbox);
     await userEvent.click(within(dialog).getByRole('button', { name: 'settings.applyModelSync' }));
 
     await waitFor(() => {
       expect(mocks.applyModelSync).toHaveBeenCalledWith(
         'provider-1',
-        expect.arrayContaining(provider.models),
+        expect.arrayContaining([
+          expect.objectContaining({ model_id: 'web-search-model', model_type: 'Chat' }),
+          expect.objectContaining({ model_id: 'local-chat' }),
+        ]),
       );
     });
   });

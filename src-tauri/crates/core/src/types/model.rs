@@ -199,9 +199,14 @@ mod model_type_tests {
             ModelType::detect("Qwen/Qwen-Image-Edit-2509"),
             ModelType::Image
         );
+        assert_eq!(ModelType::detect("x-image"), ModelType::Image);
+        assert_eq!(ModelType::detect("foo_image_bar"), ModelType::Image);
+        assert_eq!(ModelType::detect("chatgpt-image-latest"), ModelType::Image);
         assert_eq!(ModelType::detect("speech-to-text"), ModelType::Voice);
         assert_eq!(ModelType::detect("imagination-chat"), ModelType::Chat);
         assert_eq!(ModelType::detect("audiofile-chat"), ModelType::Chat);
+        assert_eq!(ModelType::detect("grok-3"), ModelType::Chat);
+        assert_eq!(ModelType::detect("omni-moderation-latest"), ModelType::Chat);
     }
 
     #[test]

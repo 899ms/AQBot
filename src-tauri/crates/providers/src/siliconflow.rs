@@ -227,8 +227,14 @@ impl ProviderAdapter for SiliconFlowAdapter {
     }
 
     async fn list_models(&self, ctx: &ProviderRequestContext) -> Result<Vec<Model>> {
-        let (models, image_models) =
-            tokio::try_join!(self.inner.list_models(ctx), self.list_image_models(ctx))?;
+        let models = self.inner.list_models(ctx).await?;
+        let image_models = match self.list_image_models(ctx).await {
+            Ok(image_models) => image_models,
+            Err(error) => {
+                tracing::warn!("SiliconFlow image model discovery failed: {error}");
+                Vec::new()
+            }
+        };
         Ok(merge_siliconflow_image_models(models, image_models))
     }
 
@@ -337,5 +343,57 @@ mod tests {
         assert!(parsed
             .iter()
             .all(|model| model.model_type == ModelType::Image));
+    }
+
+    #[test]
+    fn merge_promotes_existing_ids_and_appends_image_only_models() {
+        let chat = Model {
+            provider_id: "siliconflow".into(),
+            model_id: "Kwai-Kolors/Kolors".into(),
+            name: "Kwai-Kolors/Kolors".into(),
+            group_name: None,
+            model_type: ModelType::Chat,
+            capabilities: vec![ModelCapability::TextChat],
+            context_window: None,
+            max_output_tokens: None,
+            enabled: true,
+            param_overrides: None,
+            image_config: None,
+            metadata_state: None,
+            aliases: Vec::new(),
+        };
+        let extra = Model {
+            model_id: "Qwen/Qwen-Image-Edit-2509".into(),
+            name: "Qwen/Qwen-Image-Edit-2509".into(),
+            model_type: ModelType::Image,
+            capabilities: vec![],
+            group_name: Some("image".into()),
+            ..chat.clone()
+        };
+        let merged = merge_siliconflow_image_models(
+            vec![chat],
+            vec![
+                Model {
+                    model_id: "Kwai-Kolors/Kolors".into(),
+                    name: "Kwai-Kolors/Kolors".into(),
+                    model_type: ModelType::Image,
+                    capabilities: vec![],
+                    group_name: Some("image".into()),
+                    provider_id: "siliconflow".into(),
+                    context_window: None,
+                    max_output_tokens: None,
+                    enabled: true,
+                    param_overrides: None,
+                    image_config: None,
+                    metadata_state: None,
+                    aliases: Vec::new(),
+                },
+                extra,
+            ],
+        );
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].model_type, ModelType::Image);
+        assert_eq!(merged[1].model_id, "Qwen/Qwen-Image-Edit-2509");
+        assert_eq!(merged[1].model_type, ModelType::Image);
     }
 }

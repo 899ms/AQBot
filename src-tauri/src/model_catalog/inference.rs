@@ -10,7 +10,6 @@ use aqbot_core::types::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-const UNSUPPORTED_MODE_REASON: &str = "LiteLLM catalog mode is not supported by AQBot";
 const OPENAI_GPT_56_REASONING_OPTIONS: [&str; 7] =
     ["default", "none", "low", "medium", "high", "xhigh", "max"];
 
@@ -146,9 +145,9 @@ pub(super) fn infer_candidate(
         explicit_reasoning_options,
     );
     let catalog_mode = matched.map(|(_, entry)| entry.mode.clone());
-    let unsupported_reason = matched
-        .filter(|(_, entry)| model_type_for_mode(&entry.mode).is_none())
-        .map(|(_, entry)| format!("{UNSUPPORTED_MODE_REASON}: {}", entry.mode));
+    // Unknown LiteLLM modes (search, video_generation, …) stay visible and
+    // fall back to the name heuristic. Catalog metadata is diagnostic only.
+    let unsupported_reason = None;
 
     if !reset {
         if let Some(local) = local_model {

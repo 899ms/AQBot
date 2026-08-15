@@ -125,8 +125,7 @@ fn infer_adapter_id(
     }
     // Official Gemini host + Gemini/Imagen model names → native Gemini adapter.
     // Proxy hosts keep OpenAI Images so OpenAI-compatible Gemini relays work.
-    if api_host.is_some_and(is_official_gemini_host) && looks_like_gemini_image_model(&normalized)
-    {
+    if api_host.is_some_and(is_official_gemini_host) && looks_like_gemini_image_model(&normalized) {
         return "gemini_images";
     }
     match provider_type {
@@ -212,5 +211,14 @@ mod tests {
             .all(|parameter| parameter.get("label").is_none()));
         assert_eq!(parameters[0]["kind"], "string");
         assert!(serialized["warnings"].is_array());
+    }
+
+    #[test]
+    fn xai_provider_routes_compat_image_ids_to_xai_images() {
+        let registry = ImageAdapterRegistry::default();
+        let adapter = registry
+            .resolve(&ProviderType::XAI, "x-image", None)
+            .expect("xAI image adapter");
+        assert_eq!(adapter.id(), "xai_images");
     }
 }

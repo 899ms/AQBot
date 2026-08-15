@@ -329,10 +329,19 @@ fn exact_catalog_metadata_beats_name_heuristics() {
     );
     assert_eq!(
         by_id["web-search-model"].status,
-        ModelSyncStatus::Unsupported
+        ModelSyncStatus::RemoteOnly
+    );
+    assert_eq!(
+        by_id["web-search-model"].proposed_model.model_type,
+        ModelType::Chat
+    );
+    assert_eq!(by_id["web-search-model"].unsupported_reason, None);
+    assert_eq!(
+        by_id["web-search-model"].catalog_mode.as_deref(),
+        Some("search")
     );
     assert_eq!(result.catalog.matched_models, 4);
-    assert_eq!(result.catalog.unsupported_models, 1);
+    assert_eq!(result.catalog.unsupported_models, 0);
 }
 
 #[test]
@@ -665,6 +674,34 @@ fn unknown_provider_is_not_guessed_but_qualified_custom_key_matches() {
         qualified.candidates[0].proposed_model.context_window,
         Some(64_000)
     );
+}
+
+#[test]
+fn remote_compat_ids_stay_visible_and_use_name_heuristics() {
+    let result = infer_remote_models(
+        &provider(ProviderType::XAI, Some("xai"), "https://relay.example/v1"),
+        vec![
+            model("x-image"),
+            model("grok-3"),
+            model("omni-moderation-latest"),
+        ],
+        catalog(BTreeMap::new()),
+    );
+    let by_id: BTreeMap<_, _> = result
+        .candidates
+        .iter()
+        .map(|candidate| (candidate.proposed_model.model_id.as_str(), candidate))
+        .collect();
+
+    assert_eq!(by_id["x-image"].proposed_model.model_type, ModelType::Image);
+    assert_eq!(by_id["x-image"].status, ModelSyncStatus::RemoteOnly);
+    assert_eq!(by_id["x-image"].unsupported_reason, None);
+    assert_eq!(by_id["grok-3"].proposed_model.model_type, ModelType::Chat);
+    assert_eq!(
+        by_id["omni-moderation-latest"].proposed_model.model_type,
+        ModelType::Chat
+    );
+    assert_eq!(result.catalog.unsupported_models, 0);
 }
 
 #[test]
